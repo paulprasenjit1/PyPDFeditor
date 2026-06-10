@@ -4,6 +4,22 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v7-mupdf] — 2026-06-10 — About dialog
+
+- Added an **About** entry at the bottom of the **More** menu (works with or without a
+  PDF open). It opens a dialog showing the app **version (7.0)**, **build date/time**,
+  the service-worker **cache name**, and the **engine** (MuPDF.js + pdf-lib), plus a
+  short privacy note. This makes it easy to confirm, on the device, which build is
+  actually running after an update.
+- Version, build time and cache name are now kept in one place (`APP_VERSION` /
+  `BUILD_DATETIME` in `app.js`, `CACHE` in `sw.js`) and bumped together each release.
+
+## [v6-mupdf] — 2026-06-10 — Close PDF
+
+- Added a **Close PDF** button at the bottom of the **More** menu. It closes the open
+  document and returns to the empty state, releasing the MuPDF engine and image memory,
+  clearing the undo history and resetting zoom to 100%. Disabled when nothing is open.
+
 ## [v5-mupdf] — 2026-06-10 — Battery, performance & security
 
 ### Battery / lifecycle
