@@ -433,15 +433,35 @@ $("moreBtn").onclick = ()=>{
     <div class="row"><button class="full" id="mMerge" ${d}>Merge PDFs (choose order)</button></div>
     <div class="row"><button class="full" id="mImg">Images → PDF (new file)</button></div>
     <div class="row"><button class="full" id="mPng" ${d}>Current page → PNG</button></div>
+    <div class="row"><button class="full" id="mCloseFile" ${d}>Close PDF</button></div>
     <div class="row"><button class="ghost full" id="mClose">Cancel</button></div>`;
   $("mSign").onclick  = ()=>{ closeSheet(); startSign(); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
   $("mImg").onclick   = ()=>{ closeSheet(); $("imgInput").click(); };
   $("mPng").onclick   = ()=>{ closeSheet(); exportVisiblePng(); };
+  $("mCloseFile").onclick = ()=>{ closeSheet(); closeFile(); };
   $("mClose").onclick = closeSheet;
   openSheet();
 };
+
+// Close the open document and return to the empty state, releasing all memory.
+function closeFile(){
+  if (pageObserver) pageObserver.disconnect();
+  $("viewer").querySelectorAll(".stage").forEach(s=>s.remove());
+  revokeURLs();
+  closeDoc();                       // destroy the mupdf doc -> frees WASM memory
+  workingBytes = null;
+  fileName = "document.pdf";
+  undoStack = [];
+  spanCache.clear();
+  setMode(null);
+  zoomPct = 100; $("zoomLbl").textContent = "100%";
+  $("emptyMsg").style.display = "block";
+  $("meta").textContent = "No document open";
+  enableDocButtons(false);
+  setStatus("Closed. Tap Open to load another PDF.", "ok");
+}
 
 // ---------------- organise pages (reorder + delete) ----------------
 async function openOrganise(){
