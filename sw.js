@@ -1,10 +1,11 @@
 /* PyPDF Editor PWA service worker — caches the app shell + MuPDF.js engine for offline use.
    Bump CACHE whenever index.html or the vendored libraries change so phones fetch the new copy. */
-const CACHE = "pypdf-pwa-v4-mupdf";
+const CACHE = "pypdf-pwa-v5-mupdf";
 
 const APP_SHELL = [
   "./",
   "./index.html",
+  "./app.js",
   "./manifest.webmanifest",
   "./icon-180.png",
   "./icon-192.png",
