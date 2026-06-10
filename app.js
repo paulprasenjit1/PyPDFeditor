@@ -3,6 +3,11 @@ import * as mupdf from "./vendor/mupdf/mupdf.js";
 
 const $ = id => document.getElementById(id);
 const PDFLib = window.PDFLib;
+
+// ---------------- app version (shown in the About dialog) ----------------
+// Bump these together with the CACHE name in sw.js on every release.
+const APP_VERSION = "7.0";
+const BUILD_DATETIME = "10 Jun 2026, 13:02 UTC";
 const { PDFDocument, StandardFonts, rgb } = PDFLib;
 
 // ---------------- state ----------------
@@ -434,6 +439,7 @@ $("moreBtn").onclick = ()=>{
     <div class="row"><button class="full" id="mImg">Images → PDF (new file)</button></div>
     <div class="row"><button class="full" id="mPng" ${d}>Current page → PNG</button></div>
     <div class="row"><button class="full" id="mCloseFile" ${d}>Close PDF</button></div>
+    <div class="row"><button class="full" id="mAbout">About</button></div>
     <div class="row"><button class="ghost full" id="mClose">Cancel</button></div>`;
   $("mSign").onclick  = ()=>{ closeSheet(); startSign(); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
@@ -441,9 +447,33 @@ $("moreBtn").onclick = ()=>{
   $("mImg").onclick   = ()=>{ closeSheet(); $("imgInput").click(); };
   $("mPng").onclick   = ()=>{ closeSheet(); exportVisiblePng(); };
   $("mCloseFile").onclick = ()=>{ closeSheet(); closeFile(); };
+  $("mAbout").onclick = ()=>{ closeSheet(); openAbout(); };
   $("mClose").onclick = closeSheet;
   openSheet();
 };
+
+// ---------------- About dialog ----------------
+function openAbout(){
+  const cache = "pypdf-pwa-v7-mupdf";   // keep in step with sw.js CACHE
+  $("sheet").innerHTML = `
+    <h3>About PyPDF Editor</h3>
+    <div class="about">
+      <div class="abrow"><span>Version</span><b>${esc(APP_VERSION)}</b></div>
+      <div class="abrow"><span>Build</span><b>${esc(BUILD_DATETIME)}</b></div>
+      <div class="abrow"><span>Cache</span><b>${esc(cache)}</b></div>
+      <div class="abrow"><span>Engine</span><b>MuPDF.js (WASM) + pdf-lib</b></div>
+    </div>
+    <p class="hint" style="margin-top:12px">
+      A private, on-device PDF editor. Everything runs in your browser — nothing
+      you open is ever uploaded. Edit text in place, sign, compress, merge,
+      organise pages, and convert images to PDF.<br><br>
+      If the version above doesn't match your latest upload, fully close and
+      reopen the app so it fetches the new build.
+    </p>
+    <div class="row" style="margin-top:8px"><button class="ghost full" id="abClose">Close</button></div>`;
+  $("abClose").onclick = closeSheet;
+  openSheet();
+}
 
 // Close the open document and return to the empty state, releasing all memory.
 function closeFile(){

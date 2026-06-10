@@ -104,6 +104,12 @@
   .sheet input[type=password]{ flex:1; background:var(--bg); color:var(--txt); border:1px solid var(--line);
            border-radius:8px; padding:10px; font-size:16px; }
   .hint { font-size:12px; color:var(--muted); line-height:1.5; }
+  .about { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .about .abrow { display:flex; justify-content:space-between; gap:12px; padding:9px 12px;
+           font-size:13px; border-bottom:1px solid var(--line); }
+  .about .abrow:last-child { border-bottom:0; }
+  .about .abrow span { color:var(--muted); }
+  .about .abrow b { color:var(--txt); text-align:right; word-break:break-word; }
   .porow { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); }
   .porow img { width:46px; height:auto; background:#fff; border-radius:3px; }
   .porow .pn { flex:1; font-size:14px; }
