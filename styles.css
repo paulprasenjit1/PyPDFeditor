@@ -58,9 +58,16 @@ select.lvl { background:var(--bg); color:var(--txt); border:1px solid var(--line
         border-color:rgba(79,140,255,.45); background:rgba(79,140,255,.10); }
 .viewer.textmode .span:active { background:rgba(79,140,255,.30); }
 .empty { color:var(--muted); text-align:center; margin:auto; font-size:14px; line-height:1.7; padding:24px; }
+/* welcome screen: the empty state is two big friendly buttons */
+.welcome { display:flex; flex-direction:column; gap:14px; align-items:center; }
+.welcome .wtitle { margin:0 0 6px; font-size:20px; font-weight:700; color:var(--txt); }
+.welcome .big { width:min(280px,80vw); padding:16px 18px; font-size:17px; border-radius:14px; }
+.welcome .big.ghost { border-width:1.5px; }
 .status { font-size:12px; padding:8px 14px calc(8px + env(safe-area-inset-bottom));
           border-top:1px solid var(--line); background:var(--panel); color:var(--muted); min-height:18px; }
-.status.ok { color:var(--ok); } .status.err { color:var(--err); } .status.warn { color:var(--warn); }
+.status.ok { color:var(--ok); font-weight:600; }
+.status.err { color:var(--err); font-weight:600; }
+.status.warn { color:var(--warn); font-weight:600; }
 /* Layering: scanner (90) < sheets (110) < spinner (120), so dialogs and the
    working spinner are always visible, including on top of the scanner. */
 .sheet-bg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:flex-end; z-index:110; }
@@ -74,8 +81,8 @@ select.lvl { background:var(--bg); color:var(--txt); border:1px solid var(--line
 .sheet .full { width:100%; }
 .sheet textarea { width:100%; min-height:84px; background:var(--bg); color:var(--txt);
          border:1px solid var(--line); border-radius:8px; padding:10px; font-size:16px; resize:vertical; }
-.sheet input[type=password]{ flex:1; background:var(--bg); color:var(--txt); border:1px solid var(--line);
-         border-radius:8px; padding:10px; font-size:16px; }
+.sheet input[type=password], .sheet input[type=text]{ flex:1; background:var(--bg); color:var(--txt);
+         border:1px solid var(--line); border-radius:8px; padding:10px; font-size:16px; }
 .sheet .pgprev { width:100%; height:auto; max-height:46dvh; object-fit:contain;
          background:#fff; border-radius:8px; border:1px solid var(--line); }
 .mt8  { margin-top:8px; }
@@ -87,11 +94,12 @@ select.lvl { background:var(--bg); color:var(--txt); border:1px solid var(--line
 .about .abrow:last-child { border-bottom:0; }
 .about .abrow span { color:var(--muted); }
 .about .abrow b { color:var(--txt); text-align:right; word-break:break-word; }
-.porow { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); }
+.about a { color:var(--accent); }
+.porow { display:flex; align-items:center; gap:6px; padding:6px 0; border-bottom:1px solid var(--line); }
 .porow img { width:46px; height:auto; background:#fff; border-radius:3px; }
 .porow .pn { flex:1; font-size:14px; }
 .porow.del { opacity:.4; text-decoration:line-through; }
-.porow button { padding:7px 10px; }
+.porow button { padding:7px 9px; }
 input[type=file] { display:none; }
 .spin { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
         background:rgba(0,0,0,.5); z-index:120; color:#fff; font-size:14px; text-align:center; padding:24px; }
@@ -143,6 +151,10 @@ input[type=file] { display:none; }
 .cropwrap svg circle.hgrip { fill:#fff; stroke:#4f8cff; stroke-width:3; }
 /* invisible enlarged hit areas so corners are easy to grab */
 .cropwrap svg circle.hhit { fill:transparent; stroke:none; }
-.scanfilters { display:flex; gap:8px; justify-content:center; padding:10px 16px 0; background:#000; }
+/* magnifier loupe shown while dragging a corner */
+.loupe { position:absolute; z-index:5; width:120px; height:120px; border-radius:50%;
+         border:2px solid var(--accent); pointer-events:none;
+         box-shadow:0 4px 14px rgba(0,0,0,.5); background:#000; }
+.scanfilters { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; padding:10px 16px 0; background:#000; }
 .scanfilters button { background:transparent; border:1px solid var(--line); color:#cfd6e4; }
 .scanfilters button.on { background:var(--accent2); border-color:var(--accent2); color:#fff; }

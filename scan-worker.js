@@ -11,7 +11,7 @@ self.onmessage = (e)=>{
   const { id, buf, w, h, quad, filter } = e.data;
   try {
     const src = new Uint8ClampedArray(buf);
-    const out = warpCore(src, w, h, quad);
+    const out = warpCore(src, w, h, quad, e.data.maxDim);
     if (filter === "bw") applyDocBW(out.data, out.w, out.h);
     else applyAutoContrast(out.data, out.w, out.h);
     self.postMessage({ id, ok:true, buf:out.data.buffer, w:out.w, h:out.h }, [out.data.buffer]);
@@ -21,11 +21,11 @@ self.onmessage = (e)=>{
 };
 
 // ---- perspective correction (homography + bilinear sampling) ----
-function warpCore(sd, sw, sh, q){
+function warpCore(sd, sw, sh, q, maxDim){
   const dist=(a,b)=>Math.hypot(a.x-b.x, a.y-b.y);
   let ow=Math.max(dist(q[0],q[1]), dist(q[3],q[2]));
   let oh=Math.max(dist(q[0],q[3]), dist(q[1],q[2]));
-  const cap=2000/Math.max(ow,oh);
+  const cap=(maxDim||2000)/Math.max(ow,oh);
   if (cap<1){ ow*=cap; oh*=cap; }
   const W=Math.max(8,Math.round(ow)), H=Math.max(8,Math.round(oh));
   const [ha,hb,hc,hd,he,hf,hg,hh]=homographyTo(q,W,H);

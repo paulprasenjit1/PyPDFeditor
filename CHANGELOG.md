@@ -4,6 +4,87 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.2] — 2026-06-11 — Robustness + two small features
+
+### Scanner sees better (no UI change)
+- **Detection rewritten and stricter**: every sizeable region is considered (not
+  just the largest), and a candidate must truly look like a document — convex,
+  real side lengths, well filled, its outline following the region's actual
+  boundary. Doors, walls, and L-shaped regions are rejected instead of being
+  outlined in green.
+- **White-on-white now works**: when the paper is the same tone as the desk, a
+  gradient (Sobel) fallback finds the boundary/shadow line instead.
+- New fixture tests (tests/detect-tests.mjs): classic page ≤1px, same-tone
+  paper via shadow line ≤1px, L-shape rejected, blank/wall frames rejected.
+
+### Lighter on memory (no UI change)
+- Undo history is capped by total size (120MB) as well as steps — huge PDFs can
+  no longer pile up ten full copies in memory.
+- Scan sessions persist incrementally: adding page 12 writes one page to
+  storage, not all twelve again. Old saved sessions still restore.
+
+### Accessibility
+- VoiceOver labels on all icon-only controls (zoom, rotate, move, corners,
+  torch, thumbnails) and the status bar is now a live region, so feedback is
+  announced.
+
+### New
+- **Copy pages → new PDF** (More menu): pick pages with thumbnails; they are
+  copied into a brand-new file, the open document is untouched.
+- **Standard / Small file** quality choice on the scan crop screen (remembered):
+  Small produces noticeably lighter PDFs for multi-page scans.
+
+### Tests
+- 34 integration + 4 guard + 5 detection checks, all passing.
+
+## [v10.1] — 2026-06-11 — Naming + reverts
+
+- App is now called **PyPDF** everywhere (Home-Screen name, title, header,
+  welcome screen, About).
+- **"Make smaller" reverted to "Compress"** (button and messages).
+- **Pages reorder reverted to ↑ ↓ buttons** (drag handle removed); rotate ⟳,
+  Delete and the per-page badges stay.
+- All 32 integration + 8 guard/security tests pass.
+
+## [v10] — 2026-06-11 — Simplicity release
+
+Top priority this release: anyone, including a child, can use the app. Total
+size added: ~9KB. No new libraries. Still three screens.
+
+### Easier for everyone
+- **Welcome screen**: instead of an empty dark page, two big buttons —
+  "📄 Open a PDF" and "📷 Scan a document" — plus "Everything stays on your
+  phone — nothing is uploaded."
+- **Plain words everywhere**: "Compress" → "Make smaller", "Organise pages" →
+  "Pages", "Merge" → "Combine", no more "engine" or technical jargon in any
+  message. Errors speak human: "This file appears damaged, or isn't really a
+  PDF" instead of raw engine output (raw text still goes to the About log).
+- **Save made obvious**: Save opens a small sheet with a name box (rename your
+  PDF at last) and one line explaining what happens next.
+- Success/error messages are bolder so feedback is hard to miss.
+
+### Pages & scanning
+- **Drag to reorder**: hold ≡ and drag a page up or down in the Pages sheet
+  (replaces the ↑ ↓ buttons — one obvious gesture instead of three buttons
+  per row; rotate ⟳ and Delete stay).
+- **Magnifier loupe** while dragging crop corners — see exactly which pixel
+  the corner sits on, CamScanner-style.
+- Crop filter preview now runs at reduced resolution: filter switching is ~4×
+  faster with no visible difference (final quality unchanged).
+- "Make smaller" shows per-page progress and no longer freezes the app on
+  very long documents.
+- Editing text on a rotated page now warns first (edits assume upright pages).
+
+### Under the hood
+- **Structural XSS safety**: every dialog is built with an auto-escaping
+  template (h\`\`) — interpolated values are escaped by default rather than
+  relying on per-call-site discipline. Verified by new tests (V6/V7) including
+  a malicious-filename injection attempt.
+- About now shows the MuPDF AGPL-3.0 licence with a source link.
+- Host security headers (COOP/COEP/nosniff) are NOT possible on GitHub Pages —
+  documented; revisit only on a host change.
+- Tests: 32 integration + 8 negative/security checks, all passing.
+
 ## [v9.3] — 2026-06-11 — Error-banner fix + diagnostics
 
 - **"Unexpected error: Script error." banner fixed.** Root cause: if
