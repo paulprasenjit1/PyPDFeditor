@@ -11,7 +11,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.3";
+const APP_BUILD = "10.4";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap",
@@ -66,7 +66,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.3";
+const APP_VERSION = "10.4";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -147,7 +147,7 @@ const u8 = v => new Uint8Array(v);
   $("meta").textContent = "No document open";
   setStatus("Ready. Open a PDF or scan a document.", "ok");
 })();
-$("bigOpen").onclick = ()=> $("fileInput").click();
+$("bigOpen").onclick = ()=> confirmDiscard("open another PDF", ()=>$("fileInput").click());
 $("bigScan").onclick = ()=> startScan();
 
 // ---------------- session persistence (IndexedDB, on-device only) ----------------
@@ -157,6 +157,23 @@ $("bigScan").onclick = ()=> startScan();
 // (the decrypted copy must not outlive the session).
 const DB_NAME="pypdf-state", DB_STORE="kv";
 let docSensitive = false;     // true when the open doc came from a password unlock
+let dirty = false;            // true when the document has changes not yet Saved
+
+// Before any action that would REPLACE or close the open document, warn if
+// there are unsaved changes. Offers Save first / Continue / Cancel.
+function confirmDiscard(actionLabel, proceed){
+  if (!workingBytes || !dirty){ proceed(); return; }
+  $("sheet").innerHTML = h`
+    <h3>Unsaved changes</h3>
+    <p class="hint">“${fileName}” has changes you haven't saved. If you ${actionLabel} now, those changes will be lost.</p>
+    <div class="row"><button class="full" id="udSave">Save first</button></div>
+    <div class="row"><button class="ghost full" id="udGo">Continue without saving</button></div>
+    <div class="row"><button class="ghost full" id="udCancel">Cancel</button></div>`;
+  $("udSave").onclick   = ()=>{ closeSheet(); $("saveBtn").onclick(); };
+  $("udGo").onclick     = ()=>{ closeSheet(); proceed(); };
+  $("udCancel").onclick = closeSheet;
+  openSheet();
+}
 let persistT = 0;             // debounce timer for document persistence
 function idbOpen(){
   return new Promise((res,rej)=>{
@@ -197,7 +214,7 @@ function persistDocNow(){
   persistT=0;
   try {
     if (workingBytes && !docSensitive)
-      idbSet("doc",{ name:fileName, bytes:workingBytes, ts:Date.now() }).catch(()=>{});
+      idbSet("doc",{ name:fileName, bytes:workingBytes, ts:Date.now(), dirty }).catch(()=>{});
     else idbDel("doc").catch(()=>{});
   } catch(e){}
 }
@@ -328,7 +345,7 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
 })();
 
 // ---------------- open (with password support) ----------------
-$("openBtn").onclick = ()=> $("fileInput").click();
+$("openBtn").onclick = ()=> confirmDiscard("open another PDF", ()=>$("fileInput").click());
 $("fileInput").onchange = async e=>{
   const f=e.target.files[0]; if(!f) return;
   showSpin(true,"Opening "+f.name+" …"); setStatus("Opening "+f.name+" …");
@@ -361,6 +378,7 @@ async function openBytes(bytes, name){
   workingBytes = bytes;
   if (name) fileName = name;
   docSensitive = wasEncrypted;     // decrypted copies are never persisted
+  dirty = false;                   // freshly opened = nothing to lose yet
   reopen();
   setMode(null);
   await render();
@@ -722,9 +740,9 @@ $("moreBtn").onclick = ()=>{
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mExtract").onclick = ()=>{ closeSheet(); openExtract(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
-  $("mImg").onclick   = ()=>{ closeSheet(); $("imgInput").click(); };
+  $("mImg").onclick   = ()=>{ closeSheet(); confirmDiscard("turn photos into a new PDF", ()=>$("imgInput").click()); };
   $("mPng").onclick   = ()=>{ closeSheet(); exportVisiblePng(); };
-  $("mCloseFile").onclick = ()=>{ closeSheet(); closeFile(); };
+  $("mCloseFile").onclick = ()=>{ closeSheet(); confirmDiscard("close this PDF", closeFile); };
   $("mAbout").onclick = ()=>{ closeSheet(); openAbout(); };
   $("mClose").onclick = closeSheet;
   openSheet();
@@ -732,7 +750,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.3";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v10.4";   // keep in step with sw.js APP_CACHE
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
@@ -768,6 +786,7 @@ function closeFile(){
   closeDoc();                       // destroy the mupdf doc -> frees WASM memory
   workingBytes = null;
   docSensitive = false;
+  dirty = false;
   try{ idbDel("doc").catch(()=>{}); }catch(e){}   // closed on purpose: forget it
   fileName = "document.pdf";
   undoStack = [];
@@ -997,7 +1016,7 @@ $("imgInput").onchange = async e=>{
     fileName = "images.pdf";
     undoStack = [];
     setMode(null);
-    reopen(); await render(); enableDocButtons(true);
+    reopen(); dirty = true; await render(); enableDocButtons(true);
     setStatus("Done — your photos are now a PDF.","ok");
   } catch(err){ setStatus("Could not turn the photos into a PDF: "+friendly(err),"err"); }
   showSpin(false);
@@ -1531,7 +1550,11 @@ $("cropUse").onclick = async ()=>{
 };
 
 // build the PDF (pages scaled to A4-ish point sizes) and open it in the editor
-$("scanDone").onclick = async ()=>{
+$("scanDone").onclick = ()=>{
+  if (!scanPages.length) return;
+  confirmDiscard("create the scanned PDF", createScanPdf);
+};
+async function createScanPdf(){
   if (!scanPages.length) return;
   const pages=scanPages.slice();
   endScan();
@@ -1546,7 +1569,7 @@ $("scanDone").onclick = async ()=>{
     }
     workingBytes=new Uint8Array(await doc.save());
     fileName="scan.pdf"; undoStack=[]; setMode(null);
-    reopen(); await render(); enableDocButtons(true);
+    reopen(); dirty = true; await render(); enableDocButtons(true);
     setStatus("Scanned "+pages.length+" page(s) into scan.pdf — tap Save to keep it.","ok");
   } catch(err){ setStatus("Could not create the PDF: "+friendly(err),"err"); }
   showSpin(false);
@@ -1914,6 +1937,7 @@ $("saveBtn").onclick = ()=>{
     fileName = nm;
     closeSheet();
     downloadBlob(new Blob([workingBytes], {type:"application/pdf"}), nm);
+    dirty = false;                 // saved — nothing unsaved any more
     if (MDOC) $("meta").textContent = nm+" • "+MDOC.countPages()+" pages • "+fmtKB(workingBytes.length);
     schedulePersistDoc();
     setStatus("Now pick where to keep it — e.g. Save to Files.","ok");
@@ -1978,6 +2002,7 @@ const UNDO_LIMIT = 10;                       // max steps
 const UNDO_BYTES_CAP = 120*1024*1024;        // max total memory for undo copies
 let undoStack = [];
 function pushUndo(){
+  dirty = true;                              // every mutation passes through here
   undoStack.push(workingBytes ? workingBytes.slice(0) : null);
   if (undoStack.length>UNDO_LIMIT) undoStack.shift();
   // large documents: keep undo memory bounded by dropping the oldest steps
@@ -1991,8 +2016,8 @@ async function doUndo(){
   if (!undoStack.length){ setStatus("Nothing to undo.","err"); return; }
   workingBytes = undoStack.pop();
   showSpin(true,"Undoing…");
-  if (workingBytes){ reopen(); await render(); }
-  else { closeDoc(); try{ idbDel("doc").catch(()=>{}); }catch(e){} await render(); }
+  if (workingBytes){ dirty = true; reopen(); await render(); }
+  else { closeDoc(); dirty = false; try{ idbDel("doc").catch(()=>{}); }catch(e){} await render(); }
   enableDocButtons(!!workingBytes);
   showSpin(false); setStatus("Undone.","ok");
 }
@@ -2109,7 +2134,7 @@ window.addEventListener("pageshow", (e)=>{
     closeSheet();
     if (hasScan){ scanPages = scanSaved; }   // carry the scan along too
     showSpin(true,"Restoring document…");
-    try { await openBytes(doc.bytes, doc.name); }
+    try { await openBytes(doc.bytes, doc.name); dirty = doc.dirty !== false; }
     catch(e){ setStatus("Could not restore it: "+friendly(e),"err"); }
     showSpin(false);
   };
