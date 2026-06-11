@@ -11,10 +11,10 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.2";
+const APP_BUILD = "10.3";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
-  const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe",
+  const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","photoBtn","autoBtn","torchBtn","photoInput",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","fltColour","fltBw","qStd","qSmall","cropRetake","cropUse"];
   const missing = need.filter(id=>!document.getElementById(id));
@@ -66,7 +66,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.2";
+const APP_VERSION = "10.3";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -246,17 +246,86 @@ function refreshZoomButtons(){
   $("zoomOut").disabled = !workingBytes || zoomPct<=50;
   $("zoomIn").disabled  = !workingBytes || zoomPct>=300;
 }
-function applyZoom(delta){
-  const next = Math.max(50, Math.min(300, zoomPct + delta));
-  if (next === zoomPct){ refreshZoomButtons(); return; }
-  zoomPct = next;
+// set the zoom and re-render, keeping the content under the anchor point
+// (a pinch centre, a double-tap, or the viewer middle) visually in place
+let zooming = false;
+async function setZoom(newPct, anchorX, anchorY){
+  newPct = Math.max(50, Math.min(300, Math.round(newPct/5)*5));
+  if (newPct === zoomPct || !workingBytes || zooming){ refreshZoomButtons(); return; }
+  zooming = true;
+  const v = $("viewer"), r = v.getBoundingClientRect();
+  const ax = (anchorX==null ? r.width/2  : anchorX - r.left);
+  const ay = (anchorY==null ? r.height/2 : anchorY - r.top);
+  const ratio = newPct / zoomPct;
+  const sx = v.scrollLeft, sy = v.scrollTop;
+  zoomPct = newPct;
   $("zoomLbl").textContent = zoomPct + "%";
   refreshZoomButtons();
-  if (workingBytes) render();
+  await render();
+  v.scrollLeft = (sx + ax) * ratio - ax;
+  v.scrollTop  = (sy + ay) * ratio - ay;
+  zooming = false;
 }
+function applyZoom(delta){ setZoom(zoomPct + delta); }
 $("undoBtn").onclick = ()=> doUndo();
 $("zoomOut").onclick = ()=> applyZoom(-25);
 $("zoomIn").onclick  = ()=> applyZoom(25);
+
+// ---------------- pinch-to-zoom + double-tap (iOS-style) ----------------
+// During the pinch the already-rendered pages are scaled instantly with a CSS
+// transform (60fps, no engine work); when the fingers lift, the pages
+// re-render sharp at the new zoom, anchored at the pinch centre.
+(function wirePinch(){
+  const v = $("viewer"), wrap = $("pageWrap");
+  let pinch = null;            // { d0, k, cx, cy }
+  let lastTap = 0, lastX = 0, lastY = 0;
+  const dist = (t)=>Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
+
+  v.addEventListener("touchstart", (e)=>{
+    if (e.touches.length===2 && workingBytes && !mode){
+      e.preventDefault();
+      const cx=(e.touches[0].clientX+e.touches[1].clientX)/2;
+      const cy=(e.touches[0].clientY+e.touches[1].clientY)/2;
+      const wr=wrap.getBoundingClientRect();
+      wrap.style.transformOrigin = (cx-wr.left)+"px "+(cy-wr.top)+"px";
+      pinch = { d0:dist(e.touches), k:1, cx, cy };
+    }
+  }, { passive:false });
+
+  v.addEventListener("touchmove", (e)=>{
+    if (!pinch || e.touches.length!==2) return;
+    e.preventDefault();
+    let k = dist(e.touches)/pinch.d0;
+    k = Math.max(50/zoomPct, Math.min(300/zoomPct, k));     // clamp to 50–300%
+    pinch.k = k;
+    wrap.style.transform = "scale("+k+")";
+    $("zoomLbl").textContent = Math.round(zoomPct*k)+"%";
+  }, { passive:false });
+
+  const endPinch = (e)=>{
+    if (!pinch) return;
+    if (e.touches && e.touches.length>=2) return;            // still pinching
+    const { k, cx, cy } = pinch;
+    pinch = null;
+    wrap.style.transform = "";
+    if (Math.abs(k-1) < 0.02){ $("zoomLbl").textContent = zoomPct+"%"; return; }
+    setZoom(zoomPct*k, cx, cy);
+  };
+  v.addEventListener("touchend", endPinch);
+  v.addEventListener("touchcancel", endPinch);
+
+  // double-tap: toggle 100% <-> 200%, centred on the tap
+  v.addEventListener("touchend", (e)=>{
+    if (pinch || mode || !workingBytes) return;
+    if (e.touches.length || e.changedTouches.length!==1) return;
+    const t = e.changedTouches[0], now = Date.now();
+    if (now-lastTap < 300 && Math.hypot(t.clientX-lastX, t.clientY-lastY) < 30){
+      lastTap = 0;
+      e.preventDefault();
+      setZoom(zoomPct===100 ? 200 : 100, t.clientX, t.clientY);
+    } else { lastTap = now; lastX = t.clientX; lastY = t.clientY; }
+  });
+})();
 
 // ---------------- open (with password support) ----------------
 $("openBtn").onclick = ()=> $("fileInput").click();
@@ -346,6 +415,7 @@ function observeStages(){
 async function render(){
   const v = $("viewer");
   v.querySelectorAll(".stage").forEach(s=>s.remove());
+  const wrap = $("pageWrap");
   revokeURLs();
   if (!workingBytes || !MDOC){ $("emptyMsg").style.display="block"; return; }
   $("emptyMsg").style.display="none";
@@ -374,7 +444,7 @@ async function render(){
       const holder = stage.querySelector(".holder");
       holder.style.width = dispW+"px"; holder.style.height = dispH+"px";
       attachOverlay(stage, i);
-      v.appendChild(stage);
+      wrap.appendChild(stage);
     }
     observeStages();
     $("meta").textContent = `${fileName} • ${n} pages • ${fmtKB(workingBytes.length)}`;
@@ -662,7 +732,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.2";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v10.3";   // keep in step with sw.js APP_CACHE
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
@@ -702,12 +772,47 @@ function closeFile(){
   fileName = "document.pdf";
   undoStack = [];
   spanCache.clear();
+  thumbCache.clear();
   setMode(null);
   zoomPct = 100; $("zoomLbl").textContent = "100%";
   $("emptyMsg").style.display = "block";
   $("meta").textContent = "No document open";
   enableDocButtons(false);
   setStatus("Closed. Open a PDF or scan a document.", "ok");
+}
+
+// ---------------- page thumbnails (cached + lazy) ----------------
+// Thumbnails are rasterised once per document version and kept as small JPEG
+// data URLs, so the Pages / Copy-pages sheets open instantly and redraw with
+// no engine work even on 100-page documents. Images load lazily as the sheet
+// scrolls.
+const thumbCache = new Map();          // `${epoch}:${page}` -> dataURL
+function pageThumb(i){
+  const key = epoch+":"+i;
+  if (thumbCache.has(key)) return thumbCache.get(key);
+  const page = MDOC.loadPage(i);
+  const [x0,y0,x1,y1] = page.getBounds();
+  const s = (46*DPR)/(x1-x0);
+  const pix = page.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false);
+  const jpg = u8(pix.asJPEG(70)); pix.destroy(); page.destroy();
+  let bin=""; for (let k=0;k<jpg.length;k+=8192) bin += String.fromCharCode.apply(null, jpg.subarray(k,k+8192));
+  const url = "data:image/jpeg;base64,"+btoa(bin);
+  thumbCache.set(key, url);
+  if (thumbCache.size > 400){ thumbCache.delete(thumbCache.keys().next().value); }
+  return url;
+}
+let sheetThumbObs = null;
+function lazyThumbs(){
+  if (sheetThumbObs) sheetThumbObs.disconnect();
+  const root = $("sheet");
+  sheetThumbObs = new IntersectionObserver((ents)=>{
+    for (const en of ents){
+      if (!en.isIntersecting) continue;
+      sheetThumbObs.unobserve(en.target);
+      try { en.target.src = pageThumb(+en.target.dataset.pthumb); } catch(e){}
+    }
+  }, { root, rootMargin:"300px 0px" });
+  root.querySelectorAll("img[data-pthumb]").forEach(im=>sheetThumbObs.observe(im));
 }
 
 // ---------------- organise pages (reorder + delete) ----------------
@@ -718,21 +823,13 @@ async function openOrganise(){
   let order = Array.from({length:n}, (_,i)=>i);
   const del = new Set();
   const rot = {};
-  const cssThumb = 46*DPR;
 
-  function thumb(i){
-    const page = MDOC.loadPage(i);
-    const [x0,y0,x1,y1]=page.getBounds(); const s = cssThumb/(x1-x0);
-    const pix = page.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false);
-    const jpg = u8(pix.asJPEG(70)); pix.destroy(); page.destroy();
-    return URL.createObjectURL(new Blob([jpg],{type:"image/jpeg"}));
-  }
   function draw(){
     const rows = order.map((orig,pos)=>{
       const isdel = del.has(orig);
       const deg = rot[orig]||0;
       return h`<div class="porow ${isdel?'del':''}" data-pos="${pos}">
-        <img src="${thumb(orig)}" alt="">
+        <img data-pthumb="${orig}" alt="">
         <span class="pn">Page ${orig+1}${deg?` · ⟳${deg}°`:""}</span>
         <button class="ghost" data-up="${pos}" aria-label="Move page ${orig+1} up">↑</button>
         <button class="ghost" data-dn="${pos}" aria-label="Move page ${orig+1} down">↓</button>
@@ -751,6 +848,7 @@ async function openOrganise(){
     $("sheet").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{const o=+b.dataset.del; del.has(o)?del.delete(o):del.add(o); draw();});
     $("orgApply").onclick = async ()=>{ closeSheet(); await applyOrganise(order.filter(o=>!del.has(o)), rot); };
     $("orgCancel").onclick = closeSheet;
+    lazyThumbs();
   }
   draw();
   openSheet();}
@@ -786,17 +884,9 @@ async function applyOrganise(finalOrder, rot){
 function openExtract(){
   const n = MDOC.countPages();
   const sel = new Set();
-  const cssThumb = 46*DPR;
-  function thumb(i){
-    const page = MDOC.loadPage(i);
-    const [x0,y0,x1,y1]=page.getBounds(); const s = cssThumb/(x1-x0);
-    const pix = page.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false);
-    const jpg = u8(pix.asJPEG(70)); pix.destroy(); page.destroy();
-    return URL.createObjectURL(new Blob([jpg],{type:"image/jpeg"}));
-  }
   function draw(){
     const rows = Array.from({length:n},(_,i)=> h`<div class="porow">
-        <img src="${thumb(i)}" alt="">
+        <img data-pthumb="${i}" alt="">
         <span class="pn">Page ${i+1}</span>
         <button class="${sel.has(i)?"":"ghost"}" data-t="${i}" aria-label="Pick page ${i+1}">${sel.has(i)?"✓ Picked":"Pick"}</button>
       </div>`).join("");
@@ -808,6 +898,7 @@ function openExtract(){
     $("sheet").querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>{ const i=+b.dataset.t; sel.has(i)?sel.delete(i):sel.add(i); draw(); });
     $("exGo").onclick = async ()=>{ closeSheet(); await doExtract([...sel].sort((a,b)=>a-b)); };
     $("exCancel").onclick = closeSheet;
+    lazyThumbs();
   }
   draw(); openSheet();
 }
@@ -1907,7 +1998,10 @@ async function doUndo(){
 }
 
 // ---------------- sheet + utilities ----------------
-function closeSheet(){ $("sheetBg").classList.remove("show"); }
+function closeSheet(){
+  $("sheetBg").classList.remove("show");
+  if (sheetThumbObs){ sheetThumbObs.disconnect(); sheetThumbObs=null; }
+}
 $("sheetBg").addEventListener("click", e=>{ if(e.target===$("sheetBg")) closeSheet(); });
 
 function fileToDataURL(file){ return new Promise((res,rej)=>{ const r=new FileReader();
