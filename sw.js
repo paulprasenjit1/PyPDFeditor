@@ -1,15 +1,26 @@
-/* PyPDF Editor PWA service worker — caches the app shell + MuPDF.js engine for offline use.
-   Bump CACHE whenever index.html or the vendored libraries change so phones fetch the new copy. */
-const CACHE = "pypdf-pwa-v4-mupdf";
+/* PyPDF Editor PWA service worker.
+   Two caches:
+   - APP_CACHE   (~100KB: html/css/js/icons) — bump on EVERY release. Installed
+     with {cache:"reload"} so the HTTP cache can never mix old and new files
+     into one build (a partial update used to brick handlers silently).
+   - VENDOR_CACHE (~12MB: MuPDF wasm + pdf-lib) — bump ONLY when vendor/ files
+     actually change. Kept across app releases, so updates no longer re-download
+     the engine and the first load after an update is fast. */
+const APP_CACHE    = "pypdf-app-v10.4";
+const VENDOR_CACHE = "pypdf-vendor-v1";
 
 const APP_SHELL = [
   "./",
   "./index.html",
+  "./styles.css",
+  "./app.js",
+  "./scan-worker.js",
   "./manifest.webmanifest",
   "./icon-180.png",
   "./icon-192.png",
   "./icon-512.png",
-  // engine + pen (all same-origin, vendored — works fully offline)
+];
+const VENDOR = [
   "./vendor/pdf-lib.min.js",
   "./vendor/mupdf/mupdf.js",
   "./vendor/mupdf/mupdf-wasm.js",
@@ -18,8 +29,14 @@ const APP_SHELL = [
 
 self.addEventListener("install", (e)=>{
   e.waitUntil((async ()=>{
-    const cache = await caches.open(CACHE);
-    await cache.addAll(APP_SHELL);   // includes the ~10MB wasm — cached once, then offline
+    // app shell: always fetched fresh from the network, atomically
+    const app = await caches.open(APP_CACHE);
+    await app.addAll(APP_SHELL.map(u=>new Request(u, { cache:"reload" })));
+    // vendor: only download what's missing (no-op on normal app updates)
+    const ven = await caches.open(VENDOR_CACHE);
+    for (const u of VENDOR){
+      if (!(await ven.match(u))) await ven.add(new Request(u, { cache:"reload" }));
+    }
     self.skipWaiting();
   })());
 });
@@ -27,7 +44,7 @@ self.addEventListener("install", (e)=>{
 self.addEventListener("activate", (e)=>{
   e.waitUntil((async ()=>{
     const keys = await caches.keys();
-    await Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)));
+    await Promise.all(keys.filter(k=>k!==APP_CACHE && k!==VENDOR_CACHE).map(k=>caches.delete(k)));
     self.clients.claim();
   })());
 });
@@ -35,13 +52,18 @@ self.addEventListener("activate", (e)=>{
 self.addEventListener("fetch", (e)=>{
   const req = e.request;
   if (req.method !== "GET") return;
+  const url = new URL(req.url);
+  // never intercept cross-origin requests; never serve or cache backups/
+  if (url.origin !== location.origin) return;
+  if (url.pathname.includes("/backups/")) return;
   e.respondWith((async ()=>{
-    const cached = await caches.match(req);
+    const cached = await caches.match(req);   // searches both caches
     if (cached) return cached;
     try {
       const res = await fetch(req);
-      if (res && res.ok && new URL(req.url).origin === location.origin){
-        const cache = await caches.open(CACHE); cache.put(req, res.clone());
+      if (res && res.ok){
+        const cache = await caches.open(url.pathname.includes("/vendor/") ? VENDOR_CACHE : APP_CACHE);
+        cache.put(req, res.clone());
       }
       return res;
     } catch (err){
