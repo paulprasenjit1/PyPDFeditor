@@ -4,6 +4,45 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.4] — 2026-06-11 — Unsaved-changes protection
+
+- The app now tracks whether the open document has changes that haven't been
+  Saved (any edit, sign, page change, combine or compress marks it; Save
+  clears it).
+- Before any action that would **replace or close** the document — Open,
+  Photos → PDF, Create PDF from a scan, Close — a sheet asks first:
+  **Save first / Continue without saving / Cancel**. "Save first" opens the
+  normal Save dialog.
+- Non-destructive actions (Save, Copy pages, page → picture, starting a scan,
+  edits themselves) never nag.
+- The unsaved state survives the app being killed: it is stored with the
+  auto-saved session, so a restored document still warns before being replaced.
+- Tests: 40 integration + 4 guard + 5 detection checks, all passing — including
+  four new checks (warns when dirty, Cancel preserves, Continue proceeds,
+  silent after Save).
+
+## [v10.3] — 2026-06-11 — Touch + long-document speed
+
+### Pinch to zoom (finally feels native)
+- **Pinch anywhere on the pages**: they scale instantly under your fingers
+  (pure CSS transform, 60fps, zero engine work), and the moment you let go they
+  re-render sharp at the new zoom — anchored at the pinch centre, so the spot
+  between your fingers stays put. Range 50–300%.
+- **Double-tap** toggles 100% ↔ 200%, centred on the tap.
+- The − / + buttons remain and now also keep the view centred when zooming.
+- Browser page-zoom is suppressed inside the viewer (touch-action), so a pinch
+  always zooms the document, never the app shell.
+
+### Long documents stay fast
+- Page thumbnails are rasterised once per document version and cached, and the
+  Pages / Copy-pages sheets load them lazily as you scroll. Opening Pages on a
+  100-page PDF is instant instead of a multi-second freeze, and every
+  rotate/delete/reorder tap redraws with no engine work.
+
+### Tests
+- 36 integration + 4 guard + 5 detection checks, all passing — including new
+  checks for anchored zoom re-rendering and lazy cached thumbnails.
+
 ## [v10.2] — 2026-06-11 — Robustness + two small features
 
 ### Scanner sees better (no UI change)
