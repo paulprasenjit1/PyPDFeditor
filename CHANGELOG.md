@@ -4,6 +4,28 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v8-mupdf] — 2026-06-11 — Document scanner (camera)
+
+- New **Scan document (camera)** entry at the top of the **More** menu — a
+  CamScanner / Office Lens style scanner that runs entirely on-device.
+- **Live camera preview** (rear camera) with real-time document **edge detection**:
+  the detected page is outlined in green as you aim. Detection is pure JS
+  (Otsu threshold + largest connected component) — no new libraries, CSP unchanged
+  except `media-src` for the camera stream.
+- After capture, an **Adjust edges** screen shows the photo with the detected
+  quadrilateral and four **draggable corner handles** to fine-tune the crop.
+- **Perspective correction**: the chosen quad is straightened into a flat page with
+  a true homography warp (bilinear sampling, output capped at 2000 px).
+- **Filters**: *Colour* (gentle auto-contrast) or *Black & white* (adaptive
+  threshold against the local mean — clean white paper, crisp text, shadows evened out).
+- **Multi-page**: keep tapping the shutter to add pages, then **Create PDF (n)**
+  builds one PDF (pages scaled to A4-size points) and opens it in the editor as
+  `scan.pdf`, ready to edit, compress, sign or save.
+- Falls back to the **native camera app** (file capture) if a live camera stream
+  isn't available or permission is denied.
+- Battery: the camera stream and detection loop are stopped whenever the app is
+  hidden or the scanner is closed, and restarted on return.
+
 ## [v7-mupdf] — 2026-06-10 — About dialog
 
 - Added an **About** entry at the bottom of the **More** menu (works with or without a

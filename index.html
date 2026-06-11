@@ -13,6 +13,7 @@
   script-src 'self' 'wasm-unsafe-eval';
   style-src 'self' 'unsafe-inline';
   img-src 'self' blob: data:;
+  media-src 'self' blob:;
   font-src 'self';
   connect-src 'self' blob: data:;
   worker-src 'self' blob:;
@@ -119,6 +120,36 @@
   .spin { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
           background:rgba(0,0,0,.5); z-index:60; color:#fff; font-size:14px; text-align:center; padding:24px; }
   .spin.show { display:flex; }
+  /* ---------------- document scanner (camera + crop) ---------------- */
+  .scanui { position:fixed; inset:0; z-index:90; background:#000; display:none;
+            flex-direction:column; }
+  .scanui.show { display:flex; }
+  .scanui .scantop { display:flex; align-items:center; justify-content:space-between;
+            padding:max(10px,env(safe-area-inset-top)) 14px 10px; color:#fff; }
+  .scanui .scantop .ttl { font-size:15px; font-weight:600; }
+  .scanui .scantop .pgct { font-size:12px; color:#9fd49f; }
+  .scanview { position:relative; flex:1; overflow:hidden; background:#000; }
+  .scanview video, .scanview canvas.cam, .scanview canvas.quad {
+            position:absolute; inset:0; width:100%; height:100%; }
+  .scanview video { object-fit:contain; }
+  .scanview canvas.quad { pointer-events:none; }
+  .scanctl { display:flex; align-items:center; justify-content:space-evenly; gap:10px;
+            padding:14px 16px calc(18px + env(safe-area-inset-bottom)); background:#000; }
+  .scanctl button { min-width:86px; }
+  .shutter { width:66px; height:66px; min-width:66px; border-radius:50%; background:#fff;
+            border:4px solid #888; padding:0; }
+  .shutter:active { background:#ccc; }
+  /* crop / adjust screen */
+  .cropwrap { position:relative; flex:1; overflow:hidden; background:#000;
+            display:flex; align-items:center; justify-content:center; }
+  .cropwrap canvas.photo { position:absolute; }
+  .cropwrap svg { position:absolute; touch-action:none; }
+  .cropwrap svg polygon { fill:rgba(79,140,255,.18); stroke:#4f8cff; stroke-width:2;
+            vector-effect:non-scaling-stroke; }
+  .cropwrap svg circle { fill:#fff; stroke:#4f8cff; stroke-width:3; }
+  .scanfilters { display:flex; gap:8px; justify-content:center; padding:10px 16px 0; background:#000; }
+  .scanfilters button { background:transparent; border:1px solid var(--line); color:#cfd6e4; }
+  .scanfilters button.on { background:var(--accent2); border-color:var(--accent2); color:#fff; }
 </style>
 </head>
 <body>
@@ -156,6 +187,49 @@
 <input type="file" id="mergeInput" accept="application/pdf,.pdf" multiple>
 <input type="file" id="imgInput" accept="image/*" multiple>
 <input type="file" id="sigInput" accept="image/*">
+<!-- fallback when getUserMedia is unavailable/denied: native camera capture -->
+<input type="file" id="camInput" accept="image/*" capture="environment">
+
+<!-- ---------------- document scanner: camera screen ---------------- -->
+<div class="scanui" id="scanCam">
+  <div class="scantop">
+    <span class="ttl">Scan document</span>
+    <span class="pgct" id="scanCount"></span>
+  </div>
+  <div class="scanview" id="scanView">
+    <video id="scanVideo" autoplay playsinline muted></video>
+    <canvas class="quad" id="scanQuad"></canvas>
+  </div>
+  <div class="scanctl">
+    <button class="ghost" id="scanCancel">Cancel</button>
+    <button class="shutter" id="scanShot" aria-label="Capture"></button>
+    <button id="scanDone" disabled>Create PDF</button>
+  </div>
+</div>
+
+<!-- ---------------- document scanner: adjust / crop screen ---------------- -->
+<div class="scanui" id="scanCrop">
+  <div class="scantop">
+    <span class="ttl">Adjust edges</span>
+    <span class="pgct" id="cropHint">Drag the corners</span>
+  </div>
+  <div class="cropwrap" id="cropWrap">
+    <canvas class="photo" id="cropPhoto"></canvas>
+    <svg id="cropSvg">
+      <polygon id="cropPoly" points="0,0 0,0 0,0 0,0"></polygon>
+      <circle id="h0" r="14"></circle><circle id="h1" r="14"></circle>
+      <circle id="h2" r="14"></circle><circle id="h3" r="14"></circle>
+    </svg>
+  </div>
+  <div class="scanfilters">
+    <button id="fltColour" class="on">Colour</button>
+    <button id="fltBw">Black &amp; white</button>
+  </div>
+  <div class="scanctl">
+    <button class="ghost" id="cropRetake">Retake</button>
+    <button id="cropUse">Use page</button>
+  </div>
+</div>
 
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
 <div class="spin" id="spin">Working…</div>

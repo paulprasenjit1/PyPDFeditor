@@ -6,8 +6,8 @@ const PDFLib = window.PDFLib;
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "7.0";
-const BUILD_DATETIME = "10 Jun 2026, 13:02 UTC";
+const APP_VERSION = "8.0";
+const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb } = PDFLib;
 
 // ---------------- state ----------------
@@ -433,6 +433,7 @@ $("moreBtn").onclick = ()=>{
   const has = !!workingBytes, d = has?"":"disabled";
   $("sheet").innerHTML = `
     <h3>More actions</h3>
+    <div class="row"><button class="full" id="mScan">Scan document (camera)</button></div>
     <div class="row"><button class="full" id="mSign" ${d}>Sign (add signature image)</button></div>
     <div class="row"><button class="full" id="mOrg" ${d}>Organise pages (reorder / delete)</button></div>
     <div class="row"><button class="full" id="mMerge" ${d}>Merge PDFs (choose order)</button></div>
@@ -441,6 +442,7 @@ $("moreBtn").onclick = ()=>{
     <div class="row"><button class="full" id="mCloseFile" ${d}>Close PDF</button></div>
     <div class="row"><button class="full" id="mAbout">About</button></div>
     <div class="row"><button class="ghost full" id="mClose">Cancel</button></div>`;
+  $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
   $("mSign").onclick  = ()=>{ closeSheet(); startSign(); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
@@ -454,7 +456,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-pwa-v7-mupdf";   // keep in step with sw.js CACHE
+  const cache = "pypdf-pwa-v8-mupdf";   // keep in step with sw.js CACHE
   $("sheet").innerHTML = `
     <h3>About PyPDF Editor</h3>
     <div class="about">
@@ -633,6 +635,469 @@ $("imgInput").onchange = async e=>{
   showSpin(false);
 };
 
+// ---------------- document scanner (camera → edges → crop → PDF) ----------------
+// Everything runs on-device: getUserMedia camera preview, document edge
+// detection in plain JS (Otsu threshold + largest connected component), a
+// drag-the-corners adjust screen, true perspective correction (homography with
+// bilinear sampling), optional B&W "document" filter, then pdf-lib builds the
+// PDF. Multi-page: scan as many pages as you like before creating the file.
+let scanStream = null;        // live MediaStream (null when off)
+let scanLive = 0;             // live edge-detect interval id
+let scanFallback = false;     // true => no stream; use native camera <input capture>
+let scanWasLive = false;      // camera was on when the app got hidden
+let scanPages = [];           // confirmed pages: [{bytes:Uint8Array(JPEG), w, h}]
+let capFrame = null;          // canvas holding the full-res captured photo
+let cropQuad = null;          // 4 corners in image px, order TL,TR,BR,BL
+let cropFit = null;           // image→display fit for the crop screen
+let cropFilter = "colour";    // "colour" | "bw"
+let dragIdx = -1;             // corner handle being dragged
+
+let _scratch = null;          // small reusable canvas for detection downscales
+function scratch(w,h){
+  if (!_scratch) _scratch = document.createElement("canvas");
+  _scratch.width = w; _scratch.height = h;
+  return _scratch;
+}
+function containFit(srcW,srcH,boxW,boxH){
+  const scale = Math.min(boxW/srcW, boxH/srcH);
+  return { scale, dispW:srcW*scale, dispH:srcH*scale,
+           offX:(boxW-srcW*scale)/2, offY:(boxH-srcH*scale)/2 };
+}
+
+// ---- session ----
+async function startScan(){
+  scanPages = []; capFrame = null; scanFallback = false;
+  updateScanCount();
+  $("scanCrop").classList.remove("show");
+  $("scanCam").classList.add("show");
+  setStatus("Point the camera at a document and tap the shutter.","ok");
+  await startCamera();
+}
+function endScan(){
+  stopCamera();
+  scanPages = []; capFrame = null;
+  updateScanCount();
+  $("scanCam").classList.remove("show");
+  $("scanCrop").classList.remove("show");
+}
+function updateScanCount(){
+  $("scanCount").textContent = scanPages.length ? scanPages.length+" page(s) scanned" : "";
+  const d = $("scanDone");
+  d.disabled = !scanPages.length;
+  d.textContent = scanPages.length ? "Create PDF ("+scanPages.length+")" : "Create PDF";
+}
+
+// ---- camera ----
+async function startCamera(){
+  stopCamera();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ enterFallback(); return; }
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({
+      audio:false,
+      video:{ facingMode:{ideal:"environment"}, width:{ideal:2560}, height:{ideal:1440} }
+    });
+  } catch(e){ enterFallback(); return; }
+  const v = $("scanVideo");
+  v.srcObject = scanStream;
+  try { await v.play(); } catch(e){ /* autoplay is allowed: muted+playsinline */ }
+  sizeQuadCanvas();
+  startLiveDetect();
+}
+function stopCamera(){
+  if (scanLive){ clearInterval(scanLive); scanLive = 0; }
+  if (scanStream){ for (const t of scanStream.getTracks()){ try{ t.stop(); }catch(e){} } scanStream = null; }
+  const v = $("scanVideo"); v.srcObject = null;
+  const q = $("scanQuad");
+  if (q.width) q.getContext("2d").clearRect(0,0,q.width,q.height);
+}
+function enterFallback(){
+  scanFallback = true;
+  setStatus("Live camera unavailable — using the native camera instead.","warn");
+  $("camInput").click();
+}
+function sizeQuadCanvas(){
+  const view = $("scanView"), q = $("scanQuad");
+  q.width = view.clientWidth; q.height = view.clientHeight;
+}
+
+// live preview: detect the document every 300ms and outline it in green
+function startLiveDetect(){
+  if (scanLive) clearInterval(scanLive);
+  scanLive = setInterval(()=>{
+    const v = $("scanVideo");
+    if (!v.videoWidth || document.hidden) return;
+    drawLiveQuad(detectOnVideoFrame(v));
+  }, 300);
+}
+function detectOnVideoFrame(v){
+  const vw=v.videoWidth, vh=v.videoHeight;
+  const s = 220/Math.max(vw,vh);
+  const sw=Math.max(2,Math.round(vw*s)), sh=Math.max(2,Math.round(vh*s));
+  const ctx = scratch(sw,sh).getContext("2d",{willReadFrequently:true});
+  ctx.drawImage(v,0,0,sw,sh);
+  const q = detectQuad(ctx.getImageData(0,0,sw,sh));
+  return q ? q.map(p=>({x:p.x/s, y:p.y/s})) : null;   // → video px
+}
+function drawLiveQuad(q){
+  const cnv=$("scanQuad"), ctx=cnv.getContext("2d");
+  ctx.clearRect(0,0,cnv.width,cnv.height);
+  if (!q) return;
+  const v=$("scanVideo");
+  const fit=containFit(v.videoWidth, v.videoHeight, cnv.width, cnv.height);
+  ctx.beginPath();
+  q.forEach((p,i)=>{ const x=p.x*fit.scale+fit.offX, y=p.y*fit.scale+fit.offY;
+                     i ? ctx.lineTo(x,y) : ctx.moveTo(x,y); });
+  ctx.closePath();
+  ctx.fillStyle="rgba(63,185,80,.16)"; ctx.fill();
+  ctx.lineWidth=2.5; ctx.strokeStyle="#3fb950"; ctx.stroke();
+}
+
+// ---- capture ----
+$("scanShot").onclick = ()=>{
+  if (scanFallback){ $("camInput").click(); return; }
+  const v=$("scanVideo");
+  if (!v.videoWidth){ setStatus("Camera not ready yet.","warn"); return; }
+  const c=document.createElement("canvas");
+  c.width=v.videoWidth; c.height=v.videoHeight;
+  c.getContext("2d").drawImage(v,0,0);
+  stopCamera();
+  enterCrop(c);
+};
+// fallback path: native camera app returns a photo file
+$("camInput").onchange = async e=>{
+  const f=e.target.files[0]; e.target.value="";
+  if (!f) return;
+  showSpin(true,"Loading photo…");
+  try {
+    const im = await loadImage(await fileToDataURL(f));
+    const s = Math.min(1, 2600/Math.max(im.naturalWidth, im.naturalHeight));
+    const c=document.createElement("canvas");
+    c.width=Math.round(im.naturalWidth*s); c.height=Math.round(im.naturalHeight*s);
+    c.getContext("2d").drawImage(im,0,0,c.width,c.height);
+    $("scanCam").classList.add("show");
+    enterCrop(c);
+  } catch(err){ setStatus("Photo load failed: "+err.message,"err"); }
+  showSpin(false);
+};
+
+// ---- adjust / crop screen ----
+function enterCrop(frame){
+  capFrame = frame;
+  // auto-detect edges on a downscale; fall back to a 6% inset rectangle
+  const s = 300/Math.max(frame.width, frame.height);
+  const sw=Math.max(2,Math.round(frame.width*s)), sh=Math.max(2,Math.round(frame.height*s));
+  const ctx = scratch(sw,sh).getContext("2d",{willReadFrequently:true});
+  ctx.drawImage(frame,0,0,sw,sh);
+  let q = detectQuad(ctx.getImageData(0,0,sw,sh));
+  if (q) q = q.map(p=>({x:p.x/s, y:p.y/s}));
+  else {
+    const mx=frame.width*0.06, my=frame.height*0.06;
+    q=[{x:mx,y:my},{x:frame.width-mx,y:my},
+       {x:frame.width-mx,y:frame.height-my},{x:mx,y:frame.height-my}];
+  }
+  cropQuad = q;
+  $("scanCam").classList.remove("show");
+  $("scanCrop").classList.add("show");
+  layoutCrop();
+  setStatus(q ? "Edges detected — drag the corners to fine-tune." : "Drag the corners onto the document edges.","ok");
+}
+function layoutCrop(){
+  if (!capFrame) return;
+  const wrap=$("cropWrap");
+  const fit=containFit(capFrame.width, capFrame.height, wrap.clientWidth-12, wrap.clientHeight-12);
+  cropFit=fit;
+  const left=(wrap.clientWidth-fit.dispW)/2, top=(wrap.clientHeight-fit.dispH)/2;
+  const ph=$("cropPhoto");
+  ph.width=Math.round(fit.dispW*DPR); ph.height=Math.round(fit.dispH*DPR);
+  ph.style.width=fit.dispW+"px"; ph.style.height=fit.dispH+"px";
+  ph.style.left=left+"px"; ph.style.top=top+"px";
+  ph.getContext("2d").drawImage(capFrame,0,0,ph.width,ph.height);
+  const svg=$("cropSvg");
+  svg.setAttribute("width",fit.dispW); svg.setAttribute("height",fit.dispH);
+  svg.setAttribute("viewBox","0 0 "+fit.dispW+" "+fit.dispH);
+  svg.style.left=left+"px"; svg.style.top=top+"px";
+  updateCropOverlay();
+}
+function updateCropOverlay(){
+  const s=cropFit.scale;
+  $("cropPoly").setAttribute("points", cropQuad.map(p=>(p.x*s)+","+(p.y*s)).join(" "));
+  cropQuad.forEach((p,i)=>{ const c=$("h"+i);
+    c.setAttribute("cx",p.x*s); c.setAttribute("cy",p.y*s); });
+}
+// draggable corner handles
+(function wireCropHandles(){
+  for (let i=0;i<4;i++){
+    const hEl=$("h"+i);
+    hEl.addEventListener("pointerdown", e=>{ dragIdx=i; hEl.setPointerCapture(e.pointerId); e.preventDefault(); });
+    hEl.addEventListener("pointermove", e=>{
+      if (dragIdx!==i || !cropFit || !capFrame) return;
+      const r=$("cropSvg").getBoundingClientRect();
+      const x=(e.clientX-r.left)/cropFit.scale, y=(e.clientY-r.top)/cropFit.scale;
+      cropQuad[i]={ x:Math.max(0,Math.min(capFrame.width ,x)),
+                    y:Math.max(0,Math.min(capFrame.height,y)) };
+      updateCropOverlay();
+    });
+    const end=()=>{ dragIdx=-1; };
+    hEl.addEventListener("pointerup",end);
+    hEl.addEventListener("pointercancel",end);
+  }
+})();
+
+$("fltColour").onclick = ()=> setScanFilter("colour");
+$("fltBw").onclick     = ()=> setScanFilter("bw");
+function setScanFilter(f){
+  cropFilter=f;
+  $("fltColour").classList.toggle("on", f==="colour");
+  $("fltBw").classList.toggle("on", f==="bw");
+}
+
+$("cropRetake").onclick = async ()=>{
+  capFrame=null;
+  $("scanCrop").classList.remove("show");
+  $("scanCam").classList.add("show");
+  if (scanFallback) $("camInput").click(); else await startCamera();
+};
+$("scanCancel").onclick = ()=>{
+  if (scanPages.length && !confirm("Discard "+scanPages.length+" scanned page(s)?")) return;
+  endScan();
+  setStatus("Scan cancelled.","warn");
+};
+
+// confirm the page: perspective-correct, filter, JPEG-encode, back to camera
+$("cropUse").onclick = async ()=>{
+  if (!capFrame) return;
+  showSpin(true,"Straightening page…");
+  try {
+    await new Promise(r=>setTimeout(r,30));    // let the spinner paint first
+    const out = warpPerspective(capFrame, orderQuad(cropQuad));
+    if (cropFilter==="bw") applyDocBW(out); else applyAutoContrast(out);
+    const c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
+    c.getContext("2d").putImageData(out,0,0);
+    const blob = await new Promise(res=>c.toBlob(res,"image/jpeg",0.85));
+    scanPages.push({ bytes:new Uint8Array(await blob.arrayBuffer()), w:out.width, h:out.height });
+    capFrame=null;
+    updateScanCount();
+    $("scanCrop").classList.remove("show");
+    $("scanCam").classList.add("show");
+    setStatus("Page "+scanPages.length+" added — scan the next page or tap Create PDF.","ok");
+    if (!scanFallback) await startCamera();
+  } catch(err){ setStatus("Scan failed: "+err.message,"err"); }
+  showSpin(false);
+};
+
+// build the PDF (pages scaled to A4-ish point sizes) and open it in the editor
+$("scanDone").onclick = async ()=>{
+  if (!scanPages.length) return;
+  const pages=scanPages.slice();
+  endScan();
+  showSpin(true,"Creating PDF from "+pages.length+" page(s)…");
+  try {
+    const doc=await PDFDocument.create();
+    for (const p of pages){
+      const img=await doc.embedJpg(p.bytes);
+      const sPt=842/Math.max(p.w,p.h);          // A4 long side = 842pt
+      const pg=doc.addPage([p.w*sPt, p.h*sPt]);
+      pg.drawImage(img,{x:0,y:0,width:p.w*sPt,height:p.h*sPt});
+    }
+    workingBytes=new Uint8Array(await doc.save());
+    fileName="scan.pdf"; undoStack=[]; setMode(null);
+    reopen(); await render(); enableDocButtons(true);
+    setStatus("Scanned "+pages.length+" page(s) into scan.pdf — tap Save to keep it.","ok");
+  } catch(err){ setStatus("Create PDF failed: "+err.message,"err"); }
+  showSpin(false);
+};
+
+// ---- document edge detection (pure JS, no OpenCV) ----
+// Downscaled grayscale → 3×3 blur → Otsu threshold → largest connected
+// component (tried both polarities) → quad corners via the x±y extreme trick.
+function detectQuad(im){
+  const w=im.width, h=im.height, n=w*h, d=im.data;
+  const g=new Uint8Array(n);
+  for (let i=0,j=0;i<n;i++,j+=4) g[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+  const bl=new Uint8Array(n);
+  for (let y=0;y<h;y++) for (let x=0;x<w;x++){
+    let s=0,c=0;
+    for (let dy=-1;dy<=1;dy++){ const yy=y+dy; if(yy<0||yy>=h) continue;
+      for (let dx=-1;dx<=1;dx++){ const xx=x+dx; if(xx<0||xx>=w) continue; s+=g[yy*w+xx]; c++; } }
+    bl[y*w+x]=(s/c)|0;
+  }
+  // Otsu threshold
+  const hist=new Float64Array(256);
+  for (let i=0;i<n;i++) hist[bl[i]]++;
+  let sumAll=0; for (let t=0;t<256;t++) sumAll+=t*hist[t];
+  let sumB=0,wB=0,maxVar=-1,thr=127;
+  for (let t=0;t<256;t++){
+    wB+=hist[t]; if(!wB) continue;
+    const wF=n-wB; if(!wF) break;
+    sumB+=t*hist[t];
+    const mB=sumB/wB, mF=(sumAll-sumB)/wF, vr=wB*wF*(mB-mF)*(mB-mF);
+    if (vr>maxVar){ maxVar=vr; thr=t; }
+  }
+  // paper is usually brighter than the background; try dark-on-light second
+  for (const bright of [true,false]){
+    const q=largestComponentQuad(bl,w,h,thr,bright);
+    if (q) return q;
+  }
+  return null;
+}
+function largestComponentQuad(bl,w,h,thr,bright){
+  const n=w*h;
+  const seen=new Uint8Array(n);
+  const inMask = bright ? (i=>bl[i]>thr) : (i=>bl[i]<=thr);
+  const stack=new Int32Array(n);
+  let best=null, bestArea=0;
+  for (let i0=0;i0<n;i0++){
+    if (seen[i0] || !inMask(i0)) continue;
+    let top=0; stack[top++]=i0; seen[i0]=1;
+    let area=0, minSum=1e9,maxSum=-1e9,minDif=1e9,maxDif=-1e9, tl=null,tr=null,br=null,blc=null;
+    while (top){
+      const i=stack[--top]; area++;
+      const x=i%w, y=(i/w)|0, su=x+y, di=x-y;
+      if (su<minSum){minSum=su; tl={x,y};}
+      if (su>maxSum){maxSum=su; br={x,y};}
+      if (di>maxDif){maxDif=di; tr={x,y};}
+      if (di<minDif){minDif=di; blc={x,y};}
+      if (x>0   && !seen[i-1] && inMask(i-1)){seen[i-1]=1; stack[top++]=i-1;}
+      if (x<w-1 && !seen[i+1] && inMask(i+1)){seen[i+1]=1; stack[top++]=i+1;}
+      if (y>0   && !seen[i-w] && inMask(i-w)){seen[i-w]=1; stack[top++]=i-w;}
+      if (y<h-1 && !seen[i+w] && inMask(i+w)){seen[i+w]=1; stack[top++]=i+w;}
+    }
+    if (area>bestArea){ bestArea=area; best=[tl,tr,br,blc]; }
+  }
+  if (!best || bestArea < n*0.12) return null;          // too small to be the document
+  if (quadArea(best) < n*0.10) return null;             // degenerate shape
+  return [best[0],best[1],best[2],best[3]];             // TL,TR,BR,BL
+}
+function quadArea(q){
+  let a=0;
+  for (let i=0;i<4;i++){ const p=q[i], r=q[(i+1)&3]; a+=p.x*r.y-r.x*p.y; }
+  return Math.abs(a)/2;
+}
+// re-derive TL,TR,BR,BL after the user has dragged corners around
+function orderQuad(q){
+  const bySum=[...q].sort((a,b)=>(a.x+a.y)-(b.x+b.y));
+  const tl=bySum[0], br=bySum[3];
+  const [a,b]=bySum.slice(1,3);
+  const tr = (a.x-a.y) > (b.x-b.y) ? a : b;
+  return [tl, tr, br, tr===a ? b : a];
+}
+
+// ---- perspective correction (homography + bilinear sampling) ----
+function warpPerspective(srcCanvas, q){
+  const sctx=srcCanvas.getContext("2d",{willReadFrequently:true});
+  const src=sctx.getImageData(0,0,srcCanvas.width,srcCanvas.height);
+  const sw=src.width, sh=src.height, sd=src.data;
+  const dist=(a,b)=>Math.hypot(a.x-b.x, a.y-b.y);
+  let ow=Math.max(dist(q[0],q[1]), dist(q[3],q[2]));
+  let oh=Math.max(dist(q[0],q[3]), dist(q[1],q[2]));
+  const cap=2000/Math.max(ow,oh);
+  if (cap<1){ ow*=cap; oh*=cap; }
+  const W=Math.max(8,Math.round(ow)), H=Math.max(8,Math.round(oh));
+  const [ha,hb,hc,hd,he,hf,hg,hh]=homographyTo(q,W,H);
+  const out=new ImageData(W,H), od=out.data;
+  let k=0;
+  for (let v=0;v<H;v++){
+    for (let u=0;u<W;u++){
+      const den=hg*u+hh*v+1;
+      const sx=(ha*u+hb*v+hc)/den, sy=(hd*u+he*v+hf)/den;
+      const x0=Math.floor(sx), y0=Math.floor(sy);
+      if (x0<0||y0<0||x0>=sw-1||y0>=sh-1){ od[k++]=255; od[k++]=255; od[k++]=255; od[k++]=255; continue; }
+      const fx=sx-x0, fy=sy-y0;
+      const i00=(y0*sw+x0)*4, i10=i00+4, i01=i00+sw*4, i11=i01+4;
+      for (let ch=0;ch<3;ch++){
+        const t0=sd[i00+ch]*(1-fx)+sd[i10+ch]*fx;
+        const t1=sd[i01+ch]*(1-fx)+sd[i11+ch]*fx;
+        od[k++]=(t0*(1-fy)+t1*fy)|0;
+      }
+      od[k++]=255;
+    }
+  }
+  return out;
+}
+// homography mapping dst rect (0,0)-(W,H) onto the source quad (8×8 solve)
+function homographyTo(q,W,H){
+  const dst=[{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}];
+  const M=[];
+  for (let i=0;i<4;i++){
+    const {x:u,y:v}=dst[i], {x,y}=q[i];
+    M.push([u,v,1,0,0,0,-u*x,-v*x,x]);
+    M.push([0,0,0,u,v,1,-u*y,-v*y,y]);
+  }
+  // Gauss-Jordan with partial pivoting on the augmented 8×9 matrix
+  for (let c=0;c<8;c++){
+    let piv=c;
+    for (let r=c+1;r<8;r++) if (Math.abs(M[r][c])>Math.abs(M[piv][c])) piv=r;
+    [M[c],M[piv]]=[M[piv],M[c]];
+    const p=M[c][c]||1e-12;
+    for (let j=c;j<=8;j++) M[c][j]/=p;
+    for (let r=0;r<8;r++){
+      if (r===c) continue;
+      const f=M[r][c]; if(!f) continue;
+      for (let j=c;j<=8;j++) M[r][j]-=f*M[c][j];
+    }
+  }
+  return M.map(row=>row[8]);
+}
+
+// ---- output filters ----
+// Colour: gentle auto-contrast (stretch the 2nd–98th luminance percentiles).
+function applyAutoContrast(im){
+  const d=im.data, n=im.width*im.height;
+  const hist=new Uint32Array(256);
+  for (let i=0;i<n;i++){ const j=i*4; hist[(d[j]*77+d[j+1]*151+d[j+2]*28)>>8]++; }
+  let lo=0,hi=255,acc=0;
+  for (let t=0;t<256;t++){ acc+=hist[t]; if(acc>=n*0.02){ lo=t; break; } }
+  acc=0;
+  for (let t=255;t>=0;t--){ acc+=hist[t]; if(acc>=n*0.02){ hi=t; break; } }
+  if (hi-lo<30) return;                       // already well spread / blank page
+  const lut=new Uint8Array(256);
+  for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round((t-lo)*255/(hi-lo))));
+  for (let i=0;i<n;i++){ const j=i*4; d[j]=lut[d[j]]; d[j+1]=lut[d[j+1]]; d[j+2]=lut[d[j+2]]; }
+}
+// B&W: adaptive soft threshold against a blurred local mean (clean white paper,
+// crisp dark text — the classic scanned-document look, evens out shadows).
+function applyDocBW(im){
+  const w=im.width, h=im.height, d=im.data, n=w*h;
+  const g=new Uint8Array(n);
+  for (let i=0;i<n;i++){ const j=i*4; g[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
+  const f=8, mw=Math.max(1,Math.ceil(w/f)), mh=Math.max(1,Math.ceil(h/f));
+  const sum=new Float64Array(mw*mh), cnt=new Float64Array(mw*mh);
+  for (let y=0;y<h;y++){ const my=(y/f)|0;
+    for (let x=0;x<w;x++){ const mi=my*mw+((x/f)|0); sum[mi]+=g[y*w+x]; cnt[mi]++; } }
+  const mean=new Float32Array(mw*mh);
+  for (let i=0;i<mw*mh;i++) mean[i]=cnt[i]?sum[i]/cnt[i]:255;
+  boxBlurF(mean,mw,mh,2); boxBlurF(mean,mw,mh,2);
+  const sig=new Uint8Array(511);
+  for (let i=0;i<511;i++) sig[i]=Math.round(255/(1+Math.exp(-(i-255)/7)));
+  for (let y=0;y<h;y++){
+    const my=Math.min(mh-1,(y/f)|0);
+    for (let x=0;x<w;x++){
+      const m=mean[my*mw+Math.min(mw-1,(x/f)|0)];
+      const o=sig[Math.max(0,Math.min(510,Math.round(g[y*w+x]-(m-14))+255))];
+      const j=(y*w+x)*4; d[j]=d[j+1]=d[j+2]=o;
+    }
+  }
+}
+function boxBlurF(a,w,h,r){
+  const tmp=new Float32Array(a.length);
+  for (let y=0;y<h;y++) for (let x=0;x<w;x++){
+    let s=0,c=0;
+    for (let k=-r;k<=r;k++){ const xx=x+k; if(xx<0||xx>=w) continue; s+=a[y*w+xx]; c++; }
+    tmp[y*w+x]=s/c;
+  }
+  for (let y=0;y<h;y++) for (let x=0;x<w;x++){
+    let s=0,c=0;
+    for (let k=-r;k<=r;k++){ const yy=y+k; if(yy<0||yy>=h) continue; s+=tmp[yy*w+x]; c++; }
+    a[y*w+x]=s/c;
+  }
+}
+
+// keep the scanner layouts in step with rotation / window changes
+window.addEventListener("resize", ()=>{
+  if ($("scanCrop").classList.contains("show")) layoutCrop();
+  if (scanStream) sizeQuadCanvas();
+});
+
 // ---------------- current page -> PNG (mupdf) ----------------
 async function exportVisiblePng(){
   const v=$("viewer"); let target=0, best=1e9;
@@ -772,13 +1237,22 @@ function pauseWork(){ if (pageObserver) pageObserver.disconnect(); clearTimeout(
 function resumeWork(){ if (workingBytes && MDOC) observeStages(); }   // re-attach lazy rendering
 function releaseAll(){
   pauseWork();
+  stopCamera();          // release the camera stream + live detect loop
   revokeURLs();
   closeDoc();            // destroy the mupdf doc -> frees the bulk of WASM memory
   spanCache.clear();
 }
 
 document.addEventListener("visibilitychange", ()=>{
-  if (document.hidden) pauseWork(); else resumeWork();
+  if (document.hidden){
+    pauseWork();
+    scanWasLive = !!scanStream;        // remember to relight the camera on return
+    if (scanStream) stopCamera();
+  } else {
+    resumeWork();
+    if (scanWasLive && $("scanCam").classList.contains("show")) startCamera();
+    scanWasLive = false;
+  }
 });
 // pagehide fires when the installed app is closed or navigated away from.
 window.addEventListener("pagehide", releaseAll);
