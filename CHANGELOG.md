@@ -4,6 +4,24 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v9.3] — 2026-06-11 — Error-banner fix + diagnostics
+
+- **"Unexpected error: Script error." banner fixed.** Root cause: if
+  `scan-worker.js` is missing from a deploy (it's new in v9), the host returns
+  an HTML 404 page, the Worker fails parsing it, and the failure leaked to the
+  global error handler as a sanitised "Script error." Scanning kept working via
+  the main-thread fallback, but the banner appeared. Worker load/runtime errors
+  are now absorbed (`preventDefault`) and silently switch to the fallback.
+- **Better diagnostics**: unexpected errors now include file:line where
+  available, and the last 3 are kept on-device and shown in **More → About →
+  Recent errors** — so any future report can say exactly what failed and where.
+- The live camera-preview loop is hardened: one bad frame can no longer kill
+  the loop or leak an error.
+- DEPLOY.md now includes a direct-URL check that `scan-worker.js` is actually
+  live on the host.
+- Tests: 31 integration + 5 negative checks all pass, including a new test
+  that a worker load failure is absorbed and flips to the fallback.
+
 ## [v9.1] — 2026-06-11 — Update reliability + fast updates
 
 ### Root cause of the "frozen scanner buttons"

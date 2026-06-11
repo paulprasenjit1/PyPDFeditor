@@ -11,7 +11,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "9.2";
+const APP_BUILD = "9.3";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin",
@@ -45,17 +45,28 @@ const APP_BUILD = "9.2";
 })();
 
 // Surface unexpected errors in the status bar — a visible message instead of
-// silently dead buttons.
+// silently dead buttons — and keep the last few in a small on-device log
+// (shown in More → About) so problems can be reported precisely.
+function reportError(kind, msg, src){
+  const text = kind+": "+(msg||"unknown")+(src ? " @ "+src : "");
+  try {
+    const log = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]");
+    log.unshift(new Date().toISOString().slice(0,16).replace("T"," ")+" "+text);
+    localStorage.setItem("pypdf-errlog", JSON.stringify(log.slice(0,3)));
+  } catch(e){}
+  try { setStatus(text+" — the app keeps running; if something stops working, close and reopen it.", "err"); } catch(e){}
+}
 window.addEventListener("error", (e)=>{
-  try { setStatus("Unexpected error: "+(e.message||"unknown")+" — if buttons stop working, fully close and reopen the app.", "err"); } catch(_){}
+  const src = e.filename ? e.filename.split("/").pop()+":"+e.lineno+":"+e.colno : "";
+  reportError("Error", e.message, src);
 });
 window.addEventListener("unhandledrejection", (e)=>{
-  try { setStatus("Unexpected error: "+((e.reason && e.reason.message) || e.reason || "unknown"), "err"); } catch(_){}
+  reportError("Async error", (e.reason && e.reason.message) || String(e.reason||""), "");
 });
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "9.2";
+const APP_VERSION = "9.3";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -570,7 +581,12 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v9.2";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v9.3";   // keep in step with sw.js APP_CACHE
+  let errs = [];
+  try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
+  const errRows = errs.length
+    ? `<div class="abrow"><span>Recent errors</span><b>${esc(errs.join("  •  "))}</b></div>`
+    : `<div class="abrow"><span>Recent errors</span><b>none</b></div>`;
   $("sheet").innerHTML = `
     <h3>About PyPDF Editor</h3>
     <div class="about">
@@ -578,6 +594,7 @@ function openAbout(){
       <div class="abrow"><span>Build</span><b>${esc(BUILD_DATETIME)}</b></div>
       <div class="abrow"><span>Cache</span><b>${esc(cache)}</b></div>
       <div class="abrow"><span>Engine</span><b>MuPDF.js (WASM) + pdf-lib</b></div>
+      ${errRows}
     </div>
     <p class="hint mt12">
       A private, on-device PDF editor. Everything runs in your browser — nothing
@@ -799,8 +816,17 @@ let scanWorker = null;        // Worker | false (failed) | null (not tried)
 let scanJobId = 0;
 function getScanWorker(){
   if (scanWorker === null){
-    try { scanWorker = new Worker("./scan-worker.js"); }
-    catch(e){ scanWorker = false; }
+    try {
+      scanWorker = new Worker("./scan-worker.js");
+      // A worker that fails to load (e.g. scan-worker.js missing from a
+      // deploy, served as a 404 HTML page) must not leak a global
+      // "Script error." banner — absorb it here and use the main-thread
+      // fallback instead.
+      scanWorker.addEventListener("error", (e)=>{
+        if (e && e.preventDefault) e.preventDefault();
+        scanWorker = false;
+      });
+    } catch(e){ scanWorker = false; }
   }
   return scanWorker;
 }
@@ -818,7 +844,8 @@ function processPageOffThread(srcIm, quad, filter){
       w.removeEventListener("message", onMsg);
       resolve(e.data.ok ? new ImageData(new Uint8ClampedArray(e.data.buf), e.data.w, e.data.h) : null);
     };
-    const onErr = ()=>{ clearTimeout(wd); w.removeEventListener("message", onMsg); scanWorker = false; resolve(null); };
+    const onErr = (e)=>{ if (e && e.preventDefault) e.preventDefault();
+      clearTimeout(wd); w.removeEventListener("message", onMsg); scanWorker = false; resolve(null); };
     w.addEventListener("message", onMsg);
     w.addEventListener("error", onErr, { once:true });
     // transfer the pixels (zero-copy); the canvas still holds its own copy
@@ -994,17 +1021,19 @@ function startLiveDetect(){
   if (scanLive) clearInterval(scanLive);
   resetLiveQuad();
   scanLive = setInterval(()=>{
-    const v = $("scanVideo");
-    if (!v.videoWidth || document.hidden) return;
-    const raw = detectOnVideoFrame(v);
-    const q = smoothQuad(raw);
-    // auto-capture: fire after ~5 stable frames (~1.5s) on a decent-sized quad
-    if (autoCapture && q && raw && quadClose(q, raw) &&
-        quadArea(q) > 0.18 * v.videoWidth * v.videoHeight){
-      autoStable++;
-      if (autoStable >= 5){ autoStable = 0; drawLiveQuad(q, 0); captureFrame(); return; }
-    } else autoStable = 0;
-    drawLiveQuad(q, autoStable);
+    try {
+      const v = $("scanVideo");
+      if (!v.videoWidth || document.hidden) return;
+      const raw = detectOnVideoFrame(v);
+      const q = smoothQuad(raw);
+      // auto-capture: fire after ~5 stable frames (~1.5s) on a decent-sized quad
+      if (autoCapture && q && raw && quadClose(q, raw) &&
+          quadArea(q) > 0.18 * v.videoWidth * v.videoHeight){
+        autoStable++;
+        if (autoStable >= 5){ autoStable = 0; drawLiveQuad(q, 0); captureFrame(); return; }
+      } else autoStable = 0;
+      drawLiveQuad(q, autoStable);
+    } catch(e){ /* one bad camera frame must not kill the preview loop */ }
   }, 300);
 }
 function detectOnVideoFrame(v){
