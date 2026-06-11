@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="9.3">
+<html lang="en" data-build="10.2">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -24,20 +24,20 @@
   form-action 'none';
   object-src 'none'">
 <meta name="referrer" content="no-referrer">
-<title>PyPDF Editor</title>
+<title>PyPDF</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <meta name="theme-color" content="#0f1115">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="PyPDF Editor">
+<meta name="apple-mobile-web-app-title" content="PyPDF">
 <link rel="apple-touch-icon" href="./icon-180.png">
 <link rel="icon" href="./icon-192.png">
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
 <header>
-  <h1>PyPDF Editor</h1>
+  <h1>PyPDF</h1>
   <div class="meta" id="meta">Loading engine…</div>
 </header>
 
@@ -46,11 +46,11 @@
   <button class="ghost" id="textBtn" disabled>Edit text</button>
   <button class="ghost" id="undoBtn" disabled>Undo</button>
   <div class="zoomctl">
-    <button class="ghost" id="zoomOut" disabled>−</button>
+    <button class="ghost" id="zoomOut" aria-label="Zoom out" disabled>−</button>
     <span class="zlbl" id="zoomLbl">100%</span>
-    <button class="ghost" id="zoomIn" disabled>+</button>
+    <button class="ghost" id="zoomIn" aria-label="Zoom in" disabled>+</button>
   </div>
-  <select id="compLevel" class="lvl" title="High &lt;1MB · Medium &lt;700KB · Low &lt;200KB" disabled>
+  <select id="compLevel" class="lvl" aria-label="Compression level" title="High &lt;1MB · Medium &lt;700KB · Low &lt;200KB" disabled>
     <option value="high">High</option>
     <option value="medium" selected>Medium</option>
     <option value="low">Low</option>
@@ -61,10 +61,17 @@
 </div>
 
 <div class="viewer" id="viewer">
-  <div class="empty" id="emptyMsg">Starting the MuPDF engine…<br>This loads once, then works fully offline.</div>
+  <div class="empty" id="emptyMsg">
+    <div class="welcome">
+      <p class="wtitle">PyPDF</p>
+      <button class="big" id="bigOpen" disabled>📄&ensp;Open a PDF</button>
+      <button class="big ghost" id="bigScan" disabled>📷&ensp;Scan a document</button>
+      <p class="hint" id="welcomeHint">Getting ready…</p>
+    </div>
+  </div>
 </div>
 
-<div class="status" id="status">Loading…</div>
+<div class="status" id="status" role="status" aria-live="polite">Loading…</div>
 
 <input type="file" id="fileInput" accept="application/pdf,.pdf">
 <input type="file" id="mergeInput" accept="application/pdf,.pdf" multiple>
@@ -81,14 +88,14 @@
     <span class="ttl">Scan document</span>
     <span class="tools">
       <button class="ghost mini" id="photoBtn">Photos</button>
-      <button class="ghost mini" id="autoBtn">Auto</button>
-      <button class="ghost mini" id="torchBtn" hidden>Torch</button>
+      <button class="ghost mini" id="autoBtn" aria-label="Automatic capture">Auto</button>
+      <button class="ghost mini" id="torchBtn" aria-label="Camera torch" hidden>Torch</button>
       <span class="pgct" id="scanCount"></span>
     </span>
   </div>
   <div class="scanview" id="scanView">
-    <video id="scanVideo" autoplay playsinline muted></video>
-    <canvas class="quad" id="scanQuad"></canvas>
+    <video id="scanVideo" autoplay playsinline muted aria-label="Camera preview"></video>
+    <canvas class="quad" id="scanQuad" aria-hidden="true"></canvas>
   </div>
   <!-- scanned pages so far — tap one to review or delete it -->
   <div class="scanthumbs" id="scanThumbs"></div>
@@ -107,19 +114,22 @@
   </div>
   <div class="cropwrap" id="cropWrap">
     <canvas class="photo" id="cropPhoto"></canvas>
+    <canvas class="loupe" id="loupe" width="120" height="120" aria-hidden="true" hidden></canvas>
     <svg id="cropSvg">
       <polygon id="cropPoly" points="0,0 0,0 0,0 0,0"></polygon>
       <!-- visible grips (g*) + invisible enlarged hit areas (h*) on top,
            so corners are easy to grab with a thumb -->
       <circle id="g0" class="hgrip" r="14"></circle><circle id="g1" class="hgrip" r="14"></circle>
       <circle id="g2" class="hgrip" r="14"></circle><circle id="g3" class="hgrip" r="14"></circle>
-      <circle id="h0" class="hhit" r="28"></circle><circle id="h1" class="hhit" r="28"></circle>
-      <circle id="h2" class="hhit" r="28"></circle><circle id="h3" class="hhit" r="28"></circle>
+      <circle id="h0" class="hhit" r="28" role="button" aria-label="Drag the top left corner"></circle><circle id="h1" class="hhit" r="28" role="button" aria-label="Drag the top right corner"></circle>
+      <circle id="h2" class="hhit" r="28" role="button" aria-label="Drag the bottom right corner"></circle><circle id="h3" class="hhit" r="28" role="button" aria-label="Drag the bottom left corner"></circle>
     </svg>
   </div>
   <div class="scanfilters">
     <button id="fltColour" class="on">Colour</button>
     <button id="fltBw">Black &amp; white</button>
+    <button id="qStd" class="on">Standard</button>
+    <button id="qSmall">Small file</button>
   </div>
   <div class="scanctl">
     <button class="ghost" id="cropRetake">Retake</button>
