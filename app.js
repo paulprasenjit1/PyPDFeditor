@@ -6,7 +6,7 @@ const PDFLib = window.PDFLib;
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "8.0";
+const APP_VERSION = "8.1";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb } = PDFLib;
 
@@ -456,7 +456,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-pwa-v8-mupdf";   // keep in step with sw.js CACHE
+  const cache = "pypdf-pwa-v8.1-mupdf";   // keep in step with sw.js CACHE
   $("sheet").innerHTML = `
     <h3>About PyPDF Editor</h3>
     <div class="about">
@@ -811,7 +811,7 @@ function layoutCrop(){
   ph.width=Math.round(fit.dispW*DPR); ph.height=Math.round(fit.dispH*DPR);
   ph.style.width=fit.dispW+"px"; ph.style.height=fit.dispH+"px";
   ph.style.left=left+"px"; ph.style.top=top+"px";
-  ph.getContext("2d").drawImage(capFrame,0,0,ph.width,ph.height);
+  renderCropPreview();
   const svg=$("cropSvg");
   svg.setAttribute("width",fit.dispW); svg.setAttribute("height",fit.dispH);
   svg.setAttribute("viewBox","0 0 "+fit.dispW+" "+fit.dispH);
@@ -846,9 +846,25 @@ function updateCropOverlay(){
 $("fltColour").onclick = ()=> setScanFilter("colour");
 $("fltBw").onclick     = ()=> setScanFilter("bw");
 function setScanFilter(f){
+  if (cropFilter===f) return;
   cropFilter=f;
   $("fltColour").classList.toggle("on", f==="colour");
   $("fltBw").classList.toggle("on", f==="bw");
+  // live preview: re-render the photo with the chosen filter immediately
+  if ($("scanCrop").classList.contains("show")) renderCropPreview();
+}
+// draw the captured photo onto the crop canvas with the active filter applied,
+// so Colour / B&W switch what you see instantly (preview runs at display
+// resolution — the final page is processed at full resolution on "Use page")
+function renderCropPreview(){
+  if (!capFrame) return;
+  const ph=$("cropPhoto");
+  if (!ph.width || !ph.height) return;
+  const ctx=ph.getContext("2d",{willReadFrequently:true});
+  ctx.drawImage(capFrame,0,0,ph.width,ph.height);
+  const im=ctx.getImageData(0,0,ph.width,ph.height);
+  if (cropFilter==="bw") applyDocBW(im); else applyAutoContrast(im);
+  ctx.putImageData(im,0,0);
 }
 
 $("cropRetake").onclick = async ()=>{
@@ -1054,26 +1070,43 @@ function applyAutoContrast(im){
   for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round((t-lo)*255/(hi-lo))));
   for (let i=0;i<n;i++){ const j=i*4; d[j]=lut[d[j]]; d[j+1]=lut[d[j+1]]; d[j+2]=lut[d[j+2]]; }
 }
-// B&W: adaptive soft threshold against a blurred local mean (clean white paper,
-// crisp dark text — the classic scanned-document look, evens out shadows).
+// B&W: adaptive threshold against a wide blurred illumination map — clean white
+// paper, crisp dark text, shadows evened out (the classic scanned-document look).
+// v8.1: much wider local window (no blotching / hollow strokes), a floor on the
+// illumination map so dark figures don't invert, a steeper sigmoid, and hard
+// white/black clipping so paper is pure white and text pure black.
 function applyDocBW(im){
   const w=im.width, h=im.height, d=im.data, n=w*h;
   const g=new Uint8Array(n);
-  for (let i=0;i<n;i++){ const j=i*4; g[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
+  let gsum=0;
+  for (let i=0;i<n;i++){ const j=i*4; const v=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; g[i]=v; gsum+=v; }
+  const gmean=gsum/n;
+  // illumination map: mean at 1/8 scale, blurred wide (two passes ≈ ±100px full-res)
   const f=8, mw=Math.max(1,Math.ceil(w/f)), mh=Math.max(1,Math.ceil(h/f));
   const sum=new Float64Array(mw*mh), cnt=new Float64Array(mw*mh);
   for (let y=0;y<h;y++){ const my=(y/f)|0;
     for (let x=0;x<w;x++){ const mi=my*mw+((x/f)|0); sum[mi]+=g[y*w+x]; cnt[mi]++; } }
   const mean=new Float32Array(mw*mh);
   for (let i=0;i<mw*mh;i++) mean[i]=cnt[i]?sum[i]/cnt[i]:255;
-  boxBlurF(mean,mw,mh,2); boxBlurF(mean,mw,mh,2);
+  boxBlurF(mean,mw,mh,6); boxBlurF(mean,mw,mh,6);
+  // floor the map: inside large dark areas (photos, heavy ink) the local mean
+  // collapses and would flip content to white — never let it drop below ~55%
+  // of the global brightness
+  const floor=Math.max(60, gmean*0.55);
+  for (let i=0;i<mw*mh;i++) if (mean[i]<floor) mean[i]=floor;
+  // steep sigmoid + clip: paper → pure white, text → pure black
   const sig=new Uint8Array(511);
-  for (let i=0;i<511;i++) sig[i]=Math.round(255/(1+Math.exp(-(i-255)/7)));
+  for (let i=0;i<511;i++){
+    let v=Math.round(255/(1+Math.exp(-(i-255)/5)));
+    if (v>=215) v=255; else if (v<=40) v=0;
+    sig[i]=v;
+  }
   for (let y=0;y<h;y++){
     const my=Math.min(mh-1,(y/f)|0);
     for (let x=0;x<w;x++){
       const m=mean[my*mw+Math.min(mw-1,(x/f)|0)];
-      const o=sig[Math.max(0,Math.min(510,Math.round(g[y*w+x]-(m-14))+255))];
+      const t=m-(10+m*0.06);              // offset scales with illumination
+      const o=sig[Math.max(0,Math.min(510,Math.round(g[y*w+x]-t)+255))];
       const j=(y*w+x)*4; d[j]=d[j+1]=d[j+2]=o;
     }
   }
