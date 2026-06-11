@@ -4,11 +4,60 @@ import * as mupdf from "./vendor/mupdf/mupdf.js";
 const $ = id => document.getElementById(id);
 const PDFLib = window.PDFLib;
 
+// ---------------- build guard (with self-heal) ----------------
+// If index.html and app.js come from different builds (stale HTTP/CDN copy,
+// missed upload), wiring would crash silently and buttons would appear
+// "frozen". Detect it, then: first occurrence per session → purge every cache,
+// unregister the service worker and reload (heals a stale DEVICE copy).
+// If it happens again right after healing, the SERVER itself is serving an old
+// index.html — say so explicitly, since no amount of device clearing fixes that.
+const APP_BUILD = "9.2";
+(function buildGuard(){
+  const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
+  const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin",
+    "scanCam","scanShot","scanCancel","scanDone","scanThumbs","photoBtn","autoBtn","torchBtn","photoInput",
+    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","fltColour","fltBw","cropRetake","cropUse"];
+  const missing = need.filter(id=>!document.getElementById(id));
+  if (!missing.length && pageBuild === APP_BUILD){
+    try { sessionStorage.removeItem("pypdf-healed"); } catch(e){}
+    return;                                            // page and script match
+  }
+  const s = document.getElementById("status");
+  let alreadyTried = false;
+  try { alreadyTried = sessionStorage.getItem("pypdf-healed") === "1"; } catch(e){}
+  if (!alreadyTried){
+    try { sessionStorage.setItem("pypdf-healed","1"); } catch(e){}
+    if (s){ s.textContent = "Finishing update — reloading…"; s.className = "status warn"; }
+    (async ()=>{
+      try { const regs = await navigator.serviceWorker.getRegistrations();
+            for (const r of regs) await r.unregister(); } catch(e){}
+      try { const keys = await caches.keys();
+            for (const k of keys) await caches.delete(k); } catch(e){}
+      location.reload();
+    })();
+  } else if (s){
+    s.textContent = "Update problem: this page is build "+pageBuild+" but the app code is build "+APP_BUILD
+      + ". Your WEB SERVER is still serving an old index.html — re-upload ALL app files to the host"
+      + " (and purge its CDN cache if it has one). Clearing the phone won't fix this.";
+    s.className = "status err";
+  }
+  throw new Error("build mismatch (page "+pageBuild+" vs code "+APP_BUILD+"), missing: "+missing.join(","));
+})();
+
+// Surface unexpected errors in the status bar — a visible message instead of
+// silently dead buttons.
+window.addEventListener("error", (e)=>{
+  try { setStatus("Unexpected error: "+(e.message||"unknown")+" — if buttons stop working, fully close and reopen the app.", "err"); } catch(_){}
+});
+window.addEventListener("unhandledrejection", (e)=>{
+  try { setStatus("Unexpected error: "+((e.reason && e.reason.message) || e.reason || "unknown"), "err"); } catch(_){}
+});
+
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "8.1";
+const APP_VERSION = "9.2";
 const BUILD_DATETIME = "11 Jun 2026";
-const { PDFDocument, StandardFonts, rgb } = PDFLib;
+const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
 let workingBytes = null;       // Uint8Array — single source of truth
@@ -55,6 +104,66 @@ const u8 = v => new Uint8Array(v);
   setStatus("Engine ready. Tap Open to load a PDF.", "ok");
 })();
 
+// ---------------- session persistence (IndexedDB, on-device only) ----------------
+// The working document and any in-progress scan survive iOS evicting the PWA.
+// Everything is wrapped in try/catch so private-browsing modes that block
+// storage can never break the app. Password-unlocked PDFs are NEVER persisted
+// (the decrypted copy must not outlive the session).
+const DB_NAME="pypdf-state", DB_STORE="kv";
+let docSensitive = false;     // true when the open doc came from a password unlock
+let persistT = 0;             // debounce timer for document persistence
+function idbOpen(){
+  return new Promise((res,rej)=>{
+    const r=indexedDB.open(DB_NAME,1);
+    r.onupgradeneeded=()=>r.result.createObjectStore(DB_STORE);
+    r.onsuccess=()=>res(r.result);
+    r.onerror=()=>rej(r.error);
+  });
+}
+async function idbSet(key,val){
+  const db=await idbOpen();
+  return new Promise((res,rej)=>{
+    const tx=db.transaction(DB_STORE,"readwrite");
+    tx.objectStore(DB_STORE).put(val,key);
+    tx.oncomplete=()=>{ db.close(); res(); };
+    tx.onerror=()=>{ db.close(); rej(tx.error); };
+  });
+}
+async function idbGet(key){
+  const db=await idbOpen();
+  return new Promise((res,rej)=>{
+    const tx=db.transaction(DB_STORE,"readonly");
+    const rq=tx.objectStore(DB_STORE).get(key);
+    rq.onsuccess=()=>{ db.close(); res(rq.result); };
+    rq.onerror=()=>{ db.close(); rej(rq.error); };
+  });
+}
+async function idbDel(key){
+  const db=await idbOpen();
+  return new Promise((res,rej)=>{
+    const tx=db.transaction(DB_STORE,"readwrite");
+    tx.objectStore(DB_STORE).delete(key);
+    tx.oncomplete=()=>{ db.close(); res(); };
+    tx.onerror=()=>{ db.close(); rej(tx.error); };
+  });
+}
+function persistDocNow(){
+  persistT=0;
+  try {
+    if (workingBytes && !docSensitive)
+      idbSet("doc",{ name:fileName, bytes:workingBytes, ts:Date.now() }).catch(()=>{});
+    else idbDel("doc").catch(()=>{});
+  } catch(e){}
+}
+function schedulePersistDoc(){ clearTimeout(persistT); persistT=setTimeout(persistDocNow,800); }
+function flushPersistDoc(){ if (persistT){ clearTimeout(persistT); persistDocNow(); } }
+function persistScan(){
+  try {
+    if (scanPages.length) idbSet("scan",{ pages:scanPages, ts:Date.now() }).catch(()=>{});
+    else idbDel("scan").catch(()=>{});
+  } catch(e){}
+}
+
 // ---------------- mupdf doc lifecycle ----------------
 function closeDoc(){ if (MDOC){ try{ MDOC.destroy(); }catch(e){} MDOC=null; } }
 function reopen(){
@@ -63,6 +172,7 @@ function reopen(){
   MDOC = mupdf.Document.openDocument(workingBytes.slice(0), "application/pdf").asPDF();
   epoch++;
   spanCache.clear();
+  schedulePersistDoc();        // every byte change flows through here
 }
 
 function enableDocButtons(has){
@@ -97,9 +207,11 @@ $("fileInput").onchange = async e=>{
 };
 
 async function openBytes(bytes, name){
+  let wasEncrypted = false;
   // probe for encryption first
   let probe = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
   if (probe.needsPassword()){
+    wasEncrypted = true;
     probe.destroy();
     const pw = await askPassword(name);
     if (pw === null){ showSpin(false); setStatus("Open cancelled — file is password protected.","warn"); return; }
@@ -117,6 +229,7 @@ async function openBytes(bytes, name){
   undoStack = [];
   workingBytes = bytes;
   if (name) fileName = name;
+  docSensitive = wasEncrypted;     // decrypted copies are never persisted
   reopen();
   setMode(null);
   await render();
@@ -194,9 +307,10 @@ async function render(){
       // tell the browser each page's size up-front so content-visibility:auto
       // can skip painting offscreen pages without the layout jumping
       stage.style.containIntrinsicSize = dispW+"px "+dispH+"px";
-      stage.innerHTML = `<span class="plabel">Page ${i+1}</span>`+
-        `<div style="width:${dispW}px;height:${dispH}px;background:#fff"></div>`+
-        `<div class="ovl"></div>`;
+      // built via DOM + CSSOM (no style attributes) so style-src can be 'self'
+      stage.innerHTML = `<span class="plabel">Page ${i+1}</span><div class="holder"></div><div class="ovl"></div>`;
+      const holder = stage.querySelector(".holder");
+      holder.style.width = dispW+"px"; holder.style.height = dispH+"px";
       attachOverlay(stage, i);
       v.appendChild(stage);
     }
@@ -221,7 +335,7 @@ async function renderStage(stage, i){
     pix.destroy(); page.destroy();
     const url = URL.createObjectURL(new Blob([jpg], {type:"image/jpeg"}));
     liveURLs.add(url);
-    const holder = stage.querySelector("div");
+    const holder = stage.querySelector(".holder");
     const img = document.createElement("img");
     img.decoding = "async";
     img.onload = ()=> setTimeout(()=>{ URL.revokeObjectURL(url); liveURLs.delete(url); }, 1000);
@@ -456,7 +570,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-pwa-v8.1-mupdf";   // keep in step with sw.js CACHE
+  const cache = "pypdf-app-v9.2";   // keep in step with sw.js APP_CACHE
   $("sheet").innerHTML = `
     <h3>About PyPDF Editor</h3>
     <div class="about">
@@ -465,14 +579,14 @@ function openAbout(){
       <div class="abrow"><span>Cache</span><b>${esc(cache)}</b></div>
       <div class="abrow"><span>Engine</span><b>MuPDF.js (WASM) + pdf-lib</b></div>
     </div>
-    <p class="hint" style="margin-top:12px">
+    <p class="hint mt12">
       A private, on-device PDF editor. Everything runs in your browser — nothing
       you open is ever uploaded. Edit text in place, sign, compress, merge,
       organise pages, and convert images to PDF.<br><br>
       If the version above doesn't match your latest upload, fully close and
       reopen the app so it fetches the new build.
     </p>
-    <div class="row" style="margin-top:8px"><button class="ghost full" id="abClose">Close</button></div>`;
+    <div class="row mt8"><button class="ghost full" id="abClose">Close</button></div>`;
   $("abClose").onclick = closeSheet;
   openSheet();
 }
@@ -484,6 +598,8 @@ function closeFile(){
   revokeURLs();
   closeDoc();                       // destroy the mupdf doc -> frees WASM memory
   workingBytes = null;
+  docSensitive = false;
+  try{ idbDel("doc").catch(()=>{}); }catch(e){}   // closed on purpose: forget it
   fileName = "document.pdf";
   undoStack = [];
   spanCache.clear();
@@ -498,9 +614,11 @@ function closeFile(){
 // ---------------- organise pages (reorder + delete) ----------------
 async function openOrganise(){
   const n = MDOC.countPages();
-  // order: array of original page indices; del: set of original indices to remove
+  // order: array of original page indices; del: set of original indices to
+  // remove; rot: original index -> extra rotation in degrees (0/90/180/270)
   let order = Array.from({length:n}, (_,i)=>i);
   const del = new Set();
+  const rot = {};
   const cssThumb = 46*DPR;
 
   function thumb(i){
@@ -513,34 +631,51 @@ async function openOrganise(){
   function draw(){
     const rows = order.map((orig,pos)=>{
       const isdel = del.has(orig);
+      const deg = rot[orig]||0;
       return `<div class="porow ${isdel?'del':''}" data-pos="${pos}">
         <img src="${thumb(orig)}" alt="">
-        <span class="pn">Page ${orig+1}</span>
+        <span class="pn">Page ${orig+1}${deg?` · ⟳${deg}°`:""}</span>
         <button class="ghost" data-up="${pos}">↑</button>
         <button class="ghost" data-dn="${pos}">↓</button>
+        <button class="ghost" data-rot="${orig}">⟳</button>
         <button class="ghost" data-del="${orig}">${isdel?'Keep':'Delete'}</button>
       </div>`;
     }).join("");
     $("sheet").innerHTML = `<h3>Organise pages</h3>
-      <p class="hint">Reorder with ↑ ↓ and mark pages to delete. Changes apply when you tap Apply.</p>
+      <p class="hint">Reorder with ↑ ↓, rotate with ⟳ (90° steps), and mark pages to delete. Changes apply when you tap Apply.</p>
       ${rows}
-      <div class="row" style="margin-top:12px"><button class="full" id="orgApply">Apply</button></div>
+      <div class="row mt12"><button class="full" id="orgApply">Apply</button></div>
       <div class="row"><button class="ghost full" id="orgCancel">Cancel</button></div>`;
     $("sheet").querySelectorAll("[data-up]").forEach(b=>b.onclick=()=>{const p=+b.dataset.up; if(p>0){[order[p-1],order[p]]=[order[p],order[p-1]]; draw();}});
     $("sheet").querySelectorAll("[data-dn]").forEach(b=>b.onclick=()=>{const p=+b.dataset.dn; if(p<order.length-1){[order[p+1],order[p]]=[order[p],order[p+1]]; draw();}});
+    $("sheet").querySelectorAll("[data-rot]").forEach(b=>b.onclick=()=>{const o=+b.dataset.rot; rot[o]=((rot[o]||0)+90)%360; draw();});
     $("sheet").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{const o=+b.dataset.del; del.has(o)?del.delete(o):del.add(o); draw();});
-    $("orgApply").onclick = async ()=>{ closeSheet(); await applyOrganise(order.filter(o=>!del.has(o))); };
+    $("orgApply").onclick = async ()=>{ closeSheet(); await applyOrganise(order.filter(o=>!del.has(o)), rot); };
     $("orgCancel").onclick = closeSheet;
   }
   draw();
   openSheet();}
 
-async function applyOrganise(finalOrder){
+async function applyOrganise(finalOrder, rot){
   if (!finalOrder.length){ setStatus("Cannot delete every page.","err"); return; }
   showSpin(true,"Updating pages…");
   try {
     pushUndo();
-    MDOC.rearrangePages(finalOrder);          // reorder + drop in one step
+    // 1) rotations first (pdf-lib /Rotate), keyed by ORIGINAL page indices
+    const hasRot = rot && Object.keys(rot).some(k=>(rot[k]||0)%360);
+    if (hasRot){
+      const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+      for (const k of Object.keys(rot)){
+        const deg = (rot[k]||0)%360;
+        if (!deg) continue;
+        const pg = doc.getPage(+k);
+        pg.setRotation(degrees(((pg.getRotation().angle||0) + deg) % 360));
+      }
+      workingBytes = new Uint8Array(await doc.save());
+      reopen();                                // MDOC now reflects rotations
+    }
+    // 2) then reorder + delete in one step (mupdf)
+    MDOC.rearrangePages(finalOrder);
     workingBytes = u8(MDOC.saveToBuffer("garbage").asUint8Array());
     reopen(); await render();
     setStatus("Pages updated. Now "+MDOC.countPages()+" pages.","ok");
@@ -574,7 +709,7 @@ function openMergeOrder(){
     $("sheet").innerHTML = `<h3>Merge order</h3>
       <p class="hint">Pages are combined top to bottom — PDF 1 first, then PDF 2, and so on. Reorder with ↑ ↓.</p>
       ${rows}
-      <div class="row" style="margin-top:12px"><button class="full" id="mgApply">Merge in this order</button></div>
+      <div class="row mt12"><button class="full" id="mgApply">Merge in this order</button></div>
       <div class="row"><button class="ghost full" id="mgCancel">Cancel</button></div>`;
     $("sheet").querySelectorAll("[data-up]").forEach(b=>b.onclick=()=>{const p=+b.dataset.up; if(p>0){[mergeSources[p-1],mergeSources[p]]=[mergeSources[p],mergeSources[p-1]]; draw();}});
     $("sheet").querySelectorAll("[data-dn]").forEach(b=>b.onclick=()=>{const p=+b.dataset.dn; if(p<mergeSources.length-1){[mergeSources[p+1],mergeSources[p]]=[mergeSources[p],mergeSources[p+1]]; draw();}});
@@ -651,6 +786,46 @@ let cropQuad = null;          // 4 corners in image px, order TL,TR,BR,BL
 let cropFit = null;           // image→display fit for the crop screen
 let cropFilter = "colour";    // "colour" | "bw"
 let dragIdx = -1;             // corner handle being dragged
+let autoCapture = false;      // auto-shutter when the quad holds steady
+let autoStable = 0;           // consecutive stable live-detect frames
+let torchOn = false;          // rear-camera torch state
+try { autoCapture = localStorage.getItem("scanAuto")==="1"; } catch(e){}
+
+// ---- off-thread processing (scan-worker.js) ----
+// Full-res warp + filter run in a Web Worker so the UI never freezes.
+// If the worker can't start or fails, we silently fall back to the
+// identical synchronous code below.
+let scanWorker = null;        // Worker | false (failed) | null (not tried)
+let scanJobId = 0;
+function getScanWorker(){
+  if (scanWorker === null){
+    try { scanWorker = new Worker("./scan-worker.js"); }
+    catch(e){ scanWorker = false; }
+  }
+  return scanWorker;
+}
+function processPageOffThread(srcIm, quad, filter){
+  const w = getScanWorker();
+  if (!w) return Promise.resolve(null);
+  return new Promise((resolve)=>{
+    const id = ++scanJobId;
+    // watchdog: if the worker never answers (hung, killed, bad deploy), fall
+    // back to the main-thread path instead of freezing behind the spinner
+    const wd = setTimeout(()=>{ w.removeEventListener("message", onMsg); scanWorker = false; resolve(null); }, 15000);
+    const onMsg = (e)=>{
+      if (!e.data || e.data.id !== id) return;
+      clearTimeout(wd);
+      w.removeEventListener("message", onMsg);
+      resolve(e.data.ok ? new ImageData(new Uint8ClampedArray(e.data.buf), e.data.w, e.data.h) : null);
+    };
+    const onErr = ()=>{ clearTimeout(wd); w.removeEventListener("message", onMsg); scanWorker = false; resolve(null); };
+    w.addEventListener("message", onMsg);
+    w.addEventListener("error", onErr, { once:true });
+    // transfer the pixels (zero-copy); the canvas still holds its own copy
+    w.postMessage({ id, buf:srcIm.data.buffer, w:srcIm.width, h:srcIm.height, quad, filter },
+                  [srcIm.data.buffer]);
+  });
+}
 
 let _scratch = null;          // small reusable canvas for detection downscales
 function scratch(w,h){
@@ -666,7 +841,9 @@ function containFit(srcW,srcH,boxW,boxH){
 
 // ---- session ----
 async function startScan(){
-  scanPages = []; capFrame = null; scanFallback = false;
+  // scanPages is kept as-is: it is always [] here except when a previous
+  // session was restored from IndexedDB, in which case we continue it
+  capFrame = null; scanFallback = false;
   updateScanCount();
   $("scanCrop").classList.remove("show");
   $("scanCam").classList.add("show");
@@ -685,6 +862,37 @@ function updateScanCount(){
   const d = $("scanDone");
   d.disabled = !scanPages.length;
   d.textContent = scanPages.length ? "Create PDF ("+scanPages.length+")" : "Create PDF";
+  renderScanThumbs();
+  persistScan();                 // scan session survives the app being killed
+}
+// thumbnail strip above the shutter: tap a page to review or delete it
+function renderScanThumbs(){
+  const strip=$("scanThumbs");
+  strip.classList.toggle("has", scanPages.length>0);
+  strip.innerHTML = scanPages.map((p,i)=>
+    `<button class="sthumb" data-pg="${i}"><img src="${p.thumb}" alt="Page ${i+1}"><span class="num">${i+1}</span></button>`).join("");
+  strip.querySelectorAll("[data-pg]").forEach(b=> b.onclick=()=> openScanPageSheet(+b.dataset.pg));
+  strip.scrollLeft = strip.scrollWidth;          // keep the newest page in view
+}
+function openScanPageSheet(i){
+  const p=scanPages[i]; if(!p) return;
+  const url=URL.createObjectURL(new Blob([p.bytes],{type:"image/jpeg"}));
+  $("sheet").innerHTML = `
+    <h3>Scanned page ${i+1} of ${scanPages.length}</h3>
+    <div class="row"><img class="pgprev" id="pgPrev" alt="Page ${i+1}"></div>
+    <div class="row"><button class="full" id="pgDel">Delete this page</button></div>
+    <div class="row"><button class="ghost full" id="pgClose">Close</button></div>`;
+  $("pgPrev").src=url;
+  const done=()=>{ URL.revokeObjectURL(url); closeSheet(); };
+  $("pgDel").onclick=()=>{
+    done();
+    scanPages.splice(i,1);
+    updateScanCount();
+    setStatus(scanPages.length ? "Page removed — "+scanPages.length+" page(s) left."
+                               : "Page removed — no pages scanned yet.","ok");
+  };
+  $("pgClose").onclick=done;
+  openSheet();
 }
 
 // ---- camera ----
@@ -701,8 +909,37 @@ async function startCamera(){
   v.srcObject = scanStream;
   try { await v.play(); } catch(e){ /* autoplay is allowed: muted+playsinline */ }
   sizeQuadCanvas();
+  // torch: only offer the button when the camera actually supports it
+  torchOn = false;
+  try {
+    const track = scanStream.getVideoTracks()[0];
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    $("torchBtn").hidden = !caps.torch;
+    $("torchBtn").classList.remove("on");
+  } catch(e){ $("torchBtn").hidden = true; }
+  $("autoBtn").classList.toggle("on", autoCapture);
+  autoStable = 0;
   startLiveDetect();
 }
+async function toggleTorch(){
+  if (!scanStream) return;
+  try {
+    const track = scanStream.getVideoTracks()[0];
+    torchOn = !torchOn;
+    await track.applyConstraints({ advanced:[{ torch:torchOn }] });
+    $("torchBtn").classList.toggle("on", torchOn);
+  } catch(e){ torchOn=false; $("torchBtn").classList.remove("on");
+              setStatus("Torch not available.","warn"); }
+}
+$("torchBtn").onclick = toggleTorch;
+$("autoBtn").onclick = ()=>{
+  autoCapture = !autoCapture;
+  autoStable = 0;
+  $("autoBtn").classList.toggle("on", autoCapture);
+  try { localStorage.setItem("scanAuto", autoCapture?"1":"0"); } catch(e){}
+  setStatus(autoCapture ? "Auto-capture on: hold the camera steady over a document."
+                        : "Auto-capture off.","ok");
+};
 function stopCamera(){
   if (scanLive){ clearInterval(scanLive); scanLive = 0; }
   if (scanStream){ for (const t of scanStream.getTracks()){ try{ t.stop(); }catch(e){} } scanStream = null; }
@@ -720,13 +957,54 @@ function sizeQuadCanvas(){
   q.width = view.clientWidth; q.height = view.clientHeight;
 }
 
-// live preview: detect the document every 300ms and outline it in green
+// live preview: detect the document every 300ms and outline it in green.
+// The raw detection jitters frame to frame, so the shown quad is smoothed:
+// it appears only after 2 consistent detections, eases toward each new
+// detection (lerp), and survives up to 2 missed frames before vanishing.
+let liveQuad=null, livePend=null, liveHits=0, liveMiss=0;
+function resetLiveQuad(){ liveQuad=null; livePend=null; liveHits=0; liveMiss=0; }
+function smoothQuad(q){
+  if (!q){
+    if (++liveMiss>2) resetLiveQuad();
+    return liveQuad;
+  }
+  liveMiss=0;
+  if (!liveQuad){
+    liveHits = (livePend && quadClose(livePend,q)) ? liveHits+1 : 1;
+    livePend = q;
+    if (liveHits>=2) liveQuad=q.map(p=>({x:p.x,y:p.y}));
+    return liveQuad;
+  }
+  if (!quadClose(liveQuad,q)){              // detection jumped to something else: snap
+    liveQuad=q.map(p=>({x:p.x,y:p.y}));
+    return liveQuad;
+  }
+  const a=0.35;                             // ease toward the new detection
+  liveQuad=liveQuad.map((p,i)=>({x:p.x+(q[i].x-p.x)*a, y:p.y+(q[i].y-p.y)*a}));
+  return liveQuad;
+}
+function quadClose(a,b){
+  let span=0;
+  for (let i=0;i<4;i++) span=Math.max(span, Math.hypot(a[i].x-a[(i+1)&3].x, a[i].y-a[(i+1)&3].y));
+  const tol=Math.max(20, span*0.18);
+  for (let i=0;i<4;i++) if (Math.hypot(a[i].x-b[i].x, a[i].y-b[i].y)>tol) return false;
+  return true;
+}
 function startLiveDetect(){
   if (scanLive) clearInterval(scanLive);
+  resetLiveQuad();
   scanLive = setInterval(()=>{
     const v = $("scanVideo");
     if (!v.videoWidth || document.hidden) return;
-    drawLiveQuad(detectOnVideoFrame(v));
+    const raw = detectOnVideoFrame(v);
+    const q = smoothQuad(raw);
+    // auto-capture: fire after ~5 stable frames (~1.5s) on a decent-sized quad
+    if (autoCapture && q && raw && quadClose(q, raw) &&
+        quadArea(q) > 0.18 * v.videoWidth * v.videoHeight){
+      autoStable++;
+      if (autoStable >= 5){ autoStable = 0; drawLiveQuad(q, 0); captureFrame(); return; }
+    } else autoStable = 0;
+    drawLiveQuad(q, autoStable);
   }, 300);
 }
 function detectOnVideoFrame(v){
@@ -738,7 +1016,7 @@ function detectOnVideoFrame(v){
   const q = detectQuad(ctx.getImageData(0,0,sw,sh));
   return q ? q.map(p=>({x:p.x/s, y:p.y/s})) : null;   // → video px
 }
-function drawLiveQuad(q){
+function drawLiveQuad(q, stable){
   const cnv=$("scanQuad"), ctx=cnv.getContext("2d");
   ctx.clearRect(0,0,cnv.width,cnv.height);
   if (!q) return;
@@ -749,12 +1027,22 @@ function drawLiveQuad(q){
                      i ? ctx.lineTo(x,y) : ctx.moveTo(x,y); });
   ctx.closePath();
   ctx.fillStyle="rgba(63,185,80,.16)"; ctx.fill();
-  ctx.lineWidth=2.5; ctx.strokeStyle="#3fb950"; ctx.stroke();
+  ctx.lineWidth = stable>=2 ? 4 : 2.5;
+  ctx.strokeStyle="#3fb950"; ctx.stroke();
+  if (stable>=2){                       // auto-capture imminent: tell the user
+    ctx.font="600 15px -apple-system,sans-serif";
+    ctx.textAlign="center";
+    ctx.fillStyle="rgba(0,0,0,.55)";
+    const cx=cnv.width/2, cy=cnv.height-34;
+    ctx.fillRect(cx-66, cy-20, 132, 28);
+    ctx.fillStyle="#fff";
+    ctx.fillText("Hold still…", cx, cy);
+  }
 }
 
 // ---- capture ----
-$("scanShot").onclick = ()=>{
-  if (scanFallback){ $("camInput").click(); return; }
+function captureFrame(){
+  if (capFrame) return;                       // already on the crop screen
   const v=$("scanVideo");
   if (!v.videoWidth){ setStatus("Camera not ready yet.","warn"); return; }
   const c=document.createElement("canvas");
@@ -762,11 +1050,14 @@ $("scanShot").onclick = ()=>{
   c.getContext("2d").drawImage(v,0,0);
   stopCamera();
   enterCrop(c);
+}
+$("scanShot").onclick = ()=>{
+  if (scanFallback){ $("camInput").click(); return; }
+  captureFrame();
 };
-// fallback path: native camera app returns a photo file
-$("camInput").onchange = async e=>{
-  const f=e.target.files[0]; e.target.value="";
-  if (!f) return;
+// shared: load a photo file (native camera fallback, or library import)
+// into the same edge-detect → crop → filter pipeline
+async function loadPhotoToCrop(f){
   showSpin(true,"Loading photo…");
   try {
     const im = await loadImage(await fileToDataURL(f));
@@ -778,6 +1069,19 @@ $("camInput").onchange = async e=>{
     enterCrop(c);
   } catch(err){ setStatus("Photo load failed: "+err.message,"err"); }
   showSpin(false);
+}
+// fallback path: native camera app returns a photo file
+$("camInput").onchange = e=>{
+  const f=e.target.files[0]; e.target.value="";
+  if (f) loadPhotoToCrop(f);
+};
+// photo-library import (Photos button on the scanner)
+$("photoBtn").onclick = ()=> $("photoInput").click();
+$("photoInput").onchange = e=>{
+  const f=e.target.files[0]; e.target.value="";
+  if (!f) return;
+  stopCamera();                               // photo replaces the live frame
+  loadPhotoToCrop(f);
 };
 
 // ---- adjust / crop screen ----
@@ -821,8 +1125,11 @@ function layoutCrop(){
 function updateCropOverlay(){
   const s=cropFit.scale;
   $("cropPoly").setAttribute("points", cropQuad.map(p=>(p.x*s)+","+(p.y*s)).join(" "));
-  cropQuad.forEach((p,i)=>{ const c=$("h"+i);
-    c.setAttribute("cx",p.x*s); c.setAttribute("cy",p.y*s); });
+  cropQuad.forEach((p,i)=>{
+    const grip=$("g"+i), hit=$("h"+i);          // visible grip + enlarged hit area
+    grip.setAttribute("cx",p.x*s); grip.setAttribute("cy",p.y*s);
+    hit.setAttribute("cx",p.x*s);  hit.setAttribute("cy",p.y*s);
+  });
 }
 // draggable corner handles
 (function wireCropHandles(){
@@ -843,11 +1150,20 @@ function updateCropOverlay(){
   }
 })();
 
+// remember the user's preferred filter across sessions
+try {
+  if (localStorage.getItem("scanFilter")==="bw"){
+    cropFilter="bw";
+    $("fltColour").classList.remove("on");
+    $("fltBw").classList.add("on");
+  }
+} catch(e){}
 $("fltColour").onclick = ()=> setScanFilter("colour");
 $("fltBw").onclick     = ()=> setScanFilter("bw");
 function setScanFilter(f){
   if (cropFilter===f) return;
   cropFilter=f;
+  try { localStorage.setItem("scanFilter", f); } catch(e){}
   $("fltColour").classList.toggle("on", f==="colour");
   $("fltBw").classList.toggle("on", f==="bw");
   // live preview: re-render the photo with the chosen filter immediately
@@ -874,9 +1190,16 @@ $("cropRetake").onclick = async ()=>{
   if (scanFallback) $("camInput").click(); else await startCamera();
 };
 $("scanCancel").onclick = ()=>{
-  if (scanPages.length && !confirm("Discard "+scanPages.length+" scanned page(s)?")) return;
-  endScan();
-  setStatus("Scan cancelled.","warn");
+  if (!scanPages.length){ endScan(); setStatus("Scan cancelled.","warn"); return; }
+  // in-app sheet instead of the native confirm() dialog
+  $("sheet").innerHTML = `
+    <h3>Discard scan?</h3>
+    <p class="hint">${scanPages.length} scanned page(s) will be lost. This cannot be undone.</p>
+    <div class="row"><button class="full" id="dsYes">Discard pages</button></div>
+    <div class="row"><button class="ghost full" id="dsNo">Keep scanning</button></div>`;
+  $("dsYes").onclick=()=>{ closeSheet(); endScan(); setStatus("Scan cancelled.","warn"); };
+  $("dsNo").onclick=closeSheet;
+  openSheet();
 };
 
 // confirm the page: perspective-correct, filter, JPEG-encode, back to camera
@@ -885,12 +1208,24 @@ $("cropUse").onclick = async ()=>{
   showSpin(true,"Straightening page…");
   try {
     await new Promise(r=>setTimeout(r,30));    // let the spinner paint first
-    const out = warpPerspective(capFrame, orderQuad(cropQuad));
-    if (cropFilter==="bw") applyDocBW(out); else applyAutoContrast(out);
+    const q = orderQuad(cropQuad);
+    // preferred path: warp + filter in the worker (UI stays responsive)
+    const sctx = capFrame.getContext("2d",{willReadFrequently:true});
+    let out = await processPageOffThread(
+      sctx.getImageData(0,0,capFrame.width,capFrame.height), q, cropFilter);
+    if (!out){                                 // fallback: same math, main thread
+      out = warpPerspective(capFrame, q);
+      if (cropFilter==="bw") applyDocBW(out); else applyAutoContrast(out);
+    }
     const c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
     c.getContext("2d").putImageData(out,0,0);
     const blob = await new Promise(res=>c.toBlob(res,"image/jpeg",0.85));
-    scanPages.push({ bytes:new Uint8Array(await blob.arrayBuffer()), w:out.width, h:out.height });
+    // small thumbnail (112px tall ≈ 56 css px at 2×) for the review strip
+    const tc=document.createElement("canvas");
+    tc.height=112; tc.width=Math.max(8,Math.round(out.width*112/out.height));
+    tc.getContext("2d").drawImage(c,0,0,tc.width,tc.height);
+    scanPages.push({ bytes:new Uint8Array(await blob.arrayBuffer()), w:out.width, h:out.height,
+                     thumb:tc.toDataURL("image/jpeg",0.7) });
     capFrame=null;
     updateScanCount();
     $("scanCrop").classList.remove("show");
@@ -1212,7 +1547,8 @@ async function doUndo(){
   if (!undoStack.length){ setStatus("Nothing to undo.","err"); return; }
   workingBytes = undoStack.pop();
   showSpin(true,"Undoing…");
-  if (workingBytes){ reopen(); await render(); } else { closeDoc(); await render(); }
+  if (workingBytes){ reopen(); await render(); }
+  else { closeDoc(); try{ idbDel("doc").catch(()=>{}); }catch(e){} await render(); }
   enableDocButtons(!!workingBytes);
   showSpin(false); setStatus("Undone.","ok");
 }
@@ -1279,6 +1615,7 @@ function releaseAll(){
 document.addEventListener("visibilitychange", ()=>{
   if (document.hidden){
     pauseWork();
+    flushPersistDoc();                 // don't lose a pending save if iOS kills us
     scanWasLive = !!scanStream;        // remember to relight the camera on return
     if (scanStream) stopCamera();
   } else {
@@ -1293,6 +1630,47 @@ window.addEventListener("pagehide", releaseAll);
 window.addEventListener("pageshow", (e)=>{
   if (e.persisted && workingBytes && !MDOC){ reopen(); render(); }
 });
+
+// ---------------- session restore (runs once at startup) ----------------
+// If a document or an unfinished scan was persisted before the app was killed,
+// offer to bring it back. Never auto-restores — the user chooses.
+(async function restoreSession(){
+  let doc=null, scan=null;
+  try { doc = await idbGet("doc"); scan = await idbGet("scan"); } catch(e){ return; }
+  const hasDoc  = !!(doc && doc.bytes && doc.bytes.length);
+  const hasScan = !!(scan && scan.pages && scan.pages.length);
+  if (!hasDoc && !hasScan) return;
+  if (workingBytes) return;                  // user already opened something
+  const rows = [];
+  if (hasDoc)  rows.push(`<div class="row"><button class="full" id="rsDoc">Restore “${esc(doc.name)}” (${fmtKB(doc.bytes.length)})</button></div>`);
+  if (hasScan) rows.push(`<div class="row"><button class="full" id="rsScan">Continue scan (${scan.pages.length} page${scan.pages.length>1?"s":""})</button></div>`);
+  $("sheet").innerHTML = `
+    <h3>Restore previous session?</h3>
+    <p class="hint">Unsaved work from last time was kept on this device. Bring it back, or discard it.</p>
+    ${rows.join("")}
+    <div class="row"><button class="ghost full" id="rsDrop">Discard saved session</button></div>
+    <div class="row"><button class="ghost full" id="rsLater">Not now</button></div>`;
+  if (hasDoc) $("rsDoc").onclick = async ()=>{
+    closeSheet();
+    if (hasScan){ scanPages = scan.pages; }  // carry the scan along too
+    showSpin(true,"Restoring document…");
+    try { await openBytes(doc.bytes, doc.name); }
+    catch(e){ setStatus("Restore failed: "+e.message,"err"); }
+    showSpin(false);
+  };
+  if (hasScan) $("rsScan").onclick = ()=>{
+    closeSheet();
+    scanPages = scan.pages;
+    startScan();                             // startScan keeps restored pages
+  };
+  $("rsDrop").onclick = ()=>{
+    closeSheet();
+    try { idbDel("doc").catch(()=>{}); idbDel("scan").catch(()=>{}); } catch(e){}
+    setStatus("Saved session discarded.","ok");
+  };
+  $("rsLater").onclick = closeSheet;
+  openSheet();
+})();
 
 // service worker
 if ("serviceWorker" in navigator)

@@ -4,6 +4,128 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v9.1] — 2026-06-11 — Update reliability + fast updates
+
+### Root cause of the "frozen scanner buttons"
+A full integration suite (31 checks, executing the real app code with the real
+engines) confirmed every feature works in the v9 code — including capture,
+Cancel and the discard flow. The freeze matches a **partial update**: the
+service worker installed shell files through the HTTP cache, which can mix a
+stale `index.html` with a new `app.js`; the script then crashes at startup on a
+missing element and every button wired after that point goes dead, silently.
+
+### Fixes
+- **Atomic updates**: the app shell is now installed with `cache:"reload"`
+  (HTTP cache bypassed), so a build can never be a mix of old and new files.
+- **Build guard**: if the page and script still somehow mismatch, the app now
+  shows "App update incomplete — fully close the app and reopen it" instead of
+  freezing silently.
+- **Visible errors**: unexpected errors / unhandled rejections are surfaced in
+  the status bar rather than dying silently.
+- **Worker watchdog**: if the scan worker ever hangs, processing falls back to
+  the main thread after 15s instead of freezing behind the spinner.
+
+### Slow first load after updates — fixed
+The cache was previously nuked and fully re-downloaded (~12MB including the
+MuPDF engine) on **every** release. Caches are now split: a small app cache
+(~100KB, bumped each release) and a separate vendor cache for the engine,
+which persists across releases. Updates now download ~100KB, not ~12MB.
+(The very first install still downloads the engine once — that's inherent.)
+
+### Tests
+- New `tests/harness.mjs`: headless integration suite (jsdom + real MuPDF +
+  real pdf-lib) covering all 31 feature checks, plus negative tests for the
+  partial-update guard and the hung-worker watchdog. All pass on this build.
+
+## [v9-mupdf] — 2026-06-11 — Persistence, off-thread processing, capture conveniences
+
+### Never lose work (IndexedDB persistence)
+- The **working document** is saved on-device after every change (debounced,
+  flushed the moment the app is hidden) and an **unfinished scan session**
+  (captured pages) is saved continuously. If iOS kills or evicts the PWA, the
+  next launch shows a **Restore previous session?** sheet — restore the
+  document, continue the scan, or discard. Nothing is restored silently.
+- Privacy rule: **password-unlocked PDFs are never persisted** — the decrypted
+  copy lives only in memory and any stored copy is actively deleted.
+- Closing a PDF or discarding a scan deliberately also clears the saved copy.
+
+### Scanner
+- **Off-thread processing**: perspective warp + filters now run in a Web Worker
+  (`scan-worker.js`), so the UI no longer freezes during "Use page". Falls back
+  to identical main-thread code if workers are unavailable. The two code paths
+  are validated byte-for-byte identical in the build tests.
+- **Auto-capture** (toggle, remembered): when the detected document holds steady
+  for ~1.5s and fills enough of the frame, the page is captured automatically —
+  with a "Hold still…" cue. Off by default.
+- **Torch** toggle, shown only when the camera supports it.
+- **Photos import**: a Photos button on the scanner imports an image from the
+  library through the same edge-detection → crop → filter pipeline.
+- The Colour / B&W choice is remembered across sessions.
+
+### Editor
+- **Page rotation**: the Organise sheet now has a ⟳ button per page (90° steps,
+  badge shows the pending angle); rotations apply together with reorder/delete.
+  Note: in-place text editing still assumes upright pages — edit text before
+  rotating, or rotate back first.
+
+### Validation (build tests, all PASS)
+- Worker vs main-thread warp + both filters: byte-identical output.
+- Edge detection ≤1px corner error; homography exact to 1e-13; B&W: 100%
+  paper→white, 100% text→black on the shadow-gradient fixture.
+- Rotation round-trip and the full rotate→reorder→delete pipeline verified
+  against the real vendored pdf-lib + MuPDF engines.
+- Persistence flows (save / restore / sensitive-doc exclusion / clear) verified
+  against a simulated IndexedDB; all element ids, CSS classes, handlers and the
+  service-worker shell statically checked.
+
+## [v8.2-mupdf] — 2026-06-11 — Scanner UX + hardened CSP
+
+### Scanner
+- **Thumbnail strip**: scanned pages now appear as numbered thumbnails above the
+  shutter. Tap one to preview it full-size and delete it before creating the PDF.
+- **Steady edge outline**: the live green quad is smoothed — it appears after two
+  consistent detections, eases toward each new detection instead of jumping, and
+  tolerates brief detection dropouts. No more flicker.
+- **Bigger corner targets**: each crop handle now has an invisible 28px-radius hit
+  area on top of the visible grip, much easier to grab with a thumb.
+- **In-app discard dialog**: cancelling a scan with pages now asks via the app's
+  own bottom sheet instead of the jarring native confirm() popup.
+
+### Security
+- **CSP tightened — `'unsafe-inline'` removed from `style-src`**. All CSS moved to
+  an external `styles.css` (new file, added to the offline cache), inline style
+  attributes were removed from generated markup (replaced with classes/CSSOM), so
+  injected-style attacks are now blocked too. Policy is now fully `'self'`-only
+  apart from `wasm-unsafe-eval` (engine) and blob/data for local images.
+- **Service-worker cache scoped**: cross-origin requests are no longer intercepted
+  and `backups/` is never served or cached, keeping restore-point archives out of
+  the app cache.
+
+### Fixes
+- **Layering bug**: the working spinner and bottom sheets rendered *underneath*
+  the scanner screens (z-index 60/80 vs 90), so "Straightening page…" was
+  invisible and sheets couldn't appear over the camera. Layering is now
+  scanner (90) < sheets (110) < spinner (120).
+- v8.1 restore point added at `backups/pypdf-pwa-v8.1-restore-point.zip`.
+
+## [v8.1-mupdf] — 2026-06-11 — Scanner polish
+
+- **Restore point**: `backups/pypdf-pwa-v8.0-restore-point.zip` is a full snapshot
+  of the previous build (v8.0), with rollback instructions in `backups/RESTORE.md`.
+- **Shutter button fixed**: a CSS specificity bug let the toolbar's `min-width`
+  stretch the shutter into an oval. It is now a locked 74px circle (iOS-camera
+  style ring), sized for 6.6"–6.9" phones.
+- **Black & white filter overhauled**: much wider illumination window (no
+  blotching or hollow letter strokes), a floor on the illumination map so dark
+  photos/figures don't invert, steeper response and hard white/black clipping —
+  paper comes out pure white and text pure black even under strong shadows.
+  Validated on a synthetic shadow-gradient test: 100% of paper → white,
+  100% of thin text → black, thick strokes stay solid.
+- **Live filter preview**: on the Adjust-edges screen, tapping **Colour** /
+  **Black & white** now re-renders the photo with that filter instantly
+  (display-resolution preview; the final page is still processed at full
+  resolution when you tap Use page).
+
 ## [v8-mupdf] — 2026-06-11 — Document scanner (camera)
 
 - New **Scan document (camera)** entry at the top of the **More** menu — a
