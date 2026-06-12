@@ -4,6 +4,14 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.11] — 2026-06-12 — Toolbar fit on Pro Max
+
+- The zoom − / + buttons now step aside on ALL phone widths (breakpoint was
+  430px; iPhone Pro Max screens are 440pt, so they never hid there). Pinch and
+  double-tap zoom remain; buttons still show on tablet/desktop (≥600px).
+- Toolbar button padding tightened slightly — Open · Edit · Undo · Compress ·
+  More · Save all fit one row with no scrolling.
+
 ## [v10.10] — 2026-06-12 — Toolbar fits the screen
 
 - **No more toolbar scrolling on phones.** The compression-level dropdown is
