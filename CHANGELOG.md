@@ -4,6 +4,17 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.10] — 2026-06-12 — Toolbar fits the screen
+
+- **No more toolbar scrolling on phones.** The compression-level dropdown is
+  gone from the toolbar — Compress now opens a small plain-words sheet
+  (High quality / Balanced / Smallest) when tapped. The − / + zoom buttons
+  step aside on phone widths (pinch and double-tap already zoom there; the
+  buttons remain on tablets/desktop). Everything now fits in one row.
+- "Edit text" is now simply **"Edit"**.
+- Tests: 51 integration + 4 guard + 5 detection + 21 scenario = 81 checks
+  (new: Compress level sheet renders and runs).
+
 ## [v10.9] — 2026-06-12 — Combine fix
 
 - **Combine PDFs was broken since v10.2** — tapping it threw "Can't find

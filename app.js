@@ -11,7 +11,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.9";
+const APP_BUILD = "10.10";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill",
@@ -66,7 +66,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.9";
+const APP_VERSION = "10.10";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -259,7 +259,7 @@ function reopen(){
 }
 
 function enableDocButtons(has){
-  for (const id of ["textBtn","compBtn","compLevel","saveBtn"]) $(id).disabled = !has;
+  for (const id of ["textBtn","compBtn","saveBtn"]) $(id).disabled = !has;
   refreshZoomButtons(); refreshUndo();
 }
 function refreshUndo(){ $("undoBtn").disabled = !undoStack.length; }
@@ -816,7 +816,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.9";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v10.10";   // keep in step with sw.js APP_CACHE
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
@@ -2024,8 +2024,23 @@ const COMPRESS = {
   low:    { targetKB:200,  steps:[ {dpi:140,q:62}, {dpi:110,q:52}, {dpi:96,q:42},
                                    {dpi:84,q:34}, {dpi:72,q:28}, {dpi:60,q:22} ] },
 };
-$("compBtn").onclick = async ()=>{
-  const level=$("compLevel").value, cfg=COMPRESS[level], before=workingBytes.length;
+$("compBtn").onclick = ()=>{
+  if (!workingBytes) return;
+  $("sheet").innerHTML = h`
+    <h3>Compress</h3>
+    <p class="hint">Smaller files are easier to send and store. Pick how small:</p>
+    <div class="row"><button class="full" id="cpHigh">High quality — about 1 MB</button></div>
+    <div class="row"><button class="full" id="cpMed">Balanced — about 700 KB</button></div>
+    <div class="row"><button class="full" id="cpLow">Smallest — about 200 KB</button></div>
+    <div class="row"><button class="ghost full" id="cpCancel">Cancel</button></div>`;
+  $("cpHigh").onclick = ()=>{ closeSheet(); runCompress("high"); };
+  $("cpMed").onclick  = ()=>{ closeSheet(); runCompress("medium"); };
+  $("cpLow").onclick  = ()=>{ closeSheet(); runCompress("low"); };
+  $("cpCancel").onclick = closeSheet;
+  openSheet();
+};
+async function runCompress(level){
+  const cfg=COMPRESS[level], before=workingBytes.length;
   showSpin(true,"Compressing…");
   try {
     pushUndo();

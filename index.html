@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="10.9">
+<html lang="en" data-build="10.10">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -44,18 +44,13 @@
 
 <div class="toolbar" id="toolbar">
   <button id="openBtn" disabled>Open</button>
-  <button class="ghost" id="textBtn" disabled>Edit text</button>
+  <button class="ghost" id="textBtn" disabled>Edit</button>
   <button class="ghost" id="undoBtn" disabled>Undo</button>
   <div class="zoomctl">
     <button class="ghost" id="zoomOut" aria-label="Zoom out" disabled>−</button>
     <span class="zlbl" id="zoomLbl">100%</span>
     <button class="ghost" id="zoomIn" aria-label="Zoom in" disabled>+</button>
   </div>
-  <select id="compLevel" class="lvl" aria-label="Compression level" title="High &lt;1MB · Medium &lt;700KB · Low &lt;200KB" disabled>
-    <option value="high">High</option>
-    <option value="medium" selected>Medium</option>
-    <option value="low">Low</option>
-  </select>
   <button class="ghost" id="compBtn" disabled>Compress</button>
   <button class="ghost" id="moreBtn" disabled>More ▾</button>
   <button id="saveBtn" disabled>Save</button>
