@@ -11,10 +11,10 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.4";
+const APP_BUILD = "10.6";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
-  const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap",
+  const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","photoBtn","autoBtn","torchBtn","photoInput",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","fltColour","fltBw","qStd","qSmall","cropRetake","cropUse"];
   const missing = need.filter(id=>!document.getElementById(id));
@@ -66,7 +66,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.4";
+const APP_VERSION = "10.6";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -118,7 +118,7 @@ function friendly(err){
     localStorage.setItem("pypdf-errlog", JSON.stringify(log.slice(0,3)));
   } catch(e){}
   if (/password/i.test(m))                                   return "this PDF is password-protected.";
-  if (/format error|cannot recognize|trailer|startxref|xref|no objects found|repair/i.test(m))
+  if (/format error|cannot recognize|trailer|startxref|xref|no objects found|no pages found|not a PDF|repair/i.test(m))
                                                              return "this file appears damaged, or isn't really a PDF.";
   if (/memory|alloc/i.test(m))                               return "the file is too large for this device's memory. Try closing other apps, or use a smaller file.";
   if (/encrypt/i.test(m))                                    return "this PDF is protected and can't be changed.";
@@ -358,6 +358,18 @@ async function openBytes(bytes, name){
   let wasEncrypted = false;
   // probe for encryption first
   let probe = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
+  // mupdf can open other formats (e.g. HTML) through their own handlers —
+  // asPDF() returns null for those. Reject before touching the open document.
+  if (!probe.needsPassword()){
+    if (!probe.asPDF()){
+      probe.destroy();
+      throw new Error("not a PDF file");
+    }
+    if (probe.countPages() === 0){
+      probe.destroy();
+      throw new Error("no pages found in this file");
+    }
+  }
   if (probe.needsPassword()){
     wasEncrypted = true;
     probe.destroy();
@@ -407,10 +419,15 @@ function viewerCssWidth(){
   const avail = $("viewer").clientWidth - 24;
   return Math.max(280, Math.min(1100, avail)) * (zoomPct/100);
 }
-const DPR = Math.min(window.devicePixelRatio || 1, 2);
+// Render at the TRUE device pixel ratio (modern iPhones are 3×). The old cap
+// of 2 rendered pages at two-thirds of native resolution and upscaled them —
+// the main reason text looked softer than Acrobat. Lazy rendering +
+// content-visibility keep the extra pixels affordable: only visible pages are
+// ever rasterised.
+const DPR = Math.min(window.devicePixelRatio || 1, 3);
 // Cap a rendered page bitmap so high zoom on a large page can't allocate a
-// huge canvas (heavy on CPU, GPU and battery). ~6 megapixels is plenty crisp.
-const MAX_RENDER_PX = 2600;
+// huge canvas. Raised with the DPR so zoomed-in text stays sharp.
+const MAX_RENDER_PX = 3500;
 
 // Build (or rebuild) the single lazy-render observer and watch every page that
 // hasn't been rasterised yet. Reusing one observer avoids leaking observers on
@@ -481,7 +498,7 @@ async function renderStage(stage, i){
     const cap = MAX_RENDER_PX / Math.max(wPt*scale, hPt*scale);
     if (cap < 1) scale *= cap;
     const pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false);
-    const jpg = u8(pix.asJPEG(80));
+    const jpg = u8(pix.asJPEG(90));
     pix.destroy(); page.destroy();
     const url = URL.createObjectURL(new Blob([jpg], {type:"image/jpeg"}));
     liveURLs.add(url);
@@ -750,7 +767,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.4";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v10.6";   // keep in step with sw.js APP_CACHE
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
@@ -794,6 +811,7 @@ function closeFile(){
   thumbCache.clear();
   setMode(null);
   zoomPct = 100; $("zoomLbl").textContent = "100%";
+  $("pagePill").classList.remove("show");
   $("emptyMsg").style.display = "block";
   $("meta").textContent = "No document open";
   enableDocButtons(false);
@@ -1515,8 +1533,10 @@ $("scanCancel").onclick = ()=>{
 };
 
 // confirm the page: perspective-correct, filter, JPEG-encode, back to camera
+let cropBusy = false;          // re-entrancy guard: one processing at a time
 $("cropUse").onclick = async ()=>{
-  if (!capFrame) return;
+  if (!capFrame || cropBusy) return;
+  cropBusy = true;
   showSpin(true,"Straightening page…");
   try {
     await new Promise(r=>setTimeout(r,30));    // let the spinner paint first
@@ -1547,6 +1567,7 @@ $("cropUse").onclick = async ()=>{
     if (!scanFallback) await startCamera();
   } catch(err){ setStatus("Could not finish this page: "+friendly(err),"err"); }
   showSpin(false);
+  cropBusy = false;
 };
 
 // build the PDF (pages scaled to A4-ish point sizes) and open it in the editor
@@ -2059,6 +2080,34 @@ function downloadBlob(blob, name){
   a.href=url; a.download=safeFileName(name); a.rel="noopener"; document.body.appendChild(a); a.click();
   setTimeout(()=>{ a.remove(); URL.revokeObjectURL(url); }, 4000);
 }
+
+// ---------------- "Page 3 of 12" pill while scrolling ----------------
+// Appears during scroll on multi-page documents, fades out when you stop.
+const raf = (typeof requestAnimationFrame !== "undefined") ? requestAnimationFrame : (f)=>setTimeout(f,16);
+let pillT = 0, pillPending = false;
+$("viewer").addEventListener("scroll", ()=>{
+  if (!workingBytes || !MDOC || pillPending) return;
+  pillPending = true;
+  raf(()=>{
+    pillPending = false;
+    try {
+      const n = MDOC.countPages();
+      if (n < 2) return;
+      const v = $("viewer"), vr = v.getBoundingClientRect(), mid = vr.top + vr.height/2;
+      let best = 0, bd = 1e9;
+      v.querySelectorAll(".stage").forEach(s=>{
+        const r = s.getBoundingClientRect();
+        const d = Math.abs((r.top + r.bottom)/2 - mid);
+        if (d < bd){ bd = d; best = +s.dataset.page; }
+      });
+      const p = $("pagePill");
+      p.textContent = "Page "+(best+1)+" of "+n;
+      p.classList.add("show");
+      clearTimeout(pillT);
+      pillT = setTimeout(()=>p.classList.remove("show"), 1200);
+    } catch(e){}
+  });
+}, { passive:true });
 
 // Re-render on rotate / real width change only. iOS fires "resize" constantly
 // as the address bar shows/hides (height-only changes); re-rendering on those

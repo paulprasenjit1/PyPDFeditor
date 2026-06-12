@@ -4,6 +4,58 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.6] — 2026-06-12 — Reading quality + page indicator
+
+### Pages now render at true Retina sharpness
+The root cause of "softer than Acrobat": pages were rasterised at a device
+pixel ratio capped at 2, but modern iPhones are 3× displays — every page was
+rendered at two-thirds of native resolution and stretched. Three changes:
+
+- **Render at the real device pixel ratio (up to 3×)** — text is now pixel-sharp
+  at native resolution, like a native PDF viewer.
+- **Page bitmaps encode at JPEG quality 90** (was 80) — removes the faint
+  ringing artefacts around letters.
+- **High-zoom cap raised** (2600 → 3500px long side) so 200–300% zoom stays
+  crisp instead of going soft.
+
+Battery/memory note: only visible pages are ever rasterised (lazy rendering +
+content-visibility), so the extra pixels cost little in practice. Scan output
+and compression qualities are unchanged — this is purely the reading view.
+
+### Page indicator
+- While scrolling a multi-page document, a small "Page 3 of 12" pill fades in
+  at the bottom and fades out when you stop. No buttons, no setup; honours
+  reduced-motion settings.
+
+### Tests
+- 42 integration + 4 guard + 5 detection + 21 scenario = 72 checks, all passing
+  (two new: pill appears on scroll, pill fades after scrolling stops).
+
+## [v10.5] — 2026-06-12 — Hardening release (scenario campaign)
+
+A 21-scenario abuse campaign was run against the app (corrupt/zero-byte/fake
+files, password PDFs, double-taps, guards, unicode, huge documents, extreme
+zoom). Two real bugs were found and fixed:
+
+- **Double-tap "Use page" duplicated the scanned page**: tapping again while
+  the page was still processing added it twice. A re-entrancy guard now ensures
+  one capture = one page.
+- **A non-PDF file renamed to .pdf could half-open and break the app**: MuPDF
+  opens HTML through its own handler, leaving the editor with no usable
+  document while the buttons stayed enabled. The file probe now rejects
+  anything that isn't a real PDF (and zero-page files) BEFORE the currently
+  open document is touched — a failed open can no longer lose your place.
+
+Verified intact by the campaign (no changes needed): friendly errors and
+recovery after corrupt files, delete-every-page guard, unicode text edits,
+filename sanitisation, password unlock + never-persist rule, undo on empty,
+merge with a corrupt file leaves the original untouched, zoom clamps,
+rotated-page warning, signature placement, and 40-page open/Pages/compress
+responsiveness.
+
+The campaign is now part of the test suite (tests/scenario-tests.mjs).
+Total: 40 integration + 4 guard + 5 detection + 21 scenario = 70 checks.
+
 ## [v10.4] — 2026-06-11 — Unsaved-changes protection
 
 - The app now tracks whether the open document has changes that haven't been

@@ -73,6 +73,14 @@ select.lvl { background:var(--bg); color:var(--txt); border:1px solid var(--line
 .status.ok { color:var(--ok); font-weight:600; }
 .status.err { color:var(--err); font-weight:600; }
 .status.warn { color:var(--warn); font-weight:600; }
+/* "Page 3 of 12" pill: fades in while scrolling, out when you stop */
+.pgpill { position:fixed; left:50%; transform:translateX(-50%);
+          bottom:calc(56px + env(safe-area-inset-bottom)); z-index:50;
+          background:rgba(13,15,20,.88); color:#fff; font-size:12px; font-weight:600;
+          padding:6px 13px; border-radius:15px; border:1px solid var(--line);
+          opacity:0; pointer-events:none; transition:opacity .25s ease; }
+.pgpill.show { opacity:1; }
+@media (prefers-reduced-motion: reduce){ .pgpill { transition:none; } }
 /* Layering: scanner (90) < sheets (110) < spinner (120), so dialogs and the
    working spinner are always visible, including on top of the scanner. */
 .sheet-bg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:flex-end; z-index:110; }
