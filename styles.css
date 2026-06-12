@@ -1,8 +1,18 @@
 /* PyPDF Editor — all styles live in this external sheet so the CSP can be
    `style-src 'self'` (no inline styles, no style attributes anywhere). */
 
-:root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --txt:#e6e9ef; --muted:#8b93a3;
-        --accent:#4f8cff; --accent2:#1f6feb; --ok:#3fb950; --warn:#d29922; --err:#f85149; }
+:root { --bg:#0b0d12; --panel:#141823; --panel2:#1a1f2d; --line:#272e3d; --txt:#e8ebf2;
+        --muted:#8d95a8; --accent:#5b95ff; --accent2:#1f6feb; --grad-a:#3b82f6; --grad-b:#1d5fd6;
+        --ok:#3fb950; --warn:#d29922; --err:#f85149;
+        --scrolltrack:#0b0d12; --scrollthumb:#3d6fd6; --shadow:rgba(0,0,0,.55); }
+/* automatic light theme — follows the iPhone's system setting; the scanner
+   screens stay dark by design (they are hard-coded camera-black) */
+@media (prefers-color-scheme: light){
+  :root { --bg:#eef0f5; --panel:#ffffff; --panel2:#f6f7fa; --line:#d9dde6; --txt:#1b1e27;
+          --muted:#68707f; --accent:#2563eb; --accent2:#1f6feb; --grad-a:#4f8cff; --grad-b:#2563eb;
+          --ok:#1a7f37; --warn:#9a6700; --err:#cf222e;
+          --scrolltrack:#e3e6ee; --scrollthumb:#9db8ec; --shadow:rgba(30,40,70,.25); }
+}
 * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html,body { margin:0; height:100%; }
 body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
@@ -18,12 +28,17 @@ header .meta { color:var(--muted); font-size:11px; margin-left:auto; text-align:
 .toolbar > * { flex:0 0 auto; white-space:nowrap; }
 .toolbar::-webkit-scrollbar { height:6px; }
 .toolbar::-webkit-scrollbar-thumb { background:var(--line); border-radius:3px; }
-button { background:var(--accent2); color:#fff; border:0; border-radius:8px; padding:9px 10px;
-         font-size:13px; cursor:pointer; }
-button:active { background:var(--accent); }
-button.ghost { background:transparent; border:1px solid var(--line); color:var(--txt); }
+button { background:linear-gradient(180deg, var(--grad-a), var(--grad-b)); color:#fff; border:0;
+         border-radius:9px; padding:9px 10px; font-size:13px; cursor:pointer;
+         transition:transform .08s ease, filter .12s ease; }
+button:active:not(:disabled) { transform:scale(.97); filter:brightness(.92); }
+button.ghost { background:var(--panel2); border:1px solid var(--line); color:var(--txt); }
 button.on { background:var(--ok); }
 button:disabled { opacity:.4; }
+@media (prefers-reduced-motion: reduce){
+  button { transition:none; }
+  button:active:not(:disabled) { transform:none; }
+}
 select.lvl { background:var(--bg); color:var(--txt); border:1px solid var(--line);
              border-radius:8px; padding:8px 4px; font-size:13px; width:74px; }
 .zoomctl { display:flex; align-items:center; gap:2px; border:1px solid var(--line);
@@ -40,12 +55,12 @@ select.lvl { background:var(--bg); color:var(--txt); border:1px solid var(--line
    the height of a 500-page book exhausts compositor memory (black screen) */
 .pagewrap.pinching { will-change:transform; }
 .viewer::-webkit-scrollbar { width:12px; height:12px; }
-.viewer::-webkit-scrollbar-track { background:#0b0d12; }
-.viewer::-webkit-scrollbar-thumb { background:#3d6fd6; border-radius:7px; border:3px solid #0b0d12; }
+.viewer::-webkit-scrollbar-track { background:var(--scrolltrack); }
+.viewer::-webkit-scrollbar-thumb { background:var(--scrollthumb); border-radius:7px; border:3px solid var(--scrolltrack); }
 /* content-visibility:auto lets the browser skip rendering offscreen pages
    entirely — a big CPU/GPU/battery win on long PDFs. contain-intrinsic-size
    is set per-stage in JS so scrollbar/layout stay stable. */
-.stage { position:relative; box-shadow:0 6px 24px rgba(0,0,0,.55); background:#fff;
+.stage { position:relative; box-shadow:0 6px 24px var(--shadow); background:#fff; border-radius:2px;
          content-visibility:auto; }
 .stage .plabel { position:absolute; top:4px; left:4px; font-size:10px; color:#fff;
          background:rgba(0,0,0,.45); padding:1px 6px; border-radius:5px; z-index:2; }
@@ -67,14 +82,17 @@ select.lvl { background:var(--bg); color:var(--txt); border:1px solid var(--line
 .empty { color:var(--muted); text-align:center; margin:auto; font-size:14px; line-height:1.7; padding:24px; }
 /* welcome screen: the empty state is two big friendly buttons */
 .welcome { display:flex; flex-direction:column; gap:14px; align-items:center; }
-.welcome .wtitle { margin:0 0 6px; font-size:20px; font-weight:700; color:var(--txt); }
-.welcome .big { width:min(280px,80vw); padding:16px 18px; font-size:17px; border-radius:14px; }
-.welcome .big.ghost { border-width:1.5px; }
+.welcome .wtitle { margin:0 0 8px; font-size:27px; font-weight:800; letter-spacing:-.02em;
+        background:linear-gradient(120deg, var(--txt) 30%, var(--accent));
+        -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+.welcome .big { width:min(280px,80vw); padding:16px 18px; font-size:17px; border-radius:15px;
+        box-shadow:0 8px 24px rgba(43,99,235,.30); }
+.welcome .big.ghost { border-width:1.5px; box-shadow:none; }
 .status { font-size:12px; padding:8px 14px calc(8px + env(safe-area-inset-bottom));
           border-top:1px solid var(--line); background:var(--panel); color:var(--muted); min-height:18px; }
-.status.ok { color:var(--ok); font-weight:600; }
-.status.err { color:var(--err); font-weight:600; }
-.status.warn { color:var(--warn); font-weight:600; }
+.status.ok { color:var(--ok); font-weight:600; background:rgba(63,185,80,.07); }
+.status.err { color:var(--err); font-weight:600; background:rgba(248,81,73,.08); }
+.status.warn { color:var(--warn); font-weight:600; background:rgba(210,153,34,.08); }
 /* "Page 3 of 12" pill: fades in while scrolling, out when you stop */
 .pgpill { position:fixed; left:50%; transform:translateX(-50%);
           bottom:calc(56px + env(safe-area-inset-bottom)); z-index:50;
@@ -87,9 +105,11 @@ select.lvl { background:var(--bg); color:var(--txt); border:1px solid var(--line
    working spinner are always visible, including on top of the scanner. */
 .sheet-bg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:flex-end; z-index:110; }
 .sheet-bg.show { display:flex; }
-.sheet { background:var(--panel); width:100%; border-top-left-radius:16px; border-top-right-radius:16px;
-         border-top:1px solid var(--line); padding:16px 16px calc(20px + env(safe-area-inset-bottom));
-         max-height:82dvh; overflow:auto; }
+.sheet { background:var(--panel); width:100%; border-top-left-radius:20px; border-top-right-radius:20px;
+         border-top:1px solid var(--line); padding:12px 16px calc(20px + env(safe-area-inset-bottom));
+         max-height:82dvh; overflow:auto; box-shadow:0 -10px 36px rgba(0,0,0,.35); }
+.sheet::before { content:""; display:block; width:38px; height:4px; border-radius:2px;
+         background:var(--line); margin:0 auto 12px; }
 .sheet h3 { margin:0 0 10px; font-size:15px; }
 .sheet .row { display:flex; gap:8px; align-items:center; margin:10px 0; flex-wrap:wrap; }
 .sheet label.ck { display:flex; gap:8px; align-items:center; font-size:14px; }
@@ -103,14 +123,15 @@ select.lvl { background:var(--bg); color:var(--txt); border:1px solid var(--line
 .mt8  { margin-top:8px; }
 .mt12 { margin-top:12px; }
 .hint { font-size:12px; color:var(--muted); line-height:1.5; }
-.about { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+.about { border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--panel2); }
 .about .abrow { display:flex; justify-content:space-between; gap:12px; padding:9px 12px;
          font-size:13px; border-bottom:1px solid var(--line); }
 .about .abrow:last-child { border-bottom:0; }
 .about .abrow span { color:var(--muted); }
 .about .abrow b { color:var(--txt); text-align:right; word-break:break-word; }
 .about a { color:var(--accent); }
-.porow { display:flex; align-items:center; gap:6px; padding:6px 0; border-bottom:1px solid var(--line); }
+.porow { display:flex; align-items:center; gap:8px; padding:7px 9px; margin-bottom:7px;
+         background:var(--panel2); border:1px solid var(--line); border-radius:11px; }
 .porow img { width:46px; height:auto; min-height:58px; background:#fff; border-radius:3px; }
 .porow .pn { flex:1; font-size:14px; }
 .porow.del { opacity:.4; text-decoration:line-through; }

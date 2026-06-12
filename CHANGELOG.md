@@ -4,6 +4,26 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.8] — 2026-06-12 — Visual refresh
+
+CSS-only — zero behaviour change, ~3KB. All 77 checks still pass untouched.
+
+- **Automatic light theme**: the whole app now follows the iPhone's system
+  appearance — bright, clean whites in the day, the dark theme at night. No
+  toggle, no settings screen. The scanner screens stay camera-black by design.
+- **Richer dark theme**: deeper near-black background with a subtle blue cast
+  instead of flat grey; refined borders and raised panels.
+- **Buttons feel alive**: primary actions get a soft blue gradient and a gentle
+  press-down (3% scale) on touch; secondary buttons get a raised tint. All
+  motion respects the Reduce Motion accessibility setting.
+- **Welcome screen hero**: larger gradient title and a soft glow under the
+  primary button.
+- **Sheets look iOS-native**: bigger top radius, a grabber bar, and a soft
+  shadow; page rows in Pages / Copy-pages are now rounded cards.
+- **Status messages** get a subtle colour-tinted background so success and
+  error states read at a glance.
+- The iOS status-bar colour (theme-color) now matches the active theme.
+
 ## [v10.7] — 2026-06-12 — Performance Pack (big scanned books)
 
 Fixes for 500-page / ~100MB scanned-book PDFs hanging the app and the screen
