@@ -4,6 +4,13 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.12] — 2026-06-12 — Close in the toolbar
+
+- A compact **✕ (close)** button now sits right after Save in the toolbar —
+  one tap to close the document. Protected by the unsaved-changes guard, so a
+  stray tap can never lose work. "Close this PDF" is removed from the More
+  menu (it lived there before); More is now seven entries.
+
 ## [v10.11] — 2026-06-12 — Toolbar fit on Pro Max
 
 - The zoom − / + buttons now step aside on ALL phone widths (breakpoint was

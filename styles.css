@@ -48,8 +48,10 @@ button:disabled { opacity:.4; }
    the buttons step aside and the whole toolbar fits with no scrolling.
    Tablets/desktop (≥600px) keep the buttons. */
 @media (max-width: 599px){ .zoomctl { display:none; } }
-/* tighter toolbar buttons so all six actions sit comfortably in one row */
+/* tighter toolbar buttons so all actions sit comfortably in one row */
 .toolbar button { padding:8px 8px; }
+/* compact close (✕) button beside Save */
+.toolbar .xbtn { padding:8px 9px; font-size:13px; line-height:1; color:var(--muted); }
 /* touch-action pan-x pan-y: one/two-finger panning stays native, but the
    browser's own pinch-zoom is suppressed so the app can pinch-zoom the PAGES */
 .viewer { flex:1; overflow:auto; padding:18px 12px calc(18px + env(safe-area-inset-bottom));

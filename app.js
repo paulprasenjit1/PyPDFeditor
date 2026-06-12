@@ -11,10 +11,10 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.11";
+const APP_BUILD = "10.12";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
-  const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill",
+  const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","photoBtn","autoBtn","torchBtn","photoInput",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","fltColour","fltBw","qStd","qSmall","cropRetake","cropUse"];
   const missing = need.filter(id=>!document.getElementById(id));
@@ -66,7 +66,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.11";
+const APP_VERSION = "10.12";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -259,7 +259,7 @@ function reopen(){
 }
 
 function enableDocButtons(has){
-  for (const id of ["textBtn","compBtn","saveBtn"]) $(id).disabled = !has;
+  for (const id of ["textBtn","compBtn","saveBtn","closeBtn"]) $(id).disabled = !has;
   refreshZoomButtons(); refreshUndo();
 }
 function refreshUndo(){ $("undoBtn").disabled = !undoStack.length; }
@@ -289,6 +289,7 @@ async function setZoom(newPct, anchorX, anchorY){
 }
 function applyZoom(delta){ setZoom(zoomPct + delta); }
 $("undoBtn").onclick = ()=> doUndo();
+$("closeBtn").onclick = ()=> confirmDiscard("close this PDF", closeFile);
 $("zoomOut").onclick = ()=> applyZoom(-25);
 $("zoomIn").onclick  = ()=> applyZoom(25);
 
@@ -798,7 +799,6 @@ $("moreBtn").onclick = ()=>{
     <div class="row"><button class="full" id="mMerge" ${d}>➕ Combine PDFs</button></div>
     <div class="row"><button class="full" id="mImg">🖼 Photos → PDF</button></div>
     <div class="row"><button class="full" id="mPng" ${d}>⬇ Save this page as a picture</button></div>
-    <div class="row"><button class="full" id="mCloseFile" ${d}>✖ Close this PDF</button></div>
     <div class="row"><button class="full" id="mAbout">About</button></div>
     <div class="row"><button class="ghost full" id="mClose">Cancel</button></div>`;
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
@@ -808,7 +808,6 @@ $("moreBtn").onclick = ()=>{
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
   $("mImg").onclick   = ()=>{ closeSheet(); confirmDiscard("turn photos into a new PDF", ()=>$("imgInput").click()); };
   $("mPng").onclick   = ()=>{ closeSheet(); exportVisiblePng(); };
-  $("mCloseFile").onclick = ()=>{ closeSheet(); confirmDiscard("close this PDF", closeFile); };
   $("mAbout").onclick = ()=>{ closeSheet(); openAbout(); };
   $("mClose").onclick = closeSheet;
   openSheet();
@@ -816,7 +815,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.11";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v10.12";   // keep in step with sw.js APP_CACHE
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
