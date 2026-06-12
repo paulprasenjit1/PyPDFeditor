@@ -1,8 +1,140 @@
-# Changelog — PyPDF Editor (iPhone PWA)
+# Changelog — PyPDF
 
-All notable changes to the on-device iPhone PWA. The "version" tag matches the
+All notable changes to the on-device PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
+
+## [v10.11] — 2026-06-12 — Toolbar fit on Pro Max
+
+- The zoom − / + buttons now step aside on ALL phone widths (breakpoint was
+  430px; iPhone Pro Max screens are 440pt, so they never hid there). Pinch and
+  double-tap zoom remain; buttons still show on tablet/desktop (≥600px).
+- Toolbar button padding tightened slightly — Open · Edit · Undo · Compress ·
+  More · Save all fit one row with no scrolling.
+
+## [v10.10] — 2026-06-12 — Toolbar fits the screen
+
+- **No more toolbar scrolling on phones.** The compression-level dropdown is
+  gone from the toolbar — Compress now opens a small plain-words sheet
+  (High quality / Balanced / Smallest) when tapped. The − / + zoom buttons
+  step aside on phone widths (pinch and double-tap already zoom there; the
+  buttons remain on tablets/desktop). Everything now fits in one row.
+- "Edit text" is now simply **"Edit"**.
+- Tests: 51 integration + 4 guard + 5 detection + 21 scenario = 81 checks
+  (new: Compress level sheet renders and runs).
+
+## [v10.9] — 2026-06-12 — Combine fix
+
+- **Combine PDFs was broken since v10.2** — tapping it threw "Can't find
+  variable: orig" before the order sheet could appear. Cause: the v10.2
+  accessibility-label pass used a global text replacement that edited the
+  Combine sheet's buttons with a variable that only exists in the Pages sheet.
+  (Found via the on-device error log added in v9.3 — exactly what it's for.)
+- Fixed, and three new tests now drive the actual Combine order sheet UI
+  (render, reorder, cancel) plus an About-sheet smoke test, so this whole class
+  of "sheet fails to build" bug is covered.
+- Tests: 50 integration + 4 guard + 5 detection + 21 scenario = 80 checks.
+
+## [v10.8] — 2026-06-12 — Visual refresh
+
+CSS-only — zero behaviour change, ~3KB. All 77 checks still pass untouched.
+
+- **Automatic light theme**: the whole app now follows the iPhone's system
+  appearance — bright, clean whites in the day, the dark theme at night. No
+  toggle, no settings screen. The scanner screens stay camera-black by design.
+- **Richer dark theme**: deeper near-black background with a subtle blue cast
+  instead of flat grey; refined borders and raised panels.
+- **Buttons feel alive**: primary actions get a soft blue gradient and a gentle
+  press-down (3% scale) on touch; secondary buttons get a raised tint. All
+  motion respects the Reduce Motion accessibility setting.
+- **Welcome screen hero**: larger gradient title and a soft glow under the
+  primary button.
+- **Sheets look iOS-native**: bigger top radius, a grabber bar, and a soft
+  shadow; page rows in Pages / Copy-pages are now rounded cards.
+- **Status messages** get a subtle colour-tinted background so success and
+  error states read at a glance.
+- The iOS status-bar colour (theme-color) now matches the active theme.
+
+## [v10.7] — 2026-06-12 — Performance Pack (big scanned books)
+
+Fixes for 500-page / ~100MB scanned-book PDFs hanging the app and the screen
+blacking out during zoom. Five changes, no UI change:
+
+- **Black-screen fix**: the page container was permanently promoted to a GPU
+  layer (`will-change`) for pinch-zoom — for a 500-page book that is a texture
+  hundreds of thousands of pixels tall, which exhausts the iOS compositor.
+  The layer is now created only during an active pinch and released after.
+- **Flat memory while reading**: pages that scroll far away are released back
+  to lightweight placeholders and re-rendered when approached again — about a
+  dozen live page bitmaps at any time, regardless of book length. (Previously
+  every page you ever scrolled past stayed decoded in memory until iOS killed
+  the tab.)
+- **No more 100MB clones**: documents over 25MB are no longer auto-persisted
+  for session restore — cloning the whole book to storage on open and after
+  every change caused multi-second stalls. The original file in Files is
+  unaffected; only the restore-after-kill convenience is skipped for huge docs.
+- **Chunked page building with progress**: opening builds the page scaffold in
+  slices ("Preparing page 240 of 500…") instead of freezing, and page sizes
+  are cached per document version — zooming no longer makes 500 engine calls.
+- **Adaptive sharpness**: documents over 150 pages render at 2× instead of 3×
+  (indistinguishable for scanned books, half the work and memory). Small
+  documents keep the full v10.6 Retina sharpness.
+
+Tests: 47 integration (4 new: 300-page chunked build, zoom rebuild, bitmap
+release/restore, >25MB persist skip) + 4 guard + 5 detection + 21 scenario
+= 77 checks, all passing.
+
+## [v10.6] — 2026-06-12 — Reading quality + page indicator
+
+### Pages now render at true Retina sharpness
+The root cause of "softer than Acrobat": pages were rasterised at a device
+pixel ratio capped at 2, but modern iPhones are 3× displays — every page was
+rendered at two-thirds of native resolution and stretched. Three changes:
+
+- **Render at the real device pixel ratio (up to 3×)** — text is now pixel-sharp
+  at native resolution, like a native PDF viewer.
+- **Page bitmaps encode at JPEG quality 90** (was 80) — removes the faint
+  ringing artefacts around letters.
+- **High-zoom cap raised** (2600 → 3500px long side) so 200–300% zoom stays
+  crisp instead of going soft.
+
+Battery/memory note: only visible pages are ever rasterised (lazy rendering +
+content-visibility), so the extra pixels cost little in practice. Scan output
+and compression qualities are unchanged — this is purely the reading view.
+
+### Page indicator
+- While scrolling a multi-page document, a small "Page 3 of 12" pill fades in
+  at the bottom and fades out when you stop. No buttons, no setup; honours
+  reduced-motion settings.
+
+### Tests
+- 42 integration + 4 guard + 5 detection + 21 scenario = 72 checks, all passing
+  (two new: pill appears on scroll, pill fades after scrolling stops).
+
+## [v10.5] — 2026-06-12 — Hardening release (scenario campaign)
+
+A 21-scenario abuse campaign was run against the app (corrupt/zero-byte/fake
+files, password PDFs, double-taps, guards, unicode, huge documents, extreme
+zoom). Two real bugs were found and fixed:
+
+- **Double-tap "Use page" duplicated the scanned page**: tapping again while
+  the page was still processing added it twice. A re-entrancy guard now ensures
+  one capture = one page.
+- **A non-PDF file renamed to .pdf could half-open and break the app**: MuPDF
+  opens HTML through its own handler, leaving the editor with no usable
+  document while the buttons stayed enabled. The file probe now rejects
+  anything that isn't a real PDF (and zero-page files) BEFORE the currently
+  open document is touched — a failed open can no longer lose your place.
+
+Verified intact by the campaign (no changes needed): friendly errors and
+recovery after corrupt files, delete-every-page guard, unicode text edits,
+filename sanitisation, password unlock + never-persist rule, undo on empty,
+merge with a corrupt file leaves the original untouched, zoom clamps,
+rotated-page warning, signature placement, and 40-page open/Pages/compress
+responsiveness.
+
+The campaign is now part of the test suite (tests/scenario-tests.mjs).
+Total: 40 integration + 4 guard + 5 detection + 21 scenario = 70 checks.
 
 ## [v10.4] — 2026-06-11 — Unsaved-changes protection
 
@@ -385,12 +517,11 @@ which persists across releases. Updates now download ~100KB, not ~12MB.
 - Text-edit and signature placement assume an upright (0°) page.
 - MuPDF.js is AGPL-3.0 (or commercial) — a public host must keep its source available.
 
-
 ##########################################################################################################################################
 
-# PyPDF Editor — iPhone PWA (MuPDF.js engine)
+# PyPDF Editor — PWA (MuPDF.js engine)
 
-A web version of the editor that installs to your iPhone Home Screen and runs
+A web version of the editor that installs to your phone Home Screen and runs
 **entirely on the device**. No App Store, no sideloading, no Apple ID, no
 payment, no expiry. Nothing you open is uploaded anywhere.
 
