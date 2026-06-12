@@ -4,6 +4,18 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.9] — 2026-06-12 — Combine fix
+
+- **Combine PDFs was broken since v10.2** — tapping it threw "Can't find
+  variable: orig" before the order sheet could appear. Cause: the v10.2
+  accessibility-label pass used a global text replacement that edited the
+  Combine sheet's buttons with a variable that only exists in the Pages sheet.
+  (Found via the on-device error log added in v9.3 — exactly what it's for.)
+- Fixed, and three new tests now drive the actual Combine order sheet UI
+  (render, reorder, cancel) plus an About-sheet smoke test, so this whole class
+  of "sheet fails to build" bug is covered.
+- Tests: 50 integration + 4 guard + 5 detection + 21 scenario = 80 checks.
+
 ## [v10.8] — 2026-06-12 — Visual refresh
 
 CSS-only — zero behaviour change, ~3KB. All 77 checks still pass untouched.
