@@ -35,8 +35,10 @@ select.lvl { background:var(--bg); color:var(--txt); border:1px solid var(--line
 .viewer { flex:1; overflow:auto; padding:18px 12px calc(18px + env(safe-area-inset-bottom));
           display:flex; flex-direction:column; gap:18px; -webkit-overflow-scrolling:touch;
           align-items:safe center; touch-action:pan-x pan-y; }
-.pagewrap { display:flex; flex-direction:column; gap:18px; align-items:safe center;
-          will-change:transform; }
+.pagewrap { display:flex; flex-direction:column; gap:18px; align-items:safe center; }
+/* GPU promotion ONLY during an active pinch — a permanently promoted wrapper
+   the height of a 500-page book exhausts compositor memory (black screen) */
+.pagewrap.pinching { will-change:transform; }
 .viewer::-webkit-scrollbar { width:12px; height:12px; }
 .viewer::-webkit-scrollbar-track { background:#0b0d12; }
 .viewer::-webkit-scrollbar-thumb { background:#3d6fd6; border-radius:7px; border:3px solid #0b0d12; }

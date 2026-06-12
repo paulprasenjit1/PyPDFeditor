@@ -4,6 +4,35 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.7] — 2026-06-12 — Performance Pack (big scanned books)
+
+Fixes for 500-page / ~100MB scanned-book PDFs hanging the app and the screen
+blacking out during zoom. Five changes, no UI change:
+
+- **Black-screen fix**: the page container was permanently promoted to a GPU
+  layer (`will-change`) for pinch-zoom — for a 500-page book that is a texture
+  hundreds of thousands of pixels tall, which exhausts the iOS compositor.
+  The layer is now created only during an active pinch and released after.
+- **Flat memory while reading**: pages that scroll far away are released back
+  to lightweight placeholders and re-rendered when approached again — about a
+  dozen live page bitmaps at any time, regardless of book length. (Previously
+  every page you ever scrolled past stayed decoded in memory until iOS killed
+  the tab.)
+- **No more 100MB clones**: documents over 25MB are no longer auto-persisted
+  for session restore — cloning the whole book to storage on open and after
+  every change caused multi-second stalls. The original file in Files is
+  unaffected; only the restore-after-kill convenience is skipped for huge docs.
+- **Chunked page building with progress**: opening builds the page scaffold in
+  slices ("Preparing page 240 of 500…") instead of freezing, and page sizes
+  are cached per document version — zooming no longer makes 500 engine calls.
+- **Adaptive sharpness**: documents over 150 pages render at 2× instead of 3×
+  (indistinguishable for scanned books, half the work and memory). Small
+  documents keep the full v10.6 Retina sharpness.
+
+Tests: 47 integration (4 new: 300-page chunked build, zoom rebuild, bitmap
+release/restore, >25MB persist skip) + 4 guard + 5 detection + 21 scenario
+= 77 checks, all passing.
+
 ## [v10.6] — 2026-06-12 — Reading quality + page indicator
 
 ### Pages now render at true Retina sharpness

@@ -11,7 +11,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.6";
+const APP_BUILD = "10.7";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill",
@@ -66,7 +66,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.6";
+const APP_VERSION = "10.7";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -210,10 +210,14 @@ async function idbDel(key){
     tx.onerror=()=>{ db.close(); rej(tx.error); };
   });
 }
+// very large documents are not auto-persisted: cloning ~100MB to storage on
+// every change caused multi-second stalls and memory spikes. The original
+// file already exists in Files, so nothing is lost — only session-restore.
+const PERSIST_MAX_BYTES = 25*1024*1024;
 function persistDocNow(){
   persistT=0;
   try {
-    if (workingBytes && !docSensitive)
+    if (workingBytes && !docSensitive && workingBytes.length <= PERSIST_MAX_BYTES)
       idbSet("doc",{ name:fileName, bytes:workingBytes, ts:Date.now(), dirty }).catch(()=>{});
     else idbDel("doc").catch(()=>{});
   } catch(e){}
@@ -305,6 +309,7 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
       const cy=(e.touches[0].clientY+e.touches[1].clientY)/2;
       const wr=wrap.getBoundingClientRect();
       wrap.style.transformOrigin = (cx-wr.left)+"px "+(cy-wr.top)+"px";
+      wrap.classList.add("pinching");     // promote to a GPU layer ONLY now
       pinch = { d0:dist(e.touches), k:1, cx, cy };
     }
   }, { passive:false });
@@ -325,6 +330,7 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
     const { k, cx, cy } = pinch;
     pinch = null;
     wrap.style.transform = "";
+    wrap.classList.remove("pinching");
     if (Math.abs(k-1) < 0.02){ $("zoomLbl").textContent = zoomPct+"%"; return; }
     setZoom(zoomPct*k, cx, cy);
   };
@@ -432,22 +438,46 @@ const MAX_RENDER_PX = 3500;
 // Build (or rebuild) the single lazy-render observer and watch every page that
 // hasn't been rasterised yet. Reusing one observer avoids leaking observers on
 // each re-render and lets us cleanly disconnect it when the app is hidden.
+// Rasterisation window: pages near the viewport are rendered; pages that
+// scroll far away are RELEASED back to lightweight placeholders. Memory stays
+// flat (~a dozen live bitmaps) no matter how long the document is — the fix
+// for 500-page scanned books crashing the tab.
 function observeStages(){
   const v = $("viewer");
   if (pageObserver) pageObserver.disconnect();
   pageObserver = new IntersectionObserver((entries)=>{
     for (const en of entries){
-      if (!en.isIntersecting) continue;
-      const stage = en.target; pageObserver.unobserve(stage);
-      if (stage.dataset.rendered) continue;
-      stage.dataset.rendered = "1";
-      renderStage(stage, +stage.dataset.page);
+      const stage = en.target;
+      if (en.isIntersecting){
+        if (!stage.dataset.rendered){
+          stage.dataset.rendered = "1";
+          renderStage(stage, +stage.dataset.page);
+        }
+      } else if (stage.dataset.rendered){
+        derasterStage(stage);
+      }
     }
-  }, { root: v, rootMargin: "700px 0px" });   // smaller margin = fewer offscreen renders
-  v.querySelectorAll(".stage:not([data-rendered])").forEach(s=>pageObserver.observe(s));
+  }, { root: v, rootMargin: "1500px 0px" });
+  v.querySelectorAll(".stage").forEach(s=>pageObserver.observe(s));
+}
+// release a far-away page's bitmap, keeping its exact footprint in the layout
+function derasterStage(stage){
+  const img = stage.querySelector("img");
+  if (!img) return;
+  const holder = document.createElement("div");
+  holder.className = "holder";
+  holder.style.width  = parseFloat(stage.style.width)+"px";
+  holder.style.height = (stage.dataset.dh||0)+"px";
+  img.replaceWith(holder);
+  delete stage.dataset.rendered;
 }
 
+// page sizes are asked from the engine once per document version, not on
+// every zoom — zooming a 500-page book no longer makes 500 engine calls
+let boundsCache = null, boundsEpoch = -1;
+let renderToken = 0;             // cancels a stale in-flight chunked build
 async function render(){
+  const tok = ++renderToken;
   const v = $("viewer");
   v.querySelectorAll(".stage").forEach(s=>s.remove());
   const wrap = $("pageWrap");
@@ -459,17 +489,30 @@ async function render(){
     const n = MDOC.countPages();
     const cssW = viewerCssWidth();
     lastViewerW = v.clientWidth;
+    const bc = (boundsEpoch === epoch && boundsCache && boundsCache.length === n)
+             ? boundsCache : new Array(n);
 
     for (let i=0;i<n;i++){
-      const page = MDOC.loadPage(i);
-      const [x0,y0,x1,y1] = page.getBounds();
-      page.destroy();
-      const wPt = x1-x0, hPt = y1-y0;
+      // long documents: yield every 80 pages so the UI never freezes
+      if (i && i % 80 === 0 && n > 80){
+        showSpin(true, "Preparing page "+i+" of "+n+"…");
+        await new Promise(r=>setTimeout(r,0));
+        if (tok !== renderToken) return;           // superseded by a newer render
+      }
+      let b = bc[i];
+      if (!b){
+        const page = MDOC.loadPage(i);
+        const [x0,y0,x1,y1] = page.getBounds();
+        page.destroy();
+        b = bc[i] = { w:x1-x0, h:y1-y0 };
+      }
+      const wPt = b.w, hPt = b.h;
       const dispW = Math.round(cssW), dispH = Math.round(cssW * (hPt/wPt));
       const stage = document.createElement("div");
       stage.className = "stage" + (mode ? " placing" : "");
       stage.dataset.page = i;
       stage.dataset.wpt = wPt; stage.dataset.hpt = hPt;
+      stage.dataset.dh = dispH;
       stage.style.width = dispW+"px";
       // tell the browser each page's size up-front so content-visibility:auto
       // can skip painting offscreen pages without the layout jumping
@@ -481,10 +524,12 @@ async function render(){
       attachOverlay(stage, i);
       wrap.appendChild(stage);
     }
+    boundsCache = bc; boundsEpoch = epoch;
+    if (tok !== renderToken) return;
     observeStages();
     $("meta").textContent = `${fileName} • ${n} pages • ${fmtKB(workingBytes.length)}`;
   } catch(e){ setStatus("Could not show this PDF: "+friendly(e), "err"); }
-  showSpin(false);
+  if (tok === renderToken) showSpin(false);
 }
 
 async function renderStage(stage, i){
@@ -493,9 +538,13 @@ async function renderStage(stage, i){
     const page = MDOC.loadPage(i);
     const [x0,y0,x1,y1] = page.getBounds();
     const wPt = x1-x0, hPt = y1-y0;
-    let scale = (cssW / wPt) * DPR;
+    // adaptive sharpness: very long documents (scanned books) render at 2×
+    // instead of 3× — indistinguishable while reading, half the work/memory
+    const bigDoc = MDOC.countPages() > 150;
+    let scale = (cssW / wPt) * (bigDoc ? Math.min(DPR,2) : DPR);
+    const maxPx = bigDoc ? 2600 : MAX_RENDER_PX;
     // clamp so neither dimension blows past the pixel cap (battery / memory)
-    const cap = MAX_RENDER_PX / Math.max(wPt*scale, hPt*scale);
+    const cap = maxPx / Math.max(wPt*scale, hPt*scale);
     if (cap < 1) scale *= cap;
     const pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false);
     const jpg = u8(pix.asJPEG(90));
@@ -767,7 +816,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.6";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v10.7";   // keep in step with sw.js APP_CACHE
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
