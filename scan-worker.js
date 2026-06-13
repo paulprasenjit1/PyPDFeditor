@@ -13,7 +13,7 @@ self.onmessage = (e)=>{
     const src = new Uint8ClampedArray(buf);
     const out = warpCore(src, w, h, quad, e.data.maxDim);
     if (filter === "bw") applyDocBW(out.data, out.w, out.h);
-    else colourEnhanceCore(out.data, out.w, out.h);
+    else applyAutoContrast(out.data, out.w, out.h);
     self.postMessage({ id, ok:true, buf:out.data.buffer, w:out.w, h:out.h }, [out.data.buffer]);
   } catch (err){
     self.postMessage({ id, ok:false, err:String((err && err.message) || err) });
@@ -73,7 +73,7 @@ function homographyTo(q,W,H){
 }
 
 // ---- output filters (raw RGBA array versions) ----
-function applyAutoContrastRaw(d,w,h){
+function applyAutoContrast(d,w,h){
   const n=w*h;
   const hist=new Uint32Array(256);
   for (let i=0;i<n;i++){ const j=i*4; hist[(d[j]*77+d[j+1]*151+d[j+2]*28)>>8]++; }
@@ -85,50 +85,6 @@ function applyAutoContrastRaw(d,w,h){
   const lut=new Uint8Array(256);
   for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round((t-lo)*255/(hi-lo))));
   for (let i=0;i<n;i++){ const j=i*4; d[j]=lut[d[j]]; d[j+1]=lut[d[j+1]]; d[j+2]=lut[d[j+2]]; }
-}
-// colour "magic scan" pipeline: lift shadows to flat white (like a flatbed),
-// stretch contrast, then sharpen text via a luminance unsharp mask.
-// IDENTICAL in app.js and scan-worker.js — parity is test-enforced.
-function colourEnhanceCore(d,w,h){
-  const n=w*h;
-  const f=8, mw=Math.max(1,Math.ceil(w/f)), mh=Math.max(1,Math.ceil(h/f));
-  const sR=new Float64Array(mw*mh), sG=new Float64Array(mw*mh), sB=new Float64Array(mw*mh), cnt=new Float64Array(mw*mh);
-  for (let y=0;y<h;y++){ const my=(y/f)|0;
-    for (let x=0;x<w;x++){
-      const mi=my*mw+((x/f)|0), j=(y*w+x)*4;
-      sR[mi]+=d[j]; sG[mi]+=d[j+1]; sB[mi]+=d[j+2]; cnt[mi]++;
-    } }
-  const mR=new Float32Array(mw*mh), mG=new Float32Array(mw*mh), mB=new Float32Array(mw*mh);
-  for (let i=0;i<mw*mh;i++){ const c=cnt[i]||1; mR[i]=sR[i]/c; mG[i]=sG[i]/c; mB[i]=sB[i]/c; }
-  boxBlurF(mR,mw,mh,6); boxBlurF(mR,mw,mh,6);
-  boxBlurF(mG,mw,mh,6); boxBlurF(mG,mw,mh,6);
-  boxBlurF(mB,mw,mh,6); boxBlurF(mB,mw,mh,6);
-  for (let y=0;y<h;y++){
-    const my=Math.min(mh-1,(y/f)|0);
-    for (let x=0;x<w;x++){
-      const mi=my*mw+Math.min(mw-1,(x/f)|0), j=(y*w+x)*4;
-      const gR=Math.min(2.4, Math.max(1, 245/Math.max(40,mR[mi])));
-      const gG=Math.min(2.4, Math.max(1, 245/Math.max(40,mG[mi])));
-      const gB=Math.min(2.4, Math.max(1, 245/Math.max(40,mB[mi])));
-      d[j]  =Math.min(255, d[j]*gR);
-      d[j+1]=Math.min(255, d[j+1]*gG);
-      d[j+2]=Math.min(255, d[j+2]*gB);
-    }
-  }
-  applyAutoContrastRaw(d,w,h);
-  const g2=new Float32Array(n);
-  for (let i=0;i<n;i++){ const j=i*4; g2[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
-  const bl=new Float32Array(g2);
-  boxBlurF(bl,w,h,1);
-  for (let i=0;i<n;i++){
-    const dlt=(g2[i]-bl[i])*0.6;
-    if (dlt>0.5 || dlt<-0.5){
-      const j=i*4;
-      d[j]  =Math.max(0,Math.min(255,d[j]+dlt));
-      d[j+1]=Math.max(0,Math.min(255,d[j+1]+dlt));
-      d[j+2]=Math.max(0,Math.min(255,d[j+2]+dlt));
-    }
-  }
 }
 function applyDocBW(d,w,h){
   const n=w*h;

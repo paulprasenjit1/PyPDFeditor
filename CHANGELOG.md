@@ -4,6 +4,30 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.16] — 2026-06-13 — Scanner reverted to v10.13 (drop "magic scan")
+
+Reverts the scanner to the last known-good build (v10.13). On real device
+photos the v10.14 "magic scan" colour pipeline produced a dark/odd colour
+cast and an over-processed look, and the v10.14/v10.15 detection and
+capture-resolution changes did not reliably help edge detection. Per
+request, the whole scan feature is rolled back rather than patched further.
+
+- **Colour pipeline restored** to the simple 2%-percentile auto-contrast
+  stretch (`applyAutoContrast`) in both `app.js` and `scan-worker.js`. The
+  per-channel shadow-lift gain + contrast stretch + unsharp mask that caused
+  the cast is gone. Clean, neutral scans again.
+- **Edge-detection thresholds restored** to v10.13 (frame-cover 0.92, fill
+  0.85, min size 0.12, outline coverage 0.80). If a page that fills the
+  whole frame isn't auto-outlined, the crop screen still lets you drag the
+  four corners by hand.
+- **Capture settings restored**: camera 2560×1440 (was 4K), Standard output
+  max 2000px / JPEG 0.85, photo-import downscale 2600px.
+- Only the scanner reverted. The v10.14–v10.15 toolbar polish (segmented
+  buttons, bigger targets, red ✕) and all other features are untouched.
+- Tests: 51 integration + 4 guard + 5 detection + 21 scenario = 81 checks,
+  all passing. (The v10.15 D6 "page fills 95% of frame" detection fixture is
+  removed with the threshold revert.)
+
 ## [v10.15] — 2026-06-12 — Scan colour fix + detection fix (v10.14 regressions)
 
 Two regressions from v10.14, both reported from device screenshots, both mine:
