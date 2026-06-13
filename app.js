@@ -11,7 +11,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.13";
+const APP_BUILD = "10.14";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -66,7 +66,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.13";
+const APP_VERSION = "10.14";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -815,7 +815,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.13";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v10.14";   // keep in step with sw.js APP_CACHE
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
@@ -1105,7 +1105,7 @@ let cropFit = null;           // image→display fit for the crop screen
 let cropFilter = "colour";    // "colour" | "bw"
 let scanQuality = "std";      // "std" | "small" — JPEG quality + output size
 try { if (localStorage.getItem("scanQuality")==="small") scanQuality="small"; } catch(e){}
-const SCAN_Q = { std:{ jpeg:0.85, maxDim:2000 }, small:{ jpeg:0.62, maxDim:1400 } };
+const SCAN_Q = { std:{ jpeg:0.88, maxDim:2400 }, small:{ jpeg:0.62, maxDim:1400 } };
 let dragIdx = -1;             // corner handle being dragged
 let autoCapture = false;      // auto-shutter when the quad holds steady
 let autoStable = 0;           // consecutive stable live-detect frames
@@ -1233,7 +1233,7 @@ async function startCamera(){
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
       audio:false,
-      video:{ facingMode:{ideal:"environment"}, width:{ideal:2560}, height:{ideal:1440} }
+      video:{ facingMode:{ideal:"environment"}, width:{ideal:3840}, height:{ideal:2160} }
     });
   } catch(e){ enterFallback(); return; }
   const v = $("scanVideo");
@@ -1394,7 +1394,7 @@ async function loadPhotoToCrop(f){
   showSpin(true,"Loading photo…");
   try {
     const im = await loadImage(await fileToDataURL(f));
-    const s = Math.min(1, 2600/Math.max(im.naturalWidth, im.naturalHeight));
+    const s = Math.min(1, 3200/Math.max(im.naturalWidth, im.naturalHeight));
     const c=document.createElement("canvas");
     c.width=Math.round(im.naturalWidth*s); c.height=Math.round(im.naturalHeight*s);
     c.getContext("2d").drawImage(im,0,0,c.width,c.height);
@@ -1557,7 +1557,7 @@ function renderCropPreview(){
   const ctx=ph.getContext("2d",{willReadFrequently:true});
   ctx.drawImage(capFrame,0,0,ph.width,ph.height);
   const im=ctx.getImageData(0,0,ph.width,ph.height);
-  if (cropFilter==="bw") applyDocBW(im); else applyAutoContrast(im);
+  if (cropFilter==="bw") applyDocBW(im); else colourEnhanceCore(im.data, im.width, im.height);
   ctx.putImageData(im,0,0);
 }
 
@@ -1596,7 +1596,7 @@ $("cropUse").onclick = async ()=>{
       sctx.getImageData(0,0,capFrame.width,capFrame.height), q, cropFilter, Q.maxDim);
     if (!out){                                 // fallback: same math, main thread
       out = warpPerspective(capFrame, q, Q.maxDim);
-      if (cropFilter==="bw") applyDocBW(out); else applyAutoContrast(out);
+      if (cropFilter==="bw") applyDocBW(out); else colourEnhanceCore(out.data, out.width, out.height);
     }
     const c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
     c.getContext("2d").putImageData(out,0,0);
@@ -1911,6 +1911,61 @@ function applyAutoContrast(im){
   const lut=new Uint8Array(256);
   for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round((t-lo)*255/(hi-lo))));
   for (let i=0;i<n;i++){ const j=i*4; d[j]=lut[d[j]]; d[j+1]=lut[d[j+1]]; d[j+2]=lut[d[j+2]]; }
+}
+function applyAutoContrastRaw(d,w,h){
+  const n=w*h;
+  const hist=new Uint32Array(256);
+  for (let i=0;i<n;i++){ const j=i*4; hist[(d[j]*77+d[j+1]*151+d[j+2]*28)>>8]++; }
+  let lo=0,hi=255,acc=0;
+  for (let t=0;t<256;t++){ acc+=hist[t]; if(acc>=n*0.02){ lo=t; break; } }
+  acc=0;
+  for (let t=255;t>=0;t--){ acc+=hist[t]; if(acc>=n*0.02){ hi=t; break; } }
+  if (hi-lo<30) return;
+  const lut=new Uint8Array(256);
+  for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round((t-lo)*255/(hi-lo))));
+  for (let i=0;i<n;i++){ const j=i*4; d[j]=lut[d[j]]; d[j+1]=lut[d[j+1]]; d[j+2]=lut[d[j+2]]; }
+}
+// colour "magic scan" pipeline: lift shadows to flat white (like a flatbed),
+// stretch contrast, then sharpen text via a luminance unsharp mask.
+// IDENTICAL in app.js and scan-worker.js — parity is test-enforced.
+function colourEnhanceCore(d,w,h){
+  const n=w*h;
+  const g=new Uint8Array(n);
+  for (let i=0;i<n;i++){ const j=i*4; g[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
+  const f=8, mw=Math.max(1,Math.ceil(w/f)), mh=Math.max(1,Math.ceil(h/f));
+  const sum=new Float64Array(mw*mh), cnt=new Float64Array(mw*mh);
+  for (let y=0;y<h;y++){ const my=(y/f)|0;
+    for (let x=0;x<w;x++){ const mi=my*mw+((x/f)|0); sum[mi]+=g[y*w+x]; cnt[mi]++; } }
+  const mean=new Float32Array(mw*mh);
+  for (let i=0;i<mw*mh;i++) mean[i]=cnt[i]?sum[i]/cnt[i]:255;
+  boxBlurF(mean,mw,mh,6); boxBlurF(mean,mw,mh,6);
+  for (let y=0;y<h;y++){
+    const my=Math.min(mh-1,(y/f)|0);
+    for (let x=0;x<w;x++){
+      const m=mean[my*mw+Math.min(mw-1,(x/f)|0)];
+      const gain=Math.min(2.2, Math.max(1, 235/Math.max(40,m)));
+      if (gain>1.01){
+        const j=(y*w+x)*4;
+        d[j]  =Math.min(255, d[j]*gain);
+        d[j+1]=Math.min(255, d[j+1]*gain);
+        d[j+2]=Math.min(255, d[j+2]*gain);
+      }
+    }
+  }
+  applyAutoContrastRaw(d,w,h);
+  const g2=new Float32Array(n);
+  for (let i=0;i<n;i++){ const j=i*4; g2[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
+  const bl=new Float32Array(g2);
+  boxBlurF(bl,w,h,1);
+  for (let i=0;i<n;i++){
+    const dlt=(g2[i]-bl[i])*0.7;
+    if (dlt>0.5 || dlt<-0.5){
+      const j=i*4;
+      d[j]  =Math.max(0,Math.min(255,d[j]+dlt));
+      d[j+1]=Math.max(0,Math.min(255,d[j+1]+dlt));
+      d[j+2]=Math.max(0,Math.min(255,d[j+2]+dlt));
+    }
+  }
 }
 // B&W: adaptive threshold against a wide blurred illumination map — clean white
 // paper, crisp dark text, shadows evened out (the classic scanned-document look).

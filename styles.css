@@ -14,6 +14,7 @@
           --scrolltrack:#e3e6ee; --scrollthumb:#9db8ec; --shadow:rgba(30,40,70,.25); }
 }
 * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html { background:var(--panel); }
 html,body { margin:0; height:100%; }
 body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
        background:var(--bg); color:var(--txt); display:flex; flex-direction:column;
@@ -47,22 +48,25 @@ button:disabled { opacity:.4; }
    the buttons step aside and the whole toolbar fits with no scrolling.
    Tablets/desktop (≥600px) keep the buttons. */
 @media (max-width: 599px){ .zoomctl { display:none; } }
-.toolbar button { padding:8px 12px; }
+.toolbar button { padding:10px 14px; font-size:14px; }
 /* the middle actions live in one quiet segmented group that stretches to
    absorb the leftover width — calm, even, no scattered pills */
 .seg { display:flex; flex:1 1 auto; min-width:0; align-items:center;
-       background:var(--panel2); border:1px solid var(--line); border-radius:9px; padding:2px; }
-.toolbar .seg .segbtn { flex:1; min-width:0; background:transparent; border:0; color:var(--txt);
-       padding:6px 4px; font-size:13px; border-radius:7px; overflow:hidden; text-overflow:ellipsis; }
+       background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:2px; }
+/* flex-basis auto: spare width is shared on TOP of each label's natural
+   width, so "Compress" never truncates while "Edit" floats in slack */
+.toolbar .seg .segbtn { flex:1 1 auto; min-width:0; white-space:nowrap;
+       background:transparent; border:0; color:var(--txt);
+       padding:8px 5px; font-size:14px; border-radius:8px; }
 .seg .segbtn:not(:first-child) { border-left:1px solid var(--line); border-radius:0; }
 .seg .segbtn:first-child { border-radius:7px 0 0 7px; }
 .seg .segbtn:last-child { border-radius:0 7px 7px 0; }
 .toolbar .seg .segbtn:active:not(:disabled) { background:var(--panel); transform:none; filter:none; }
 .toolbar .seg .segbtn.on { background:var(--ok); color:#fff; }
 .toolbar .seg .segbtn:disabled { opacity:.35; }
-/* quiet borderless close (✕) beside Save */
-.toolbar .xbtn { background:transparent; border:0; color:var(--muted);
-       font-size:15px; line-height:1; padding:8px 6px; }
+/* borderless close (✕) beside Save — red so its meaning is unmistakable */
+.toolbar .xbtn { background:transparent; border:0; color:var(--err);
+       font-size:16px; line-height:1; padding:8px 6px; }
 /* touch-action pan-x pan-y: one/two-finger panning stays native, but the
    browser's own pinch-zoom is suppressed so the app can pinch-zoom the PAGES */
 .viewer { flex:1; overflow:auto; padding:18px 12px calc(18px + env(safe-area-inset-bottom));
@@ -106,8 +110,8 @@ button:disabled { opacity:.4; }
 .welcome .big { width:min(280px,80vw); padding:16px 18px; font-size:17px; border-radius:15px;
         box-shadow:0 8px 24px rgba(43,99,235,.30); }
 .welcome .big.ghost { border-width:1.5px; box-shadow:none; }
-.status { font-size:12px; padding:8px 14px calc(8px + env(safe-area-inset-bottom));
-          border-top:1px solid var(--line); background:var(--panel); color:var(--muted); min-height:18px; }
+.status { font-size:12px; padding:9px 14px calc(6px + env(safe-area-inset-bottom));
+          border-top:1px solid var(--line); background:var(--panel); color:var(--muted); min-height:16px; }
 .status.ok { color:var(--ok); font-weight:600; background:rgba(63,185,80,.07); }
 .status.err { color:var(--err); font-weight:600; background:rgba(248,81,73,.08); }
 .status.warn { color:var(--warn); font-weight:600; background:rgba(210,153,34,.08); }

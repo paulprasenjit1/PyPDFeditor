@@ -4,6 +4,29 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.14] — 2026-06-12 — Toolbar polish + Adobe-grade scan quality
+
+### Toolbar (from screenshot feedback)
+- Segment buttons now share space in proportion to their labels — "Compress"
+  never truncates, "Edit"/"Undo" no longer swim in slack.
+- All toolbar buttons are bigger (14px text, taller targets), as mocked.
+- The ✕ close button is now red, so its meaning is unmistakable.
+- The stray pale block beneath the status banner now blends into the banner
+  (page root background matched) and the banner itself is slightly slimmer.
+
+### Scanner quality (Colour mode)
+- **Capture at up to 4K** (was 2.5K) — more pixels into the perspective
+  correction means visibly sharper text.
+- **New "magic scan" colour pipeline**, applied identically in the worker and
+  the fallback (parity test-enforced): local illumination correction lifts
+  shadows so paper comes out flat white like a flatbed scan, then contrast
+  stretch, then a luminance unsharp mask crisps text edges — the Adobe Scan
+  look. The crop-screen preview shows exactly the final result.
+- **Standard quality output raised**: max page 2000→2400px, JPEG 85→88.
+  "Small file" unchanged. Black & white pipeline unchanged (already binary-crisp).
+- Verified: app/worker byte parity on the new pipeline, shadow-gradient
+  fixture lifts 145→240 background, all 81 existing checks pass.
+
 ## [v10.13] — 2026-06-12 — Segmented toolbar
 
 - The toolbar is now three calm zones: **Open** (primary, left) · an iOS-style
