@@ -11,7 +11,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.14";
+const APP_BUILD = "10.15";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -66,7 +66,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.14";
+const APP_VERSION = "10.15";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -815,7 +815,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.14";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v10.15";   // keep in step with sw.js APP_CACHE
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
@@ -1712,11 +1712,11 @@ function bestRegionQuad(mask,w,h){
       if (y>0   && !seen[i-w] && mask[i-w]){seen[i-w]=1; stack[top++]=i-w;}
       if (y<h-1 && !seen[i+w] && mask[i+w]){seen[i+w]=1; stack[top++]=i+w;}
     }
-    if (area < n*0.12 || area <= bestArea) continue;
+    if (area < n*0.10 || area <= bestArea) continue;
     const q=[tl,tr,br,blc];
     const qa=quadArea(q);
-    if (qa > n*0.92) continue;            // whole frame is not a document
-    if (area < qa*0.85) continue;         // poorly filled: L-shape, frame, etc.
+    if (qa > n*0.97) continue;            // whole frame is not a document
+    if (area < qa*0.80) continue;         // poorly filled: L-shape, frame, etc.
     if (!quadIsSane(q,w,h)) continue;
     // the quad's outline must follow the region's actual boundary — an
     // L-shape's extreme-corner quad cuts across empty space and fails this
@@ -1729,7 +1729,7 @@ function bestRegionQuad(mask,w,h){
             !mask[i-1]||!mask[i+1]||!mask[i-w]||!mask[i+w]) boundary[i]=1;
       }
     }
-    if (outlineCoverage(q,boundary,w,h) < 0.80) continue;
+    if (outlineCoverage(q,boundary,w,h) < 0.76) continue;
     best=q; bestArea=area;
   }
   return best;
@@ -1793,11 +1793,11 @@ function gradientQuad(bl,g,w,h){
       if (y<h-1 && !seen[i+w] && dil[i+w]){seen[i+w]=1; stack[top++]=i+w;}
     }
     const span=(maxX-minX)*(maxY-minY);
-    if (span < n*0.15 || span <= bestSpan) continue;
+    if (span < n*0.12 || span <= bestSpan) continue;
     const q=[tl,tr,br,blc];
-    if (quadArea(q) > n*0.92) continue;
+    if (quadArea(q) > n*0.97) continue;
     if (!quadIsSane(q,w,h)) continue;
-    if (outlineCoverage(q,dil,w,h) < 0.80) continue;   // outline must really exist
+    if (outlineCoverage(q,dil,w,h) < 0.76) continue;   // outline must really exist
     best=q; bestSpan=span;
   }
   return best;
@@ -1930,26 +1930,28 @@ function applyAutoContrastRaw(d,w,h){
 // IDENTICAL in app.js and scan-worker.js — parity is test-enforced.
 function colourEnhanceCore(d,w,h){
   const n=w*h;
-  const g=new Uint8Array(n);
-  for (let i=0;i<n;i++){ const j=i*4; g[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
   const f=8, mw=Math.max(1,Math.ceil(w/f)), mh=Math.max(1,Math.ceil(h/f));
-  const sum=new Float64Array(mw*mh), cnt=new Float64Array(mw*mh);
+  const sR=new Float64Array(mw*mh), sG=new Float64Array(mw*mh), sB=new Float64Array(mw*mh), cnt=new Float64Array(mw*mh);
   for (let y=0;y<h;y++){ const my=(y/f)|0;
-    for (let x=0;x<w;x++){ const mi=my*mw+((x/f)|0); sum[mi]+=g[y*w+x]; cnt[mi]++; } }
-  const mean=new Float32Array(mw*mh);
-  for (let i=0;i<mw*mh;i++) mean[i]=cnt[i]?sum[i]/cnt[i]:255;
-  boxBlurF(mean,mw,mh,6); boxBlurF(mean,mw,mh,6);
+    for (let x=0;x<w;x++){
+      const mi=my*mw+((x/f)|0), j=(y*w+x)*4;
+      sR[mi]+=d[j]; sG[mi]+=d[j+1]; sB[mi]+=d[j+2]; cnt[mi]++;
+    } }
+  const mR=new Float32Array(mw*mh), mG=new Float32Array(mw*mh), mB=new Float32Array(mw*mh);
+  for (let i=0;i<mw*mh;i++){ const c=cnt[i]||1; mR[i]=sR[i]/c; mG[i]=sG[i]/c; mB[i]=sB[i]/c; }
+  boxBlurF(mR,mw,mh,6); boxBlurF(mR,mw,mh,6);
+  boxBlurF(mG,mw,mh,6); boxBlurF(mG,mw,mh,6);
+  boxBlurF(mB,mw,mh,6); boxBlurF(mB,mw,mh,6);
   for (let y=0;y<h;y++){
     const my=Math.min(mh-1,(y/f)|0);
     for (let x=0;x<w;x++){
-      const m=mean[my*mw+Math.min(mw-1,(x/f)|0)];
-      const gain=Math.min(2.2, Math.max(1, 235/Math.max(40,m)));
-      if (gain>1.01){
-        const j=(y*w+x)*4;
-        d[j]  =Math.min(255, d[j]*gain);
-        d[j+1]=Math.min(255, d[j+1]*gain);
-        d[j+2]=Math.min(255, d[j+2]*gain);
-      }
+      const mi=my*mw+Math.min(mw-1,(x/f)|0), j=(y*w+x)*4;
+      const gR=Math.min(2.4, Math.max(1, 245/Math.max(40,mR[mi])));
+      const gG=Math.min(2.4, Math.max(1, 245/Math.max(40,mG[mi])));
+      const gB=Math.min(2.4, Math.max(1, 245/Math.max(40,mB[mi])));
+      d[j]  =Math.min(255, d[j]*gR);
+      d[j+1]=Math.min(255, d[j+1]*gG);
+      d[j+2]=Math.min(255, d[j+2]*gB);
     }
   }
   applyAutoContrastRaw(d,w,h);
@@ -1958,7 +1960,7 @@ function colourEnhanceCore(d,w,h){
   const bl=new Float32Array(g2);
   boxBlurF(bl,w,h,1);
   for (let i=0;i<n;i++){
-    const dlt=(g2[i]-bl[i])*0.7;
+    const dlt=(g2[i]-bl[i])*0.6;
     if (dlt>0.5 || dlt<-0.5){
       const j=i*4;
       d[j]  =Math.max(0,Math.min(255,d[j]+dlt));

@@ -4,6 +4,28 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.15] — 2026-06-12 — Scan colour fix + detection fix (v10.14 regressions)
+
+Two regressions from v10.14, both reported from device screenshots, both mine:
+
+- **Yellow scans fixed.** The v10.14 shadow-lift multiplied all colour channels
+  by one brightness-based gain — under warm indoor light that preserves (even
+  amplifies) the yellow cast. The pipeline now white-balances **per channel**
+  locally, so paper lands on neutral white regardless of the room's lighting.
+  Fixture-proven: a warm-lit page (235/212/172) comes out at exactly
+  255/255/255 across both lit and shadowed regions, with text untouched, and
+  the worker/fallback remain byte-identical.
+- **Green detection outline restored when the page fills the frame.** The
+  detector rejected any candidate covering >92% of the frame — but filling the
+  frame with the page is precisely how people scan. The limit is now 97%, and
+  the shape thresholds were carefully loosened for real-world pages (boundary
+  coverage 0.80→0.76, fill 0.85→0.80, minimum size 12%→10%) while the L-shape
+  and blank/wall rejection fixtures still pass. New fixture: a page filling
+  95% of the frame must detect (it does, at 1px).
+
+All suites green: 51 integration + 4 guard + 6 detection + 21 scenario + 4
+colour-pipeline checks.
+
 ## [v10.14] — 2026-06-12 — Toolbar polish + Adobe-grade scan quality
 
 ### Toolbar (from screenshot feedback)

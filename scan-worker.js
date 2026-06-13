@@ -91,26 +91,28 @@ function applyAutoContrastRaw(d,w,h){
 // IDENTICAL in app.js and scan-worker.js — parity is test-enforced.
 function colourEnhanceCore(d,w,h){
   const n=w*h;
-  const g=new Uint8Array(n);
-  for (let i=0;i<n;i++){ const j=i*4; g[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
   const f=8, mw=Math.max(1,Math.ceil(w/f)), mh=Math.max(1,Math.ceil(h/f));
-  const sum=new Float64Array(mw*mh), cnt=new Float64Array(mw*mh);
+  const sR=new Float64Array(mw*mh), sG=new Float64Array(mw*mh), sB=new Float64Array(mw*mh), cnt=new Float64Array(mw*mh);
   for (let y=0;y<h;y++){ const my=(y/f)|0;
-    for (let x=0;x<w;x++){ const mi=my*mw+((x/f)|0); sum[mi]+=g[y*w+x]; cnt[mi]++; } }
-  const mean=new Float32Array(mw*mh);
-  for (let i=0;i<mw*mh;i++) mean[i]=cnt[i]?sum[i]/cnt[i]:255;
-  boxBlurF(mean,mw,mh,6); boxBlurF(mean,mw,mh,6);
+    for (let x=0;x<w;x++){
+      const mi=my*mw+((x/f)|0), j=(y*w+x)*4;
+      sR[mi]+=d[j]; sG[mi]+=d[j+1]; sB[mi]+=d[j+2]; cnt[mi]++;
+    } }
+  const mR=new Float32Array(mw*mh), mG=new Float32Array(mw*mh), mB=new Float32Array(mw*mh);
+  for (let i=0;i<mw*mh;i++){ const c=cnt[i]||1; mR[i]=sR[i]/c; mG[i]=sG[i]/c; mB[i]=sB[i]/c; }
+  boxBlurF(mR,mw,mh,6); boxBlurF(mR,mw,mh,6);
+  boxBlurF(mG,mw,mh,6); boxBlurF(mG,mw,mh,6);
+  boxBlurF(mB,mw,mh,6); boxBlurF(mB,mw,mh,6);
   for (let y=0;y<h;y++){
     const my=Math.min(mh-1,(y/f)|0);
     for (let x=0;x<w;x++){
-      const m=mean[my*mw+Math.min(mw-1,(x/f)|0)];
-      const gain=Math.min(2.2, Math.max(1, 235/Math.max(40,m)));
-      if (gain>1.01){
-        const j=(y*w+x)*4;
-        d[j]  =Math.min(255, d[j]*gain);
-        d[j+1]=Math.min(255, d[j+1]*gain);
-        d[j+2]=Math.min(255, d[j+2]*gain);
-      }
+      const mi=my*mw+Math.min(mw-1,(x/f)|0), j=(y*w+x)*4;
+      const gR=Math.min(2.4, Math.max(1, 245/Math.max(40,mR[mi])));
+      const gG=Math.min(2.4, Math.max(1, 245/Math.max(40,mG[mi])));
+      const gB=Math.min(2.4, Math.max(1, 245/Math.max(40,mB[mi])));
+      d[j]  =Math.min(255, d[j]*gR);
+      d[j+1]=Math.min(255, d[j+1]*gG);
+      d[j+2]=Math.min(255, d[j+2]*gB);
     }
   }
   applyAutoContrastRaw(d,w,h);
@@ -119,7 +121,7 @@ function colourEnhanceCore(d,w,h){
   const bl=new Float32Array(g2);
   boxBlurF(bl,w,h,1);
   for (let i=0;i<n;i++){
-    const dlt=(g2[i]-bl[i])*0.7;
+    const dlt=(g2[i]-bl[i])*0.6;
     if (dlt>0.5 || dlt<-0.5){
       const j=i*4;
       d[j]  =Math.max(0,Math.min(255,d[j]+dlt));
