@@ -4,6 +4,31 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.17] — 2026-06-13 — Clean-scan white balance (cast fix, done safely)
+
+Builds on the v10.16 revert. The restored original pipeline was neutral but had
+no white balance, so warm/indoor-lit pages came out pale and yellow. This adds
+white balance back — but global and conservative, explicitly avoiding what made
+v10.14 fail.
+
+- **Global grey-world white balance over the paper.** The paper is the bright
+  majority of a document, so the colour of all pixels above the 60th-percentile
+  luminance is averaged (the estimated paper/light colour) and each channel is
+  scaled so that average lands on a neutral 245. Because it is area-averaged, a
+  small neutral element — a plastic address window, a white label — can't skew
+  it, and the warm cast on the paper is removed. One gain per channel for the
+  whole image (gain capped at 2.2×), so it physically cannot create the local
+  dark blotches v10.14 did. No unsharp mask, so no harsh halos.
+- Then the unchanged gentle 2nd–98th percentile luminance stretch deepens text.
+- Worker and main-thread copies are byte-identical (parity test-enforced).
+- New `tests/colour-tests.mjs`: a warm page (235/212/172) comes out neutral
+  white with dark ink; a neutral page stays neutral and is not darkened; a dim
+  page brightens (never darkens — the v10.14 failure mode); plus the two parity
+  checks. Proven visually on a synthetic warm, unevenly-lit page: cast roughly
+  halved on a deliberately pessimistic fixture, no dark patches anywhere.
+- Tests: 51 integration + 4 guard + 5 detection + 21 scenario + 5 colour = 86
+  checks, all passing.
+
 ## [v10.16] — 2026-06-13 — Scanner reverted to v10.13 (drop "magic scan")
 
 Reverts the scanner to the last known-good build (v10.13). On real device
