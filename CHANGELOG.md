@@ -4,6 +4,46 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.20] — 2026-06-13 — Scanner trimmed + brighter, crisper colour
+
+From device feedback on a real scan. Scoped entirely to the scanner.
+
+### Removed (as requested)
+- **Black & white mode** is gone — the scanner is colour-only. The B&W button,
+  its filter code, and `applyDocBW` are removed from `app.js` and the worker.
+- **Photos** and **Auto** buttons removed from the camera bar (and the
+  auto-capture logic). **Torch stays.** The native-camera fallback (used only
+  when the live camera can't start) is unaffected.
+
+### Colour quality (brightness + crispness)
+- New gentle `crispenAndLift` step after white balance: a 1px luminance unsharp
+  mask to sharpen letters and a small midtone brightness gain so the captured
+  still (which iOS often grabs darker/softer than the live preview) reads bright
+  and sharp. Deliberately mild — NOT the v10.14 magic-scan that caused halos.
+  Measured on a text capture: edge sharpness +65%, brightness +5, no wash-out.
+  Identical in worker and main thread (parity test-enforced).
+- **Standard output raised** to max 2560px / JPEG 0.92 (was 2000 / 0.85) for
+  sharper letters. "Small file" unchanged.
+- Re: the earlier 2.5K→4K question — capture was already reverted to 2560×1440
+  back in v10.16, so 4K is NOT in this build and is not the cause of dark/soft
+  scans. The real levers are a tight crop and the new sharpening, both addressed.
+
+### Detection
+- Edge detection now runs at higher working resolution (live 220→300px,
+  captured still 300→520px) for finer, more reliable edges on low-contrast
+  documents (e.g. a white envelope on a pale desk). Thresholds unchanged — the
+  past threshold-loosening (v10.15) proved unhelpful and was reverted.
+- Reminder: detection is for flat documents; a tight crop is what makes letters
+  sharp (more pixels land on the page). If it ever misses, the corners are
+  draggable.
+
+### Tests
+- `tests/colour-tests.mjs` updated (white balance ×3, crispen+lift ×2, parity
+  ×3); harness B&W step replaced with a quality-toggle check; `guard-tests.mjs`
+  made path-portable and its mismatch simulation no longer depends on removed
+  elements. Suite: 51 integration + 4 guard + 5 detection + 21 scenario + 8
+  colour = 89 checks, all passing.
+
 ## [v10.19] — 2026-06-13 — Colour white balance back + softened B&W
 
 Two scoped scanner fixes from device screenshots. Nothing outside the scanner

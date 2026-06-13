@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="10.19">
+<html lang="en" data-build="10.20">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -80,16 +80,12 @@
 <input type="file" id="sigInput" accept="image/*">
 <!-- fallback when getUserMedia is unavailable/denied: native camera capture -->
 <input type="file" id="camInput" accept="image/*" capture="environment">
-<!-- photo-library import into the scan pipeline (no capture attr = picker) -->
-<input type="file" id="photoInput" accept="image/*">
 
 <!-- ---------------- document scanner: camera screen ---------------- -->
 <div class="scanui" id="scanCam">
   <div class="scantop">
     <span class="ttl">Scan document</span>
     <span class="tools">
-      <button class="ghost mini" id="photoBtn">Photos</button>
-      <button class="ghost mini" id="autoBtn" aria-label="Automatic capture">Auto</button>
       <button class="ghost mini" id="torchBtn" aria-label="Camera torch" hidden>Torch</button>
       <span class="pgct" id="scanCount"></span>
     </span>
@@ -127,8 +123,6 @@
     </svg>
   </div>
   <div class="scanfilters">
-    <button id="fltColour" class="on">Colour</button>
-    <button id="fltBw">Black &amp; white</button>
     <button id="qStd" class="on">Standard</button>
     <button id="qSmall">Small file</button>
   </div>

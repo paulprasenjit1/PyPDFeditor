@@ -11,12 +11,12 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.19";
+const APP_BUILD = "10.20";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
-    "scanCam","scanShot","scanCancel","scanDone","scanThumbs","photoBtn","autoBtn","torchBtn","photoInput",
-    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","fltColour","fltBw","qStd","qSmall","cropRetake","cropUse"];
+    "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
+    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","cropRetake","cropUse"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
     try { sessionStorage.removeItem("pypdf-healed"); } catch(e){}
@@ -66,7 +66,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.19";
+const APP_VERSION = "10.20";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -815,7 +815,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.19";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v10.20";   // keep in step with sw.js APP_CACHE
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
@@ -1102,15 +1102,12 @@ let scanPages = [];           // confirmed pages: [{bytes:Uint8Array(JPEG), w, h
 let capFrame = null;          // canvas holding the full-res captured photo
 let cropQuad = null;          // 4 corners in image px, order TL,TR,BR,BL
 let cropFit = null;           // image→display fit for the crop screen
-let cropFilter = "colour";    // "colour" | "bw"
+const cropFilter = "colour";  // scanner is colour-only (B&W removed in v10.20)
 let scanQuality = "std";      // "std" | "small" — JPEG quality + output size
 try { if (localStorage.getItem("scanQuality")==="small") scanQuality="small"; } catch(e){}
-const SCAN_Q = { std:{ jpeg:0.85, maxDim:2000 }, small:{ jpeg:0.62, maxDim:1400 } };
+const SCAN_Q = { std:{ jpeg:0.92, maxDim:2560 }, small:{ jpeg:0.62, maxDim:1400 } };
 let dragIdx = -1;             // corner handle being dragged
-let autoCapture = false;      // auto-shutter when the quad holds steady
-let autoStable = 0;           // consecutive stable live-detect frames
 let torchOn = false;          // rear-camera torch state
-try { autoCapture = localStorage.getItem("scanAuto")==="1"; } catch(e){}
 
 // ---- off-thread processing (scan-worker.js) ----
 // Full-res warp + filter run in a Web Worker so the UI never freezes.
@@ -1248,8 +1245,6 @@ async function startCamera(){
     $("torchBtn").hidden = !caps.torch;
     $("torchBtn").classList.remove("on");
   } catch(e){ $("torchBtn").hidden = true; }
-  $("autoBtn").classList.toggle("on", autoCapture);
-  autoStable = 0;
   startLiveDetect();
 }
 async function toggleTorch(){
@@ -1263,14 +1258,6 @@ async function toggleTorch(){
               setStatus("Torch not available.","warn"); }
 }
 $("torchBtn").onclick = toggleTorch;
-$("autoBtn").onclick = ()=>{
-  autoCapture = !autoCapture;
-  autoStable = 0;
-  $("autoBtn").classList.toggle("on", autoCapture);
-  try { localStorage.setItem("scanAuto", autoCapture?"1":"0"); } catch(e){}
-  setStatus(autoCapture ? "Auto-capture on: hold the camera steady over a document."
-                        : "Auto-capture off.","ok");
-};
 function stopCamera(){
   if (scanLive){ clearInterval(scanLive); scanLive = 0; }
   if (scanStream){ for (const t of scanStream.getTracks()){ try{ t.stop(); }catch(e){} } scanStream = null; }
@@ -1330,19 +1317,13 @@ function startLiveDetect(){
       if (!v.videoWidth || document.hidden) return;
       const raw = detectOnVideoFrame(v);
       const q = smoothQuad(raw);
-      // auto-capture: fire after ~5 stable frames (~1.5s) on a decent-sized quad
-      if (autoCapture && q && raw && quadClose(q, raw) &&
-          quadArea(q) > 0.18 * v.videoWidth * v.videoHeight){
-        autoStable++;
-        if (autoStable >= 5){ autoStable = 0; drawLiveQuad(q, 0); captureFrame(); return; }
-      } else autoStable = 0;
-      drawLiveQuad(q, autoStable);
+      drawLiveQuad(q, 0);
     } catch(e){ /* one bad camera frame must not kill the preview loop */ }
   }, 300);
 }
 function detectOnVideoFrame(v){
   const vw=v.videoWidth, vh=v.videoHeight;
-  const s = 220/Math.max(vw,vh);
+  const s = 300/Math.max(vw,vh);   // v10.20: higher working res = finer edges
   const sw=Math.max(2,Math.round(vw*s)), sh=Math.max(2,Math.round(vh*s));
   const ctx = scratch(sw,sh).getContext("2d",{willReadFrequently:true});
   ctx.drawImage(v,0,0,sw,sh);
@@ -1408,20 +1389,12 @@ $("camInput").onchange = e=>{
   const f=e.target.files[0]; e.target.value="";
   if (f) loadPhotoToCrop(f);
 };
-// photo-library import (Photos button on the scanner)
-$("photoBtn").onclick = ()=> $("photoInput").click();
-$("photoInput").onchange = e=>{
-  const f=e.target.files[0]; e.target.value="";
-  if (!f) return;
-  stopCamera();                               // photo replaces the live frame
-  loadPhotoToCrop(f);
-};
 
 // ---- adjust / crop screen ----
 function enterCrop(frame){
   capFrame = frame;
   // auto-detect edges on a downscale; fall back to a 6% inset rectangle
-  const s = 300/Math.max(frame.width, frame.height);
+  const s = 520/Math.max(frame.width, frame.height);  // v10.20: finer edges for low-contrast docs
   const sw=Math.max(2,Math.round(frame.width*s)), sh=Math.max(2,Math.round(frame.height*s));
   const ctx = scratch(sw,sh).getContext("2d",{willReadFrequently:true});
   ctx.drawImage(frame,0,0,sw,sh);
@@ -1517,16 +1490,6 @@ function hideLoupe(){ $("loupe").hidden=true; }
   }
 })();
 
-// remember the user's preferred filter across sessions
-try {
-  if (localStorage.getItem("scanFilter")==="bw"){
-    cropFilter="bw";
-    $("fltColour").classList.remove("on");
-    $("fltBw").classList.add("on");
-  }
-} catch(e){}
-$("fltColour").onclick = ()=> setScanFilter("colour");
-$("fltBw").onclick     = ()=> setScanFilter("bw");
 // output size: Standard (sharp) or Small file (lighter PDFs)
 try { if (scanQuality==="small"){ $("qStd").classList.remove("on"); $("qSmall").classList.add("on"); } } catch(e){}
 $("qStd").onclick   = ()=> setScanQuality("std");
@@ -1538,15 +1501,6 @@ function setScanQuality(q){
   $("qStd").classList.toggle("on", q==="std");
   $("qSmall").classList.toggle("on", q==="small");
 }
-function setScanFilter(f){
-  if (cropFilter===f) return;
-  cropFilter=f;
-  try { localStorage.setItem("scanFilter", f); } catch(e){}
-  $("fltColour").classList.toggle("on", f==="colour");
-  $("fltBw").classList.toggle("on", f==="bw");
-  // live preview: re-render the photo with the chosen filter immediately
-  if ($("scanCrop").classList.contains("show")) renderCropPreview();
-}
 // draw the captured photo onto the crop canvas with the active filter applied,
 // so Colour / B&W switch what you see instantly (preview runs at display
 // resolution — the final page is processed at full resolution on "Use page")
@@ -1557,7 +1511,7 @@ function renderCropPreview(){
   const ctx=ph.getContext("2d",{willReadFrequently:true});
   ctx.drawImage(capFrame,0,0,ph.width,ph.height);
   const im=ctx.getImageData(0,0,ph.width,ph.height);
-  if (cropFilter==="bw") applyDocBW(im); else colourBalanceCore(im.data, im.width, im.height);
+  colourBalanceCore(im.data, im.width, im.height);
   ctx.putImageData(im,0,0);
 }
 
@@ -1596,7 +1550,7 @@ $("cropUse").onclick = async ()=>{
       sctx.getImageData(0,0,capFrame.width,capFrame.height), q, cropFilter, Q.maxDim);
     if (!out){                                 // fallback: same math, main thread
       out = warpPerspective(capFrame, q, Q.maxDim);
-      if (cropFilter==="bw") applyDocBW(out); else colourBalanceCore(out.data, out.width, out.height);
+      colourBalanceCore(out.data, out.width, out.height);
     }
     const c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
     c.getContext("2d").putImageData(out,0,0);
@@ -1952,52 +1906,26 @@ function colourBalanceCore(d,w,h){
     }
   }
   applyAutoContrast(d,w,h);
+  crispenAndLift(d,w,h);
 }
-// B&W: adaptive threshold against a wide blurred illumination map — clean white
-// paper, crisp dark text, shadows evened out (the classic scanned-document look).
-// v8.1: much wider local window (no blotching / hollow strokes), a floor on the
-// illumination map so dark figures don't invert, a steeper sigmoid, and hard
-// white/black clipping so paper is pure white and text pure black.
-function applyDocBW(im){
-  const w=im.width, h=im.height, d=im.data, n=w*h;
-  const g=new Uint8Array(n);
-  let gsum=0;
-  for (let i=0;i<n;i++){ const j=i*4; const v=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; g[i]=v; gsum+=v; }
-  const gmean=gsum/n;
-  // illumination map: mean at 1/8 scale, blurred wide (two passes ≈ ±100px full-res)
-  const f=8, mw=Math.max(1,Math.ceil(w/f)), mh=Math.max(1,Math.ceil(h/f));
-  const sum=new Float64Array(mw*mh), cnt=new Float64Array(mw*mh);
-  for (let y=0;y<h;y++){ const my=(y/f)|0;
-    for (let x=0;x<w;x++){ const mi=my*mw+((x/f)|0); sum[mi]+=g[y*w+x]; cnt[mi]++; } }
-  const mean=new Float32Array(mw*mh);
-  for (let i=0;i<mw*mh;i++) mean[i]=cnt[i]?sum[i]/cnt[i]:255;
-  boxBlurF(mean,mw,mh,6); boxBlurF(mean,mw,mh,6);
-  // floor the map: inside large dark areas (photos, heavy ink) the local mean
-  // collapses and would flip content to white — never let it drop below ~55%
-  // of the global brightness
-  const floor=Math.max(60, gmean*0.55);
-  for (let i=0;i<mw*mh;i++) if (mean[i]<floor) mean[i]=floor;
-  // steep sigmoid + clip: paper → pure white, text → pure black
-  const sig=new Uint8Array(511);
-  for (let i=0;i<511;i++){
-    let v=Math.round(255/(1+Math.exp(-(i-255)/5)));
-    if (v>=238) v=255; else if (v<=22) v=0;
-    sig[i]=v;
-  }
-  // Softened B&W (v10.19): blend the crisp adaptive binary with a little of the
-  // real grayscale so flat / 3-D / imperfect captures keep their structure
-  // instead of collapsing to a white void. Flat text pages stay clean (paper
-  // light, text dark); everything else keeps its tone. Weights sum to 256.
-  for (let y=0;y<h;y++){
-    const my=Math.min(mh-1,(y/f)|0);
-    for (let x=0;x<w;x++){
-      const gi=g[y*w+x];
-      const m=mean[my*mw+Math.min(mw-1,(x/f)|0)];
-      const t=m-(10+m*0.06);              // offset scales with illumination
-      const bw=sig[Math.max(0,Math.min(510,Math.round(gi-t)+255))];
-      const o=(bw*184+gi*72)>>8;
-      const j=(y*w+x)*4; d[j]=d[j+1]=d[j+2]=o;
-    }
+// v10.20: gentle crispness + brightness so the captured still (often darker and
+// softer than the live camera) reads sharp and bright like a flatbed scan.
+// Deliberately mild — a 1px luminance unsharp mask and a small midtone gain —
+// NOT the v10.14 magic-scan (wide map + strong unsharp) that caused halos.
+// IDENTICAL in app.js and scan-worker.js — parity is test-enforced.
+function crispenAndLift(d,w,h){
+  const n=w*h;
+  const lum=new Float32Array(n);
+  for (let i=0;i<n;i++){ const j=i*4; lum[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
+  const blur=new Float32Array(lum);
+  boxBlurF(blur,w,h,1);
+  const SH=0.55, LIFT=1.06;            // unsharp amount; midtone brightness gain
+  for (let i=0;i<n;i++){
+    const add=(lum[i]-blur[i])*SH;     // high-pass detail (edges/letters)
+    const j=i*4;
+    d[j]  =Math.max(0,Math.min(255, d[j]  *LIFT+add));
+    d[j+1]=Math.max(0,Math.min(255, d[j+1]*LIFT+add));
+    d[j+2]=Math.max(0,Math.min(255, d[j+2]*LIFT+add));
   }
 }
 function boxBlurF(a,w,h,r){

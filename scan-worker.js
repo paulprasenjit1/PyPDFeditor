@@ -2,7 +2,8 @@
 /* scan-worker.js — heavy pixel work for the document scanner, off the main
    thread so the UI never freezes during "Use page".
    Receives: { id, buf (RGBA ArrayBuffer), w, h, quad (4 corners TL,TR,BR,BL
-   in image px), filter ("colour"|"bw") } with the buffer transferred.
+   in image px), filter ("colour" — colour-only since v10.20) } with the buffer
+   transferred.
    Returns:  { id, ok:true, buf, w, h } (transferred) or { id, ok:false, err }.
    The math here must stay IDENTICAL to the fallback copies in app.js —
    the build is validated by comparing outputs byte-for-byte. */
@@ -12,8 +13,7 @@ self.onmessage = (e)=>{
   try {
     const src = new Uint8ClampedArray(buf);
     const out = warpCore(src, w, h, quad, e.data.maxDim);
-    if (filter === "bw") applyDocBW(out.data, out.w, out.h);
-    else colourBalanceCore(out.data, out.w, out.h);
+    colourBalanceCore(out.data, out.w, out.h);   // colour-only since v10.20
     self.postMessage({ id, ok:true, buf:out.data.buffer, w:out.w, h:out.h }, [out.data.buffer]);
   } catch (err){
     self.postMessage({ id, ok:false, err:String((err && err.message) || err) });
@@ -124,42 +124,26 @@ function colourBalanceCore(d,w,h){
     }
   }
   applyAutoContrast(d,w,h);
+  crispenAndLift(d,w,h);
 }
-function applyDocBW(d,w,h){
+// v10.20: gentle crispness + brightness so the captured still (often darker and
+// softer than the live camera) reads sharp and bright like a flatbed scan.
+// Deliberately mild — a 1px luminance unsharp mask and a small midtone gain —
+// NOT the v10.14 magic-scan (wide map + strong unsharp) that caused halos.
+// IDENTICAL in app.js and scan-worker.js — parity is test-enforced.
+function crispenAndLift(d,w,h){
   const n=w*h;
-  const g=new Uint8Array(n);
-  let gsum=0;
-  for (let i=0;i<n;i++){ const j=i*4; const v=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; g[i]=v; gsum+=v; }
-  const gmean=gsum/n;
-  const f=8, mw=Math.max(1,Math.ceil(w/f)), mh=Math.max(1,Math.ceil(h/f));
-  const sum=new Float64Array(mw*mh), cnt=new Float64Array(mw*mh);
-  for (let y=0;y<h;y++){ const my=(y/f)|0;
-    for (let x=0;x<w;x++){ const mi=my*mw+((x/f)|0); sum[mi]+=g[y*w+x]; cnt[mi]++; } }
-  const mean=new Float32Array(mw*mh);
-  for (let i=0;i<mw*mh;i++) mean[i]=cnt[i]?sum[i]/cnt[i]:255;
-  boxBlurF(mean,mw,mh,6); boxBlurF(mean,mw,mh,6);
-  const floor=Math.max(60, gmean*0.55);
-  for (let i=0;i<mw*mh;i++) if (mean[i]<floor) mean[i]=floor;
-  const sig=new Uint8Array(511);
-  for (let i=0;i<511;i++){
-    let v=Math.round(255/(1+Math.exp(-(i-255)/5)));
-    if (v>=238) v=255; else if (v<=22) v=0;
-    sig[i]=v;
-  }
-  // Softened B&W (v10.19): blend the crisp adaptive binary with a little of the
-  // real grayscale so flat / 3-D / imperfect captures keep their structure
-  // instead of collapsing to a white void. Flat text pages stay clean (paper
-  // light, text dark); everything else keeps its tone. Weights sum to 256.
-  for (let y=0;y<h;y++){
-    const my=Math.min(mh-1,(y/f)|0);
-    for (let x=0;x<w;x++){
-      const gi=g[y*w+x];
-      const m=mean[my*mw+Math.min(mw-1,(x/f)|0)];
-      const t=m-(10+m*0.06);
-      const bw=sig[Math.max(0,Math.min(510,Math.round(gi-t)+255))];
-      const o=(bw*184+gi*72)>>8;
-      const j=(y*w+x)*4; d[j]=d[j+1]=d[j+2]=o;
-    }
+  const lum=new Float32Array(n);
+  for (let i=0;i<n;i++){ const j=i*4; lum[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
+  const blur=new Float32Array(lum);
+  boxBlurF(blur,w,h,1);
+  const SH=0.55, LIFT=1.06;            // unsharp amount; midtone brightness gain
+  for (let i=0;i<n;i++){
+    const add=(lum[i]-blur[i])*SH;     // high-pass detail (edges/letters)
+    const j=i*4;
+    d[j]  =Math.max(0,Math.min(255, d[j]  *LIFT+add));
+    d[j+1]=Math.max(0,Math.min(255, d[j+1]*LIFT+add));
+    d[j+2]=Math.max(0,Math.min(255, d[j+2]*LIFT+add));
   }
 }
 function boxBlurF(a,w,h,r){
