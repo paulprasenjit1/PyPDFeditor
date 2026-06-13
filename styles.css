@@ -23,9 +23,8 @@ header { display:flex; align-items:center; gap:10px; padding:max(8px,env(safe-ar
 header h1 { font-size:15px; margin:0; font-weight:600; }
 header .meta { color:var(--muted); font-size:11px; margin-left:auto; text-align:right; max-width:55%;
                overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.toolbar { display:flex; flex-wrap:nowrap; gap:4px; padding:8px 6px; background:var(--panel);
-           border-bottom:1px solid var(--line); align-items:center; overflow-x:auto;
-           justify-content:space-between; }
+.toolbar { display:flex; flex-wrap:nowrap; gap:8px; padding:7px 8px; background:var(--panel);
+           border-bottom:1px solid var(--line); align-items:center; overflow-x:auto; }
 .toolbar > * { flex:0 0 auto; white-space:nowrap; }
 .toolbar::-webkit-scrollbar { height:6px; }
 .toolbar::-webkit-scrollbar-thumb { background:var(--line); border-radius:3px; }
@@ -48,10 +47,22 @@ button:disabled { opacity:.4; }
    the buttons step aside and the whole toolbar fits with no scrolling.
    Tablets/desktop (≥600px) keep the buttons. */
 @media (max-width: 599px){ .zoomctl { display:none; } }
-/* tighter toolbar buttons so all actions sit comfortably in one row */
-.toolbar button { padding:8px 8px; }
-/* compact close (✕) button beside Save */
-.toolbar .xbtn { padding:8px 9px; font-size:13px; line-height:1; color:var(--muted); }
+.toolbar button { padding:8px 12px; }
+/* the middle actions live in one quiet segmented group that stretches to
+   absorb the leftover width — calm, even, no scattered pills */
+.seg { display:flex; flex:1 1 auto; min-width:0; align-items:center;
+       background:var(--panel2); border:1px solid var(--line); border-radius:9px; padding:2px; }
+.toolbar .seg .segbtn { flex:1; min-width:0; background:transparent; border:0; color:var(--txt);
+       padding:6px 4px; font-size:13px; border-radius:7px; overflow:hidden; text-overflow:ellipsis; }
+.seg .segbtn:not(:first-child) { border-left:1px solid var(--line); border-radius:0; }
+.seg .segbtn:first-child { border-radius:7px 0 0 7px; }
+.seg .segbtn:last-child { border-radius:0 7px 7px 0; }
+.toolbar .seg .segbtn:active:not(:disabled) { background:var(--panel); transform:none; filter:none; }
+.toolbar .seg .segbtn.on { background:var(--ok); color:#fff; }
+.toolbar .seg .segbtn:disabled { opacity:.35; }
+/* quiet borderless close (✕) beside Save */
+.toolbar .xbtn { background:transparent; border:0; color:var(--muted);
+       font-size:15px; line-height:1; padding:8px 6px; }
 /* touch-action pan-x pan-y: one/two-finger panning stays native, but the
    browser's own pinch-zoom is suppressed so the app can pinch-zoom the PAGES */
 .viewer { flex:1; overflow:auto; padding:18px 12px calc(18px + env(safe-area-inset-bottom));

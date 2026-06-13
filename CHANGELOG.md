@@ -4,6 +4,16 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.13] — 2026-06-12 — Segmented toolbar
+
+- The toolbar is now three calm zones: **Open** (primary, left) · an iOS-style
+  **segmented group** holding Edit / Undo / Compress / More (one soft container
+  with hairline dividers that stretches to fill the row — no more uneven gaps
+  or scattered pills) · **Save + ✕** (right; the ✕ is now a quiet borderless
+  glyph). Disabled actions dim inside the segment instead of looking like
+  washed-out buttons. The ▾ caret is gone from More.
+- Same heights, same tap targets, both themes. CSS + markup only.
+
 ## [v10.12] — 2026-06-12 — Close in the toolbar
 
 - A compact **✕ (close)** button now sits right after Save in the toolbar —

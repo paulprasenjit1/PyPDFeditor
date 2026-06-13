@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="10.12">
+<html lang="en" data-build="10.13">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -44,17 +44,19 @@
 
 <div class="toolbar" id="toolbar">
   <button id="openBtn" disabled>Open</button>
-  <button class="ghost" id="textBtn" disabled>Edit</button>
-  <button class="ghost" id="undoBtn" disabled>Undo</button>
+  <div class="seg">
+    <button class="segbtn" id="textBtn" disabled>Edit</button>
+    <button class="segbtn" id="undoBtn" disabled>Undo</button>
+    <button class="segbtn" id="compBtn" disabled>Compress</button>
+    <button class="segbtn" id="moreBtn" disabled>More</button>
+  </div>
   <div class="zoomctl">
     <button class="ghost" id="zoomOut" aria-label="Zoom out" disabled>−</button>
     <span class="zlbl" id="zoomLbl">100%</span>
     <button class="ghost" id="zoomIn" aria-label="Zoom in" disabled>+</button>
   </div>
-  <button class="ghost" id="compBtn" disabled>Compress</button>
-  <button class="ghost" id="moreBtn" disabled>More ▾</button>
   <button id="saveBtn" disabled>Save</button>
-  <button class="ghost xbtn" id="closeBtn" aria-label="Close this PDF" disabled>✕</button>
+  <button class="xbtn" id="closeBtn" aria-label="Close this PDF" disabled>✕</button>
 </div>
 
 <div class="viewer" id="viewer">
