@@ -4,6 +4,27 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.18] — 2026-06-13 — Scanner reverted to the v10.12 pipeline
+
+Per request, the scanner is rolled back to the v10.12 version. The colour
+scan code (capture settings, edge detection, perspective warp, and the plain
+2nd–98th percentile auto-contrast filter) is byte-for-byte the v10.9–v10.13
+scanner — which IS the v10.12 scanner, since v10.10–v10.12 were toolbar-only
+releases that never touched scan code (verified by diffing the backups).
+
+- The v10.17 white-balance step (`colourBalanceCore`) is removed from both
+  `app.js` and `scan-worker.js`. Colour scans use the plain auto-contrast
+  filter again, exactly as in v10.12.
+- `app.js` and `scan-worker.js` now match the v10.13 backup byte-for-byte
+  (apart from the version tag). Nothing else was touched: the toolbar, themes,
+  reading view, compress, merge, organise, save/close and every other feature
+  are exactly as they were.
+- `tests/colour-tests.mjs` updated to match: it now verifies the plain
+  pipeline's worker/main-thread byte parity, that auto-contrast stretches the
+  tonal range, and that the white-balance code is fully gone.
+- Tests: 51 integration + 4 guard + 5 detection + 21 scenario + 3 colour = 84
+  checks, all passing.
+
 ## [v10.17] — 2026-06-13 — Clean-scan white balance (cast fix, done safely)
 
 Builds on the v10.16 revert. The restored original pipeline was neutral but had
