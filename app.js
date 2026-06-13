@@ -11,7 +11,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.18";
+const APP_BUILD = "10.19";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -66,7 +66,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.18";
+const APP_VERSION = "10.19";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -815,7 +815,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.18";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v10.19";   // keep in step with sw.js APP_CACHE
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
@@ -1557,7 +1557,7 @@ function renderCropPreview(){
   const ctx=ph.getContext("2d",{willReadFrequently:true});
   ctx.drawImage(capFrame,0,0,ph.width,ph.height);
   const im=ctx.getImageData(0,0,ph.width,ph.height);
-  if (cropFilter==="bw") applyDocBW(im); else applyAutoContrast(im);
+  if (cropFilter==="bw") applyDocBW(im); else colourBalanceCore(im.data, im.width, im.height);
   ctx.putImageData(im,0,0);
 }
 
@@ -1596,7 +1596,7 @@ $("cropUse").onclick = async ()=>{
       sctx.getImageData(0,0,capFrame.width,capFrame.height), q, cropFilter, Q.maxDim);
     if (!out){                                 // fallback: same math, main thread
       out = warpPerspective(capFrame, q, Q.maxDim);
-      if (cropFilter==="bw") applyDocBW(out); else applyAutoContrast(out);
+      if (cropFilter==="bw") applyDocBW(out); else colourBalanceCore(out.data, out.width, out.height);
     }
     const c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
     c.getContext("2d").putImageData(out,0,0);
@@ -1899,18 +1899,59 @@ function homographyTo(q,W,H){
 
 // ---- output filters ----
 // Colour: gentle auto-contrast (stretch the 2nd–98th luminance percentiles).
-function applyAutoContrast(im){
-  const d=im.data, n=im.width*im.height;
+// Raw RGBA version — IDENTICAL to scan-worker.js so worker/main-thread output
+// is byte-for-byte equal (parity is test-enforced).
+function applyAutoContrast(d,w,h){
+  const n=w*h;
   const hist=new Uint32Array(256);
   for (let i=0;i<n;i++){ const j=i*4; hist[(d[j]*77+d[j+1]*151+d[j+2]*28)>>8]++; }
   let lo=0,hi=255,acc=0;
   for (let t=0;t<256;t++){ acc+=hist[t]; if(acc>=n*0.02){ lo=t; break; } }
   acc=0;
   for (let t=255;t>=0;t--){ acc+=hist[t]; if(acc>=n*0.02){ hi=t; break; } }
-  if (hi-lo<30) return;                       // already well spread / blank page
+  if (hi-lo<30) return;
   const lut=new Uint8Array(256);
   for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round((t-lo)*255/(hi-lo))));
   for (let i=0;i<n;i++){ const j=i*4; d[j]=lut[d[j]]; d[j+1]=lut[d[j+1]]; d[j+2]=lut[d[j+2]]; }
+}
+// Colour "clean scan" pipeline (v10.17). Two safe, GLOBAL steps — deliberately
+// NOT the v10.14 "magic scan" (that used a per-tile illumination map + unsharp
+// mask, which produced local dark blotches and harsh halos):
+//   1) Global white balance by "grey-world over the paper". The paper is the
+//      bright majority of a document, so we average the colour of all pixels
+//      above the 60th-percentile luminance (estimated paper/light colour) and
+//      scale each channel so that average lands on a neutral 245. Because it is
+//      AREA-AVERAGED, a small neutral element (a plastic address window, a white
+//      label) can't skew it — the warm/green room cast on the paper is removed.
+//      One gain per channel for the whole image, so no local dark patches.
+//   2) The long-standing gentle 2nd–98th percentile luminance stretch, to
+//      deepen text. No sharpening.
+// IDENTICAL in app.js and scan-worker.js — parity is test-enforced.
+function colourBalanceCore(d,w,h){
+  const n=w*h;
+  const lum=new Uint8Array(n), hl=new Uint32Array(256);
+  for (let i=0;i<n;i++){ const j=i*4; const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; lum[i]=L; hl[L]++; }
+  let acc=0, thr=0;
+  for (let t=0;t<256;t++){ acc+=hl[t]; if (acc>=n*0.60){ thr=t; break; } }
+  if (thr<120) thr=120;                        // never mistake a dark scene for paper
+  let sR=0,sG=0,sB=0,c=0;
+  for (let i=0;i<n;i++){ if (lum[i]>=thr){ const j=i*4; sR+=d[j]; sG+=d[j+1]; sB+=d[j+2]; c++; } }
+  if (c>0){
+    const TGT=245, GMAX=2.2;
+    const gr=Math.min(GMAX, Math.max(1, TGT/Math.max(1,sR/c)));
+    const gg=Math.min(GMAX, Math.max(1, TGT/Math.max(1,sG/c)));
+    const gb=Math.min(GMAX, Math.max(1, TGT/Math.max(1,sB/c)));
+    if (gr>1.001 || gg>1.001 || gb>1.001){
+      const lr=new Uint8Array(256), lg=new Uint8Array(256), lb=new Uint8Array(256);
+      for (let t=0;t<256;t++){
+        lr[t]=Math.min(255,Math.round(t*gr));
+        lg[t]=Math.min(255,Math.round(t*gg));
+        lb[t]=Math.min(255,Math.round(t*gb));
+      }
+      for (let i=0;i<n;i++){ const j=i*4; d[j]=lr[d[j]]; d[j+1]=lg[d[j+1]]; d[j+2]=lb[d[j+2]]; }
+    }
+  }
+  applyAutoContrast(d,w,h);
 }
 // B&W: adaptive threshold against a wide blurred illumination map — clean white
 // paper, crisp dark text, shadows evened out (the classic scanned-document look).
@@ -1940,15 +1981,21 @@ function applyDocBW(im){
   const sig=new Uint8Array(511);
   for (let i=0;i<511;i++){
     let v=Math.round(255/(1+Math.exp(-(i-255)/5)));
-    if (v>=215) v=255; else if (v<=40) v=0;
+    if (v>=238) v=255; else if (v<=22) v=0;
     sig[i]=v;
   }
+  // Softened B&W (v10.19): blend the crisp adaptive binary with a little of the
+  // real grayscale so flat / 3-D / imperfect captures keep their structure
+  // instead of collapsing to a white void. Flat text pages stay clean (paper
+  // light, text dark); everything else keeps its tone. Weights sum to 256.
   for (let y=0;y<h;y++){
     const my=Math.min(mh-1,(y/f)|0);
     for (let x=0;x<w;x++){
+      const gi=g[y*w+x];
       const m=mean[my*mw+Math.min(mw-1,(x/f)|0)];
       const t=m-(10+m*0.06);              // offset scales with illumination
-      const o=sig[Math.max(0,Math.min(510,Math.round(g[y*w+x]-t)+255))];
+      const bw=sig[Math.max(0,Math.min(510,Math.round(gi-t)+255))];
+      const o=(bw*184+gi*72)>>8;
       const j=(y*w+x)*4; d[j]=d[j+1]=d[j+2]=o;
     }
   }

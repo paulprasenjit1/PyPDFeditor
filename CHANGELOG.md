@@ -4,6 +4,38 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.19] — 2026-06-13 — Colour white balance back + softened B&W
+
+Two scoped scanner fixes from device screenshots. Nothing outside the scanner
+was touched.
+
+### Colour
+- The gentle global white balance (`colourBalanceCore`, first shipped v10.17)
+  is back on the Colour path: grey-world over the bright paper region lifts each
+  channel to neutral, removing the warm/yellow indoor cast, then the unchanged
+  gentle contrast stretch deepens text. Global per-channel gain (capped 2.2×),
+  so it can't blotch; no sharpening, so no halos.
+
+### Black & white
+- **B&W no longer blows out.** The old filter was a hard adaptive binariser:
+  on a flat text page it gives the clean scanned look, but on a 3-D or imperfect
+  capture (a shelf, a wall, an object) it forced everything bright to pure white
+  and everything else to black smears — an almost-blank result. It now blends
+  the crisp adaptive binary with a little of the real grayscale (≈0.72 / 0.28,
+  integer weights summing to 256), so flat text pages stay clean (paper light,
+  text dark) while non-flat scenes keep their tonal structure instead of
+  collapsing to a white void. The hard clip was also relaxed (215/40 → 238/22).
+  Proven on fixtures: a flat text page still reads paper≈248 / text≈15, and a
+  gradient-wall + object scene now retains ~90 tonal levels instead of ~2.
+
+### Parity / tests
+- Worker and main-thread copies verified identical: `applyAutoContrast` and
+  `colourBalanceCore` are source-identical, and `applyDocBW` (which differs only
+  by call signature) produces byte-identical output across the two.
+- `tests/colour-tests.mjs` now covers white balance (3), B&W softening (2), and
+  parity (3). Suite total: 51 integration + 4 guard + 5 detection + 21 scenario
+  + 8 colour = 89 checks, all passing.
+
 ## [v10.18] — 2026-06-13 — Scanner reverted to the v10.12 pipeline
 
 Per request, the scanner is rolled back to the v10.12 version. The colour

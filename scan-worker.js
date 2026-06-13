@@ -13,7 +13,7 @@ self.onmessage = (e)=>{
     const src = new Uint8ClampedArray(buf);
     const out = warpCore(src, w, h, quad, e.data.maxDim);
     if (filter === "bw") applyDocBW(out.data, out.w, out.h);
-    else applyAutoContrast(out.data, out.w, out.h);
+    else colourBalanceCore(out.data, out.w, out.h);
     self.postMessage({ id, ok:true, buf:out.data.buffer, w:out.w, h:out.h }, [out.data.buffer]);
   } catch (err){
     self.postMessage({ id, ok:false, err:String((err && err.message) || err) });
@@ -86,6 +86,45 @@ function applyAutoContrast(d,w,h){
   for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round((t-lo)*255/(hi-lo))));
   for (let i=0;i<n;i++){ const j=i*4; d[j]=lut[d[j]]; d[j+1]=lut[d[j+1]]; d[j+2]=lut[d[j+2]]; }
 }
+// Colour "clean scan" pipeline (v10.17). Two safe, GLOBAL steps — deliberately
+// NOT the v10.14 "magic scan" (that used a per-tile illumination map + unsharp
+// mask, which produced local dark blotches and harsh halos):
+//   1) Global white balance by "grey-world over the paper". The paper is the
+//      bright majority of a document, so we average the colour of all pixels
+//      above the 60th-percentile luminance (estimated paper/light colour) and
+//      scale each channel so that average lands on a neutral 245. Because it is
+//      AREA-AVERAGED, a small neutral element (a plastic address window, a white
+//      label) can't skew it — the warm/green room cast on the paper is removed.
+//      One gain per channel for the whole image, so no local dark patches.
+//   2) The long-standing gentle 2nd–98th percentile luminance stretch, to
+//      deepen text. No sharpening.
+// IDENTICAL in app.js and scan-worker.js — parity is test-enforced.
+function colourBalanceCore(d,w,h){
+  const n=w*h;
+  const lum=new Uint8Array(n), hl=new Uint32Array(256);
+  for (let i=0;i<n;i++){ const j=i*4; const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; lum[i]=L; hl[L]++; }
+  let acc=0, thr=0;
+  for (let t=0;t<256;t++){ acc+=hl[t]; if (acc>=n*0.60){ thr=t; break; } }
+  if (thr<120) thr=120;                        // never mistake a dark scene for paper
+  let sR=0,sG=0,sB=0,c=0;
+  for (let i=0;i<n;i++){ if (lum[i]>=thr){ const j=i*4; sR+=d[j]; sG+=d[j+1]; sB+=d[j+2]; c++; } }
+  if (c>0){
+    const TGT=245, GMAX=2.2;
+    const gr=Math.min(GMAX, Math.max(1, TGT/Math.max(1,sR/c)));
+    const gg=Math.min(GMAX, Math.max(1, TGT/Math.max(1,sG/c)));
+    const gb=Math.min(GMAX, Math.max(1, TGT/Math.max(1,sB/c)));
+    if (gr>1.001 || gg>1.001 || gb>1.001){
+      const lr=new Uint8Array(256), lg=new Uint8Array(256), lb=new Uint8Array(256);
+      for (let t=0;t<256;t++){
+        lr[t]=Math.min(255,Math.round(t*gr));
+        lg[t]=Math.min(255,Math.round(t*gg));
+        lb[t]=Math.min(255,Math.round(t*gb));
+      }
+      for (let i=0;i<n;i++){ const j=i*4; d[j]=lr[d[j]]; d[j+1]=lg[d[j+1]]; d[j+2]=lb[d[j+2]]; }
+    }
+  }
+  applyAutoContrast(d,w,h);
+}
 function applyDocBW(d,w,h){
   const n=w*h;
   const g=new Uint8Array(n);
@@ -104,15 +143,21 @@ function applyDocBW(d,w,h){
   const sig=new Uint8Array(511);
   for (let i=0;i<511;i++){
     let v=Math.round(255/(1+Math.exp(-(i-255)/5)));
-    if (v>=215) v=255; else if (v<=40) v=0;
+    if (v>=238) v=255; else if (v<=22) v=0;
     sig[i]=v;
   }
+  // Softened B&W (v10.19): blend the crisp adaptive binary with a little of the
+  // real grayscale so flat / 3-D / imperfect captures keep their structure
+  // instead of collapsing to a white void. Flat text pages stay clean (paper
+  // light, text dark); everything else keeps its tone. Weights sum to 256.
   for (let y=0;y<h;y++){
     const my=Math.min(mh-1,(y/f)|0);
     for (let x=0;x<w;x++){
+      const gi=g[y*w+x];
       const m=mean[my*mw+Math.min(mw-1,(x/f)|0)];
       const t=m-(10+m*0.06);
-      const o=sig[Math.max(0,Math.min(510,Math.round(g[y*w+x]-t)+255))];
+      const bw=sig[Math.max(0,Math.min(510,Math.round(gi-t)+255))];
+      const o=(bw*184+gi*72)>>8;
       const j=(y*w+x)*4; d[j]=d[j+1]=d[j+2]=o;
     }
   }
