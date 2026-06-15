@@ -4,6 +4,34 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.21] — 2026-06-13 — Sticky sheet buttons + higher export/scan quality
+
+### Pages / Copy pages / Combine — Apply & Cancel always visible
+- On long documents the Apply/Cancel (and "Save as new PDF" / "Combine")
+  buttons used to sit at the very bottom of the list, so a 500-page PDF meant
+  scrolling forever to reach them. They now sit in a **sticky footer** pinned
+  to the bottom of the sheet — the page list scrolls behind them, the actions
+  are always on screen. CSS + markup only; all button IDs unchanged.
+
+### Quality (analysed first; capture kept at 2.5K per request)
+- **PDF → picture (PNG)** now renders at ~400 dpi (was ~300) for crisper text,
+  with the long side capped at 4096px so huge/image-sized pages can't exhaust
+  memory. (The embedded scan is the real ceiling — rendering past it only
+  upsamples, so the cap also avoids needless bloat.)
+- **Scan Standard** JPEG quality 0.92 → 0.95 (less compression loss; small size
+  increase). "Small file" unchanged.
+- **Viewer** page render JPEG 90 → 92 — slightly crisper on-screen text.
+- **Image → PDF** was already lossless (it embeds your original JPEG/PNG bytes
+  at full resolution) — left unchanged.
+- Camera capture stays at 2560×1440 by choice. Note for later: that is the
+  detail ceiling for camera scans; raising it to 4K is the only way to push
+  scan/PNG sharpness further, and 4K does not cause the old darkness (that was
+  the removed pipeline).
+
+### Tests
+- 51 integration + 4 guard + 5 detection + 21 scenario + 8 colour = 89 checks,
+  all passing. `guard-tests.mjs` is now path-portable.
+
 ## [v10.20] — 2026-06-13 — Scanner trimmed + brighter, crisper colour
 
 From device feedback on a real scan. Scoped entirely to the scanner.

@@ -11,7 +11,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.20";
+const APP_BUILD = "10.21";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -66,7 +66,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.20";
+const APP_VERSION = "10.21";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -548,7 +548,7 @@ async function renderStage(stage, i){
     const cap = maxPx / Math.max(wPt*scale, hPt*scale);
     if (cap < 1) scale *= cap;
     const pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false);
-    const jpg = u8(pix.asJPEG(90));
+    const jpg = u8(pix.asJPEG(92));
     pix.destroy(); page.destroy();
     const url = URL.createObjectURL(new Blob([jpg], {type:"image/jpeg"}));
     liveURLs.add(url);
@@ -815,7 +815,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.20";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v10.21";   // keep in step with sw.js APP_CACHE
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
@@ -925,8 +925,10 @@ async function openOrganise(){
     $("sheet").innerHTML = h`<h3>Pages</h3>
       <p class="hint">Move pages with ↑ ↓. ⟳ turns a page a quarter. Nothing changes until you tap Apply.</p>
       <div id="orgRows">${raw(rows)}</div>
-      <div class="row mt12"><button class="full" id="orgApply">Apply</button></div>
-      <div class="row"><button class="ghost full" id="orgCancel">Cancel</button></div>`;
+      <div class="sheetfoot">
+        <div class="row"><button class="full" id="orgApply">Apply</button></div>
+        <div class="row"><button class="ghost full" id="orgCancel">Cancel</button></div>
+      </div>`;
     $("sheet").querySelectorAll("[data-up]").forEach(b=>b.onclick=()=>{const p=+b.dataset.up; if(p>0){[order[p-1],order[p]]=[order[p],order[p-1]]; draw();}});
     $("sheet").querySelectorAll("[data-dn]").forEach(b=>b.onclick=()=>{const p=+b.dataset.dn; if(p<order.length-1){[order[p+1],order[p]]=[order[p],order[p+1]]; draw();}});
     $("sheet").querySelectorAll("[data-rot]").forEach(b=>b.onclick=()=>{const o=+b.dataset.rot; rot[o]=((rot[o]||0)+90)%360; draw();});
@@ -978,8 +980,10 @@ function openExtract(){
     $("sheet").innerHTML = h`<h3>Copy pages → new PDF</h3>
       <p class="hint">Pick the pages you want. They are copied into a brand-new PDF file — this document stays exactly as it is.</p>
       <div>${raw(rows)}</div>
-      <div class="row mt12"><button class="full" id="exGo" ${raw(sel.size?"":"disabled")}>Save ${sel.size||0} page${sel.size===1?"":"s"} as a new PDF</button></div>
-      <div class="row"><button class="ghost full" id="exCancel">Cancel</button></div>`;
+      <div class="sheetfoot">
+        <div class="row"><button class="full" id="exGo" ${raw(sel.size?"":"disabled")}>Save ${sel.size||0} page${sel.size===1?"":"s"} as a new PDF</button></div>
+        <div class="row"><button class="ghost full" id="exCancel">Cancel</button></div>
+      </div>`;
     $("sheet").querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>{ const i=+b.dataset.t; sel.has(i)?sel.delete(i):sel.add(i); draw(); });
     $("exGo").onclick = async ()=>{ closeSheet(); await doExtract([...sel].sort((a,b)=>a-b)); };
     $("exCancel").onclick = closeSheet;
@@ -1027,8 +1031,10 @@ function openMergeOrder(){
     $("sheet").innerHTML = h`<h3>Combine — choose the order</h3>
       <p class="hint">Pages are combined top to bottom — PDF 1 first, then PDF 2, and so on. Reorder with ↑ ↓.</p>
       ${raw(rows)}
-      <div class="row mt12"><button class="full" id="mgApply">Combine in this order</button></div>
-      <div class="row"><button class="ghost full" id="mgCancel">Cancel</button></div>`;
+      <div class="sheetfoot">
+        <div class="row"><button class="full" id="mgApply">Combine in this order</button></div>
+        <div class="row"><button class="ghost full" id="mgCancel">Cancel</button></div>
+      </div>`;
     $("sheet").querySelectorAll("[data-up]").forEach(b=>b.onclick=()=>{const p=+b.dataset.up; if(p>0){[mergeSources[p-1],mergeSources[p]]=[mergeSources[p],mergeSources[p-1]]; draw();}});
     $("sheet").querySelectorAll("[data-dn]").forEach(b=>b.onclick=()=>{const p=+b.dataset.dn; if(p<mergeSources.length-1){[mergeSources[p+1],mergeSources[p]]=[mergeSources[p],mergeSources[p+1]]; draw();}});
     $("mgApply").onclick = ()=>{ const s=mergeSources.slice(); closeSheet(); doMerge(s); };
@@ -1105,7 +1111,7 @@ let cropFit = null;           // image→display fit for the crop screen
 const cropFilter = "colour";  // scanner is colour-only (B&W removed in v10.20)
 let scanQuality = "std";      // "std" | "small" — JPEG quality + output size
 try { if (localStorage.getItem("scanQuality")==="small") scanQuality="small"; } catch(e){}
-const SCAN_Q = { std:{ jpeg:0.92, maxDim:2560 }, small:{ jpeg:0.62, maxDim:1400 } };
+const SCAN_Q = { std:{ jpeg:0.95, maxDim:2560 }, small:{ jpeg:0.62, maxDim:1400 } };
 let dragIdx = -1;             // corner handle being dragged
 let torchOn = false;          // rear-camera torch state
 
@@ -1958,7 +1964,14 @@ async function exportVisiblePng(){
   showSpin(true,"Rendering page "+(target+1)+"…");
   try {
     const page = MDOC.loadPage(target);
-    const pix = page.toPixmap(mupdf.Matrix.scale(150/72*2,150/72*2), mupdf.ColorSpace.DeviceRGB, false); // ~300 dpi
+    // v10.21: render at ~400 dpi (was ~300) for crisper text, but cap the long
+    // side at 4096px so huge / image-sized pages don't exhaust memory. The
+    // embedded scan is the real ceiling — rendering past it only upsamples.
+    const [bx0,by0,bx1,by1] = page.getBounds();
+    const longPt = Math.max(bx1-bx0, by1-by0) || 1;
+    let pscale = 400/72;
+    if (longPt*pscale > 4096) pscale = 4096/longPt;
+    const pix = page.toPixmap(mupdf.Matrix.scale(pscale,pscale), mupdf.ColorSpace.DeviceRGB, false);
     const png = u8(pix.asPNG()); pix.destroy(); page.destroy();
     downloadBlob(new Blob([png],{type:"image/png"}), baseName()+"_p"+(target+1)+".png");
     setStatus("Picture ready — pick where to keep it.","ok");
