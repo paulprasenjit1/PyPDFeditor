@@ -4,6 +4,15 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.22] — 2026-06-15 — Slimmer status banner (more page on screen)
+
+- The bottom status banner is trimmed to give the page more room: font 12→11px,
+  top padding 9→4px, bottom padding 6→2px (plus the home-indicator safe area,
+  which stays so the text never hides under the indicator), and the 16px
+  min-height removed. Reclaims ~12px of vertical space for the document view.
+  CSS-only (`.status`) — no behaviour or layout logic changed; all 89 checks
+  still pass.
+
 ## [v10.21] — 2026-06-13 — Sticky sheet buttons + higher export/scan quality
 
 ### Pages / Copy pages / Combine — Apply & Cancel always visible
