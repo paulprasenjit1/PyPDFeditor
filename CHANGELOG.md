@@ -4,6 +4,14 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.23] — 2026-06-15 — Status banner trimmed further (9px)
+
+- Status banner font 11→9px with tighter padding (top 2px, bottom 1px + the
+  home-indicator safe area). Reclaims ~12px of page height versus v10.22's
+  11px. Confirmed against an on-screen mock before applying. CSS-only
+  (`.status`); 89 checks still pass. (9px is the practical floor — still legible
+  on a 3× iPhone screen.)
+
 ## [v10.22] — 2026-06-15 — Slimmer status banner (more page on screen)
 
 - The bottom status banner is trimmed to give the page more room: font 12→11px,
