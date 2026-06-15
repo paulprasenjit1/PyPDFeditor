@@ -11,7 +11,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.23";
+const APP_BUILD = "10.24";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -66,7 +66,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.23";
+const APP_VERSION = "10.24";
 const BUILD_DATETIME = "11 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
@@ -175,11 +175,16 @@ function confirmDiscard(actionLabel, proceed){
   openSheet();
 }
 let persistT = 0;             // debounce timer for document persistence
+// One cached connection, reused for every read/write. Opening (and closing) a
+// fresh connection on every persist/scan-page write was wasteful churn; a single
+// long-lived handle is the normal IndexedDB pattern. Cleared if it ever closes.
+let _idb = null;
 function idbOpen(){
+  if (_idb) return Promise.resolve(_idb);
   return new Promise((res,rej)=>{
     const r=indexedDB.open(DB_NAME,1);
     r.onupgradeneeded=()=>r.result.createObjectStore(DB_STORE);
-    r.onsuccess=()=>res(r.result);
+    r.onsuccess=()=>{ _idb=r.result; try{ _idb.onclose=()=>{ _idb=null; }; }catch(e){} res(_idb); };
     r.onerror=()=>rej(r.error);
   });
 }
@@ -188,8 +193,8 @@ async function idbSet(key,val){
   return new Promise((res,rej)=>{
     const tx=db.transaction(DB_STORE,"readwrite");
     tx.objectStore(DB_STORE).put(val,key);
-    tx.oncomplete=()=>{ db.close(); res(); };
-    tx.onerror=()=>{ db.close(); rej(tx.error); };
+    tx.oncomplete=()=>res();
+    tx.onerror=()=>rej(tx.error);
   });
 }
 async function idbGet(key){
@@ -197,8 +202,8 @@ async function idbGet(key){
   return new Promise((res,rej)=>{
     const tx=db.transaction(DB_STORE,"readonly");
     const rq=tx.objectStore(DB_STORE).get(key);
-    rq.onsuccess=()=>{ db.close(); res(rq.result); };
-    rq.onerror=()=>{ db.close(); rej(rq.error); };
+    rq.onsuccess=()=>res(rq.result);
+    rq.onerror=()=>rej(rq.error);
   });
 }
 async function idbDel(key){
@@ -206,8 +211,8 @@ async function idbDel(key){
   return new Promise((res,rej)=>{
     const tx=db.transaction(DB_STORE,"readwrite");
     tx.objectStore(DB_STORE).delete(key);
-    tx.oncomplete=()=>{ db.close(); res(); };
-    tx.onerror=()=>{ db.close(); rej(tx.error); };
+    tx.oncomplete=()=>res();
+    tx.onerror=()=>rej(tx.error);
   });
 }
 // very large documents are not auto-persisted: cloning ~100MB to storage on
@@ -244,6 +249,17 @@ function persistScan(){
       idbSet("scan:p"+i, scanPages[i]).catch(()=>{});
     idbSet("scan", { count:scanPages.length, ts:Date.now() }).catch(()=>{});
     scanPersistPrev = scanPages.slice();
+  } catch(e){}
+}
+// Fully remove a persisted scan session from storage, including every per-page
+// blob. Used when the user discards a restorable session — otherwise the
+// scan:p0…pN page blobs were orphaned in IndexedDB and accumulated forever.
+function dropScanStorage(count){
+  try {
+    idbDel("scan").catch(()=>{});
+    const upTo = Math.max(count||0, scanPersistPrev.length);
+    for (let i=0;i<upTo;i++) idbDel("scan:p"+i).catch(()=>{});
+    scanPersistPrev = [];
   } catch(e){}
 }
 
@@ -480,15 +496,49 @@ let renderToken = 0;             // cancels a stale in-flight chunked build
 async function render(){
   const tok = ++renderToken;
   const v = $("viewer");
-  v.querySelectorAll(".stage").forEach(s=>s.remove());
   const wrap = $("pageWrap");
-  revokeURLs();
-  if (!workingBytes || !MDOC){ $("emptyMsg").style.display="block"; return; }
+  if (!workingBytes || !MDOC){
+    wrap.querySelectorAll(".stage").forEach(s=>s.remove());
+    revokeURLs();
+    $("emptyMsg").style.display="block";
+    return;
+  }
   $("emptyMsg").style.display="none";
+  const n = MDOC.countPages();
+  const cssW = viewerCssWidth();
+  const existing = wrap.querySelectorAll(".stage");
+
+  // FAST PATH — same document (page sizes already cached, stage count matches):
+  // a zoom or width change. Resize the existing page nodes in place instead of
+  // tearing down and rebuilding all of them (O(n) DOM work on long books). The
+  // lazy-render observer then re-rasterises the visible pages at the new scale.
+  // Editing bumps `epoch`, so this never runs after a content change.
+  if (existing.length === n && boundsEpoch === epoch && boundsCache && boundsCache.length === n){
+    revokeURLs();
+    existing.forEach((stage,i)=>{
+      const b = boundsCache[i];
+      const dispW = Math.round(cssW), dispH = Math.round(cssW * (b.h/b.w));
+      stage.style.width = dispW+"px";
+      stage.style.containIntrinsicSize = dispW+"px "+dispH+"px";
+      stage.dataset.dh = dispH;
+      const holder = document.createElement("div");
+      holder.className = "holder";
+      holder.style.width = dispW+"px"; holder.style.height = dispH+"px";
+      const cur = stage.querySelector("img") || stage.querySelector(".holder");
+      if (cur) cur.replaceWith(holder);
+      delete stage.dataset.rendered;
+      stage.querySelectorAll(".span").forEach(s=>s.remove());
+    });
+    lastViewerW = v.clientWidth;
+    observeStages();
+    return;
+  }
+
+  // SLOW PATH — first render, or after an edit / page-count change.
+  existing.forEach(s=>s.remove());
+  revokeURLs();
   showSpin(true,"Preparing the pages…");
   try {
-    const n = MDOC.countPages();
-    const cssW = viewerCssWidth();
     lastViewerW = v.clientWidth;
     const bc = (boundsEpoch === epoch && boundsCache && boundsCache.length === n)
              ? boundsCache : new Array(n);
@@ -548,7 +598,7 @@ async function renderStage(stage, i){
     const cap = maxPx / Math.max(wPt*scale, hPt*scale);
     if (cap < 1) scale *= cap;
     const pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false);
-    const jpg = u8(pix.asJPEG(92));
+    const jpg = u8(pix.asJPEG(94));   // display only; sharper text edges than 92
     pix.destroy(); page.destroy();
     const url = URL.createObjectURL(new Blob([jpg], {type:"image/jpeg"}));
     liveURLs.add(url);
@@ -815,7 +865,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.23";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v10.24";   // keep in step with sw.js APP_CACHE
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
@@ -1104,7 +1154,7 @@ let scanStream = null;        // live MediaStream (null when off)
 let scanLive = 0;             // live edge-detect interval id
 let scanFallback = false;     // true => no stream; use native camera <input capture>
 let scanWasLive = false;      // camera was on when the app got hidden
-let scanPages = [];           // confirmed pages: [{bytes:Uint8Array(JPEG), w, h}]
+let scanPages = [];           // confirmed pages: [{bytes:Uint8Array(JPEG), w, h, thumb}]
 let capFrame = null;          // canvas holding the full-res captured photo
 let cropQuad = null;          // 4 corners in image px, order TL,TR,BR,BL
 let cropFit = null;           // image→display fit for the crop screen
@@ -2232,7 +2282,9 @@ window.addEventListener("pageshow", (e)=>{
     <div class="row"><button class="ghost full" id="rsLater">Not now</button></div>`;
   if (hasDoc) $("rsDoc").onclick = async ()=>{
     closeSheet();
-    if (hasScan){ scanPages = scanSaved; }   // carry the scan along too
+    // carry the scan along too — track its existing storage so a later clear
+    // removes the right per-page keys
+    if (hasScan){ scanPages = scanSaved; scanPersistPrev = scanSaved.slice(); }
     showSpin(true,"Restoring document…");
     try { await openBytes(doc.bytes, doc.name); dirty = doc.dirty !== false; }
     catch(e){ setStatus("Could not restore it: "+friendly(e),"err"); }
@@ -2241,11 +2293,12 @@ window.addEventListener("pageshow", (e)=>{
   if (hasScan) $("rsScan").onclick = ()=>{
     closeSheet();
     scanPages = scanSaved;
+    scanPersistPrev = scanSaved.slice();     // so persistScan/clear knows the existing keys
     startScan();                             // startScan keeps restored pages
   };
   $("rsDrop").onclick = ()=>{
     closeSheet();
-    try { idbDel("doc").catch(()=>{}); idbDel("scan").catch(()=>{}); } catch(e){}
+    try { idbDel("doc").catch(()=>{}); dropScanStorage(scan && scan.count ? scan.count : (scanSaved?scanSaved.length:0)); } catch(e){}
     setStatus("Saved session discarded.","ok");
   };
   $("rsLater").onclick = closeSheet;

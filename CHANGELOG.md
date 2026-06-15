@@ -4,6 +4,30 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.24] — 2026-06-15 — Full-app review: leak fix, faster zoom, sharper view
+
+From a full read-through of the codebase. Three safe improvements; no feature
+behaviour changed.
+
+- **Storage leak fixed.** Discarding a restorable session (or undoing to empty)
+  deleted the `doc`/`scan` index records but left the individual scanned-page
+  blobs (`scan:p0…pN`) orphaned in IndexedDB forever. New `dropScanStorage()`
+  removes every per-page key, and restoring a scan now tracks its existing keys
+  so a later clear is complete. New test T32 covers it.
+- **IndexedDB connection reused.** Persisting the document or each scan page used
+  to open and close a fresh DB connection every time; it now reuses one cached
+  handle (the standard pattern), removing churn during scanning and editing.
+- **Zoom is faster on long PDFs.** Zoom/width changes now resize the existing
+  page nodes in place instead of rebuilding every one (O(n) DOM work — 525 nodes
+  on a big book per zoom tap). The lazy-render observer re-rasterises the visible
+  pages at the new scale. Content edits still do a full rebuild (they bump the
+  document epoch), so nothing stale survives.
+- **Reading view a touch sharper.** On-screen page render JPEG 92→94 (display
+  only — saved and exported files are unchanged).
+- Verified text-edit colour handling is correct (MuPDF returns normalised RGB).
+- Tests: 52 integration + 4 guard + 5 detection + 21 scenario + 8 colour = 90
+  checks, all passing.
+
 ## [v10.23] — 2026-06-15 — Status banner trimmed further (9px)
 
 - Status banner font 11→9px with tighter padding (top 2px, bottom 1px + the
