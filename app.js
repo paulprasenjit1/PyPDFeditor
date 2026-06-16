@@ -1,5 +1,7 @@
 "use strict";
 import * as mupdf from "./vendor/mupdf/mupdf.js";
+// shared scanner pixel math (also imported by the scan worker — one source)
+import { warpCore, colourBalanceCore } from "./scan-core.js";
 
 const $ = id => document.getElementById(id);
 const PDFLib = window.PDFLib;
@@ -11,7 +13,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.24";
+const APP_BUILD = "10.26";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -66,8 +68,8 @@ window.addEventListener("unhandledrejection", (e)=>{
 
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
-const APP_VERSION = "10.24";
-const BUILD_DATETIME = "11 Jun 2026";
+const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
+const BUILD_DATETIME = "16 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -126,9 +128,26 @@ function friendly(err){
   return m || "something went wrong. Please try again.";
 }
 function showSpin(on, txt){ const s=$("spin"); if(txt) s.textContent=txt; s.classList.toggle("show", !!on); }
+// Promises that wait on a sheet (e.g. askPassword) register a dismiss handler
+// here. closeSheet() fires it so a backdrop tap or Esc resolves the awaited
+// value as "cancelled" instead of leaving the caller hanging forever.
+let sheetOnDismiss = null;
+let sheetLastFocus = null;     // element focused before the sheet opened (restored on close)
 // Always drop the working spinner before opening a modal, otherwise its
 // full-screen overlay would sit on top and swallow the modal's taps.
-function openSheet(){ showSpin(false); $("sheetBg").classList.add("show"); }
+function openSheet(){
+  showSpin(false);
+  sheetOnDismiss = null;                       // clear any stale pending-dismiss handler
+  sheetLastFocus = document.activeElement;     // remember focus to restore on close
+  $("sheetBg").classList.add("show");
+  // expose the sheet as a modal dialog to assistive tech, label it from its
+  // heading, and move focus inside so VoiceOver/keyboard land in the dialog
+  const sheet = $("sheet");
+  const hd = sheet.querySelector("h3");
+  sheet.setAttribute("aria-label", hd ? hd.textContent : "Dialog");
+  const focusTarget = sheet.querySelector("input,textarea,button") || sheet;
+  setTimeout(()=>{ try{ focusTarget.focus(); }catch(e){} }, 0);
+}
 function fmtKB(b){ return b>=1048576 ? (b/1048576).toFixed(2)+" MB" : (b/1024).toFixed(1)+" KB"; }
 function baseName(){ return (fileName||"document.pdf").replace(/\.[^.]+$/,""); }
 // MuPDF's asUint8Array/asJPEG/asPNG return VIEWS into WASM memory; any later WASM
@@ -430,10 +449,13 @@ function askPassword(name){
       <div class="row"><input type="password" id="pwIn" placeholder="Password" autocomplete="off"></div>
       <div class="row"><button class="full" id="pwOk">Unlock</button></div>
       <div class="row"><button class="ghost full" id="pwCancel">Cancel</button></div>`;
-    const done=v=>{ closeSheet(); resolve(v); };
+    let settled=false;
+    const done=v=>{ if(settled) return; settled=true; sheetOnDismiss=null; closeSheet(); resolve(v); };
     $("pwOk").onclick = ()=> done($("pwIn").value || "");
     $("pwCancel").onclick = ()=> done(null);
-    openSheet();    setTimeout(()=>$("pwIn").focus(), 100);
+    openSheet();
+    sheetOnDismiss = ()=> done(null);   // backdrop / Esc dismiss = cancel, never hang the open flow
+    setTimeout(()=>$("pwIn").focus(), 100);
   });
 }
 
@@ -865,7 +887,7 @@ $("moreBtn").onclick = ()=>{
 
 // ---------------- About dialog ----------------
 function openAbout(){
-  const cache = "pypdf-app-v10.24";   // keep in step with sw.js APP_CACHE
+  const cache = "pypdf-app-v"+APP_BUILD;   // derived; sw.js APP_CACHE must match (version-tests enforces)
   let errs = [];
   try { errs = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]"); } catch(e){}
   const errRows = errs.length
@@ -1097,7 +1119,7 @@ function openMergeOrder(){
 async function doMerge(sources){
   showSpin(true,"Combining "+sources.length+" PDFs…");
   try {
-    pushUndo();
+    const undoKept = pushUndoGuarded();   // skip the snapshot on very large files (#5)
     // first source is the base; graft the rest onto its end, in order
     const base = mupdf.Document.openDocument(sources[0].bytes.slice(0), "application/pdf").asPDF();
     for (let k=1;k<sources.length;k++){
@@ -1110,7 +1132,8 @@ async function doMerge(sources){
     base.destroy();
     fileName = "merged.pdf";
     reopen(); await render(); enableDocButtons(true);
-    setStatus("Combined "+sources.length+" PDFs — now "+MDOC.countPages()+" pages.","ok");
+    setStatus("Combined "+sources.length+" PDFs — now "+MDOC.countPages()+" pages."
+      + (undoKept ? "" : " (Too large to keep an undo step.)"),"ok");
   } catch(err){ setStatus("Could not combine: "+friendly(err),"err"); }
   mergeSources=null; showSpin(false);
 }
@@ -1130,8 +1153,12 @@ $("imgInput").onchange = async e=>{
         const jpg = await toJpeg(await fileToDataURL(f), 0.92);
         return doc.embedJpg(await (await fetch(jpg)).arrayBuffer());
       });
-      const page = doc.addPage([img.width, img.height]);
-      page.drawImage(img, { x:0, y:0, width:img.width, height:img.height });
+      // scale the page to A4-ish point sizes (long side = 842pt) instead of
+      // 1px-per-point, which would make a phone photo a ~55-inch page (#2).
+      const sPt = 842/Math.max(img.width, img.height);
+      const pw = img.width*sPt, ph = img.height*sPt;
+      const page = doc.addPage([pw, ph]);
+      page.drawImage(img, { x:0, y:0, width:pw, height:ph });
     }
     // replace whatever was open — behaves like opening a new document
     workingBytes = new Uint8Array(await doc.save());
@@ -1174,11 +1201,13 @@ let scanJobId = 0;
 function getScanWorker(){
   if (scanWorker === null){
     try {
-      scanWorker = new Worker("./scan-worker.js");
+      // module worker: it imports the shared scan-core.js (ES modules in
+      // workers are supported on iOS 15+/the app's iOS 16.4+ baseline).
+      scanWorker = new Worker("./scan-worker.js", { type:"module" });
       // A worker that fails to load (e.g. scan-worker.js missing from a
-      // deploy, served as a 404 HTML page) must not leak a global
-      // "Script error." banner — absorb it here and use the main-thread
-      // fallback instead.
+      // deploy, served as a 404 HTML page, or module import unsupported) must
+      // not leak a global "Script error." banner — absorb it here and use the
+      // main-thread fallback instead.
       scanWorker.addEventListener("error", (e)=>{
         if (e && e.preventDefault) e.preventDefault();
         scanWorker = false;
@@ -1664,11 +1693,24 @@ async function createScanPdf(){
 //  2. Gradient fallback: when regions fail (white paper on a white desk), a
 //     Sobel edge map finds the boundary/shadow line instead; a candidate is
 //     only accepted if edges actually cover ≥80% of its outline.
+// Pooled scratch buffers for the live-preview detector (runs every 300ms).
+// Reused across frames to avoid re-allocating the big full-frame arrays each
+// time (#7). Self-contained (pool hangs off the function) so the detection
+// tests can eval it in isolation. `zero` is only requested for buffers that
+// are read before being fully written (the histogram); g/bl are overwritten
+// in full, so they skip the wasted clear.
+function dqBuf(key, len, Ctor, zero){
+  const pool = dqBuf._p || (dqBuf._p = new Map());
+  let b = pool.get(key);
+  if (!b || b.length !== len || b.constructor !== Ctor){ b = new Ctor(len); pool.set(key, b); }
+  else if (zero) b.fill(0);
+  return b;
+}
 function detectQuad(im){
   const w=im.width, h=im.height, n=w*h, d=im.data;
-  const g=new Uint8Array(n);
+  const g=dqBuf("g",n,Uint8Array,false);
   for (let i=0,j=0;i<n;i++,j+=4) g[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
-  const bl=new Uint8Array(n);
+  const bl=dqBuf("bl",n,Uint8Array,false);
   for (let y=0;y<h;y++) for (let x=0;x<w;x++){
     let s=0,c=0;
     for (let dy=-1;dy<=1;dy++){ const yy=y+dy; if(yy<0||yy>=h) continue;
@@ -1676,7 +1718,7 @@ function detectQuad(im){
     bl[y*w+x]=(s/c)|0;
   }
   // Otsu threshold
-  const hist=new Float64Array(256);
+  const hist=dqBuf("hist",256,Float64Array,true);
   for (let i=0;i<n;i++) hist[bl[i]]++;
   let sumAll=0; for (let t=0;t<256;t++) sumAll+=t*hist[t];
   let sumB=0,wB=0,maxVar=-1,thr=127;
@@ -1850,152 +1892,15 @@ function orderQuad(q){
   return [tl, tr, br, tr===a ? b : a];
 }
 
-// ---- perspective correction (homography + bilinear sampling) ----
+// ---- perspective correction (main-thread fallback) ----
+// Thin wrapper: read the canvas pixels and hand them to the shared warpCore in
+// scan-core.js (the same code the worker runs), then wrap the result back into
+// an ImageData. The warp/filter math lives in ONE place now (scan-core.js).
 function warpPerspective(srcCanvas, q, maxDim){
   const sctx=srcCanvas.getContext("2d",{willReadFrequently:true});
   const src=sctx.getImageData(0,0,srcCanvas.width,srcCanvas.height);
-  const sw=src.width, sh=src.height, sd=src.data;
-  const dist=(a,b)=>Math.hypot(a.x-b.x, a.y-b.y);
-  let ow=Math.max(dist(q[0],q[1]), dist(q[3],q[2]));
-  let oh=Math.max(dist(q[0],q[3]), dist(q[1],q[2]));
-  const cap=(maxDim||2000)/Math.max(ow,oh);
-  if (cap<1){ ow*=cap; oh*=cap; }
-  const W=Math.max(8,Math.round(ow)), H=Math.max(8,Math.round(oh));
-  const [ha,hb,hc,hd,he,hf,hg,hh]=homographyTo(q,W,H);
-  const out=new ImageData(W,H), od=out.data;
-  let k=0;
-  for (let v=0;v<H;v++){
-    for (let u=0;u<W;u++){
-      const den=hg*u+hh*v+1;
-      const sx=(ha*u+hb*v+hc)/den, sy=(hd*u+he*v+hf)/den;
-      const x0=Math.floor(sx), y0=Math.floor(sy);
-      if (x0<0||y0<0||x0>=sw-1||y0>=sh-1){ od[k++]=255; od[k++]=255; od[k++]=255; od[k++]=255; continue; }
-      const fx=sx-x0, fy=sy-y0;
-      const i00=(y0*sw+x0)*4, i10=i00+4, i01=i00+sw*4, i11=i01+4;
-      for (let ch=0;ch<3;ch++){
-        const t0=sd[i00+ch]*(1-fx)+sd[i10+ch]*fx;
-        const t1=sd[i01+ch]*(1-fx)+sd[i11+ch]*fx;
-        od[k++]=(t0*(1-fy)+t1*fy)|0;
-      }
-      od[k++]=255;
-    }
-  }
-  return out;
-}
-// homography mapping dst rect (0,0)-(W,H) onto the source quad (8×8 solve)
-function homographyTo(q,W,H){
-  const dst=[{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}];
-  const M=[];
-  for (let i=0;i<4;i++){
-    const {x:u,y:v}=dst[i], {x,y}=q[i];
-    M.push([u,v,1,0,0,0,-u*x,-v*x,x]);
-    M.push([0,0,0,u,v,1,-u*y,-v*y,y]);
-  }
-  // Gauss-Jordan with partial pivoting on the augmented 8×9 matrix
-  for (let c=0;c<8;c++){
-    let piv=c;
-    for (let r=c+1;r<8;r++) if (Math.abs(M[r][c])>Math.abs(M[piv][c])) piv=r;
-    [M[c],M[piv]]=[M[piv],M[c]];
-    const p=M[c][c]||1e-12;
-    for (let j=c;j<=8;j++) M[c][j]/=p;
-    for (let r=0;r<8;r++){
-      if (r===c) continue;
-      const f=M[r][c]; if(!f) continue;
-      for (let j=c;j<=8;j++) M[r][j]-=f*M[c][j];
-    }
-  }
-  return M.map(row=>row[8]);
-}
-
-// ---- output filters ----
-// Colour: gentle auto-contrast (stretch the 2nd–98th luminance percentiles).
-// Raw RGBA version — IDENTICAL to scan-worker.js so worker/main-thread output
-// is byte-for-byte equal (parity is test-enforced).
-function applyAutoContrast(d,w,h){
-  const n=w*h;
-  const hist=new Uint32Array(256);
-  for (let i=0;i<n;i++){ const j=i*4; hist[(d[j]*77+d[j+1]*151+d[j+2]*28)>>8]++; }
-  let lo=0,hi=255,acc=0;
-  for (let t=0;t<256;t++){ acc+=hist[t]; if(acc>=n*0.02){ lo=t; break; } }
-  acc=0;
-  for (let t=255;t>=0;t--){ acc+=hist[t]; if(acc>=n*0.02){ hi=t; break; } }
-  if (hi-lo<30) return;
-  const lut=new Uint8Array(256);
-  for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round((t-lo)*255/(hi-lo))));
-  for (let i=0;i<n;i++){ const j=i*4; d[j]=lut[d[j]]; d[j+1]=lut[d[j+1]]; d[j+2]=lut[d[j+2]]; }
-}
-// Colour "clean scan" pipeline (v10.17). Two safe, GLOBAL steps — deliberately
-// NOT the v10.14 "magic scan" (that used a per-tile illumination map + unsharp
-// mask, which produced local dark blotches and harsh halos):
-//   1) Global white balance by "grey-world over the paper". The paper is the
-//      bright majority of a document, so we average the colour of all pixels
-//      above the 60th-percentile luminance (estimated paper/light colour) and
-//      scale each channel so that average lands on a neutral 245. Because it is
-//      AREA-AVERAGED, a small neutral element (a plastic address window, a white
-//      label) can't skew it — the warm/green room cast on the paper is removed.
-//      One gain per channel for the whole image, so no local dark patches.
-//   2) The long-standing gentle 2nd–98th percentile luminance stretch, to
-//      deepen text. No sharpening.
-// IDENTICAL in app.js and scan-worker.js — parity is test-enforced.
-function colourBalanceCore(d,w,h){
-  const n=w*h;
-  const lum=new Uint8Array(n), hl=new Uint32Array(256);
-  for (let i=0;i<n;i++){ const j=i*4; const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; lum[i]=L; hl[L]++; }
-  let acc=0, thr=0;
-  for (let t=0;t<256;t++){ acc+=hl[t]; if (acc>=n*0.60){ thr=t; break; } }
-  if (thr<120) thr=120;                        // never mistake a dark scene for paper
-  let sR=0,sG=0,sB=0,c=0;
-  for (let i=0;i<n;i++){ if (lum[i]>=thr){ const j=i*4; sR+=d[j]; sG+=d[j+1]; sB+=d[j+2]; c++; } }
-  if (c>0){
-    const TGT=245, GMAX=2.2;
-    const gr=Math.min(GMAX, Math.max(1, TGT/Math.max(1,sR/c)));
-    const gg=Math.min(GMAX, Math.max(1, TGT/Math.max(1,sG/c)));
-    const gb=Math.min(GMAX, Math.max(1, TGT/Math.max(1,sB/c)));
-    if (gr>1.001 || gg>1.001 || gb>1.001){
-      const lr=new Uint8Array(256), lg=new Uint8Array(256), lb=new Uint8Array(256);
-      for (let t=0;t<256;t++){
-        lr[t]=Math.min(255,Math.round(t*gr));
-        lg[t]=Math.min(255,Math.round(t*gg));
-        lb[t]=Math.min(255,Math.round(t*gb));
-      }
-      for (let i=0;i<n;i++){ const j=i*4; d[j]=lr[d[j]]; d[j+1]=lg[d[j+1]]; d[j+2]=lb[d[j+2]]; }
-    }
-  }
-  applyAutoContrast(d,w,h);
-  crispenAndLift(d,w,h);
-}
-// v10.20: gentle crispness + brightness so the captured still (often darker and
-// softer than the live camera) reads sharp and bright like a flatbed scan.
-// Deliberately mild — a 1px luminance unsharp mask and a small midtone gain —
-// NOT the v10.14 magic-scan (wide map + strong unsharp) that caused halos.
-// IDENTICAL in app.js and scan-worker.js — parity is test-enforced.
-function crispenAndLift(d,w,h){
-  const n=w*h;
-  const lum=new Float32Array(n);
-  for (let i=0;i<n;i++){ const j=i*4; lum[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
-  const blur=new Float32Array(lum);
-  boxBlurF(blur,w,h,1);
-  const SH=0.55, LIFT=1.06;            // unsharp amount; midtone brightness gain
-  for (let i=0;i<n;i++){
-    const add=(lum[i]-blur[i])*SH;     // high-pass detail (edges/letters)
-    const j=i*4;
-    d[j]  =Math.max(0,Math.min(255, d[j]  *LIFT+add));
-    d[j+1]=Math.max(0,Math.min(255, d[j+1]*LIFT+add));
-    d[j+2]=Math.max(0,Math.min(255, d[j+2]*LIFT+add));
-  }
-}
-function boxBlurF(a,w,h,r){
-  const tmp=new Float32Array(a.length);
-  for (let y=0;y<h;y++) for (let x=0;x<w;x++){
-    let s=0,c=0;
-    for (let k=-r;k<=r;k++){ const xx=x+k; if(xx<0||xx>=w) continue; s+=a[y*w+xx]; c++; }
-    tmp[y*w+x]=s/c;
-  }
-  for (let y=0;y<h;y++) for (let x=0;x<w;x++){
-    let s=0,c=0;
-    for (let k=-r;k<=r;k++){ const yy=y+k; if(yy<0||yy>=h) continue; s+=tmp[yy*w+x]; c++; }
-    a[y*w+x]=s/c;
-  }
+  const r=warpCore(src.data, src.width, src.height, q, maxDim);
+  return new ImageData(r.data, r.w, r.h);
 }
 
 // keep the scanner layouts in step with rotation / window changes
@@ -2006,9 +1911,9 @@ window.addEventListener("resize", ()=>{
 
 // ---------------- current page -> PNG (mupdf) ----------------
 async function exportVisiblePng(){
-  const v=$("viewer"); let target=0, best=1e9;
+  const v=$("viewer"), vTop=v.getBoundingClientRect().top; let target=0, best=1e9;
   document.querySelectorAll(".stage").forEach(s=>{
-    const r=s.getBoundingClientRect(); const d=Math.abs(r.top - v.getBoundingClientRect().top);
+    const d=Math.abs(s.getBoundingClientRect().top - vTop);   // viewer rect hoisted out of the loop (#6)
     if (d<best){ best=d; target=+s.dataset.page; }
   });
   showSpin(true,"Rendering page "+(target+1)+"…");
@@ -2076,27 +1981,86 @@ $("compBtn").onclick = ()=>{
   $("cpCancel").onclick = closeSheet;
   openSheet();
 };
+// Roughly how much real, extractable text the document has, sampled across the
+// first few pages. A scanned / image-only PDF returns ~0; a born-digital text
+// page returns hundreds. Used to protect text PDFs from being silently
+// rasterised by Compress. Cheap: stops as soon as the threshold is reached.
+function sampledTextLength(maxPages=8, stopAt=80){
+  let chars=0;
+  try {
+    const n=MDOC.countPages(), sample=Math.min(n,maxPages);
+    for (let i=0;i<sample;i++){
+      const page=MDOC.loadPage(i);
+      const st=page.toStructuredText("preserve-spans");
+      st.walk({ onChar(c){ if (c && c.trim()) chars++; } });
+      st.destroy(); page.destroy();
+      if (chars>=stopAt) break;
+    }
+  } catch(e){}
+  return chars;
+}
+// Asked before rasterising a document that contains real text. Resolves:
+//   false → keep the text-safe lossless result;  true → rasterise to pictures;
+//   null  → cancel the whole operation.
+function confirmRasterise(before, losslessLen){
+  return new Promise(resolve=>{
+    $("sheet").innerHTML = h`
+      <h3>This PDF contains real text</h3>
+      <p class="hint">Making it this small turns every page into a picture, so the text can no longer be selected, searched or read aloud. A text-safe version is ${fmtKB(losslessLen)} (from ${fmtKB(before)}).</p>
+      <div class="row"><button class="full" id="crKeep">Keep text · ${fmtKB(losslessLen)}</button></div>
+      <div class="row"><button class="full" id="crGo">Make smallest (as pictures)</button></div>
+      <div class="row"><button class="ghost full" id="crCancel">Cancel</button></div>`;
+    let settled=false;
+    const done=v=>{ if(settled) return; settled=true; sheetOnDismiss=null; closeSheet(); resolve(v); };
+    $("crKeep").onclick = ()=> done(false);
+    $("crGo").onclick   = ()=> done(true);
+    $("crCancel").onclick= ()=> done(null);
+    openSheet();
+    sheetOnDismiss = ()=> done(null);   // backdrop / Esc = cancel
+  });
+}
 async function runCompress(level){
   const cfg=COMPRESS[level], before=workingBytes.length;
   showSpin(true,"Compressing…");
   try {
-    pushUndo();
-    // 1) lossless structural pass — keep full quality if it already fits
+    // 1) lossless structural pass FIRST. This does not mutate MDOC or
+    //    workingBytes, so we can decide what to do before committing — and
+    //    before taking the Undo snapshot, which keeps peak memory down.
     let best = u8(MDOC.saveToBuffer("compress,compress-images,compress-fonts,garbage").asUint8Array());
     let bestLen = best.length;
-    // 2) otherwise rasterize pages with mupdf, gentlest step first
+    let rasterised = false;
+    // 2) only if that still misses the target do we consider rasterising pages
     if (bestLen > cfg.targetKB*1024){
-      for (const step of cfg.steps){
-        const bytes = await rasterize(step.dpi, step.q);
-        if (bytes.length < bestLen){ best=bytes; bestLen=bytes.length; }
-        if (bytes.length <= cfg.targetKB*1024) break;
+      const rasterAll = async ()=>{
+        for (const step of cfg.steps){
+          const bytes = await rasterize(step.dpi, step.q);
+          if (bytes.length < bestLen){ best=bytes; bestLen=bytes.length; rasterised=true; }
+          if (bytes.length <= cfg.targetKB*1024) break;
+        }
+      };
+      if (sampledTextLength() >= 80){
+        // real text present: rasterising would destroy selectable/searchable
+        // text. Let the user choose instead of doing it silently.
+        showSpin(false);
+        const choice = await confirmRasterise(before, bestLen);
+        if (choice === null){ setStatus("Compression cancelled.","warn"); return; }
+        showSpin(true,"Compressing…");
+        if (choice === true) await rasterAll();
+        // choice === false: keep the text-safe lossless result (best/bestLen)
+      } else {
+        // no meaningful text (scanned / image PDF): rasterise freely as before
+        await rasterAll();
       }
     }
+    // 3) commit — snapshot for Undo now (skipped on very large files, #5)
+    const undoKept = pushUndoGuarded();
     workingBytes = best instanceof Uint8Array ? best : new Uint8Array(best);
     reopen(); await render();
     const met = bestLen <= cfg.targetKB*1024, pct=Math.round(100*(1-bestLen/before));
     setStatus(`Done: ${fmtKB(before)} → ${fmtKB(bestLen)} (${pct}% smaller).`
-      + (met?"":" That\'s the smallest it can go and stay readable."), "ok");
+      + (rasterised ? "" : " Text stays selectable.")
+      + (met||rasterised ? "" : " That\'s the smallest it can go and stay readable.")
+      + (undoKept ? "" : " (Too large to keep an undo step.)"), "ok");
   } catch(err){ setStatus("Could not compress: "+friendly(err),"err"); }
   showSpin(false);
 };
@@ -2134,6 +2098,20 @@ function pushUndo(){
   }
   refreshUndo();
 }
+// Heavy operations (compress, merge) already hold several full-document copies
+// in flight. On a very large file, adding one more full snapshot for Undo can
+// push iOS past its hard per-tab memory limit. Above this size we skip the
+// snapshot (the original file still exists in Files) and return false so the
+// caller can mention that this one step can't be undone.
+const UNDO_SNAPSHOT_MAX = 48*1024*1024;
+function pushUndoGuarded(){
+  if (workingBytes && workingBytes.length > UNDO_SNAPSHOT_MAX){
+    dirty = true; refreshUndo();      // still a change, just without a costly copy
+    return false;
+  }
+  pushUndo();
+  return true;
+}
 async function doUndo(){
   if (!undoStack.length){ setStatus("Nothing to undo.","err"); return; }
   workingBytes = undoStack.pop();
@@ -2148,8 +2126,15 @@ async function doUndo(){
 function closeSheet(){
   $("sheetBg").classList.remove("show");
   if (sheetThumbObs){ sheetThumbObs.disconnect(); sheetThumbObs=null; }
+  // resolve any awaited sheet (e.g. password) as "cancelled" so it never hangs
+  const cb = sheetOnDismiss; sheetOnDismiss = null;
+  if (cb){ try{ cb(); }catch(e){} }
+  // return focus to whatever had it before the sheet opened
+  if (sheetLastFocus){ const el = sheetLastFocus; sheetLastFocus = null; try{ el.focus(); }catch(e){} }
 }
 $("sheetBg").addEventListener("click", e=>{ if(e.target===$("sheetBg")) closeSheet(); });
+// Esc closes the open sheet (keyboard users / iPad with a keyboard)
+document.addEventListener("keydown", e=>{ if(e.key==="Escape" && $("sheetBg").classList.contains("show")) closeSheet(); });
 
 function fileToDataURL(file){ return new Promise((res,rej)=>{ const r=new FileReader();
   r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }

@@ -4,6 +4,62 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.26] — 2026-06-16 — Audit polish: shared scanner core, a11y & quality nits
+
+The "polish" set from the v10.24 audit. Behaviour is unchanged for users except
+the noted improvements; 105 checks pass.
+
+- **Scanner pixel math now lives in one file.** The perspective-warp and colour
+  filter code was previously copied verbatim into both app.js and scan-worker.js
+  and kept in sync by source-identity tests. It now lives once in `scan-core.js`,
+  imported by app.js (for the main-thread fallback and crop preview) and by the
+  scan worker (now a **module worker**). If module workers are unavailable the
+  app silently falls back to main-thread processing, exactly as before. The
+  colour parity tests are replaced by behavioural + single-source checks.
+- **Photos → PDF uses sensible page sizes.** Imported photos are now scaled to
+  A4-ish point dimensions (long side 842pt) like the scanner, instead of
+  1px-per-point (which made a phone photo a ~55-inch page).
+- **Accessibility polish.** Visible keyboard focus rings (`:focus-visible`) for
+  buttons, links, inputs and the editable-text spans; page-row controls (↑ ↓ ⟳
+  Delete) enlarged to a 44px touch height.
+- **Performance nits.** The "save this page as a picture" page-picker reads the
+  viewer rect once instead of once per page; the live document detector reuses
+  its big scratch buffers across the 300ms preview frames instead of
+  re-allocating them every tick.
+- **New file:** `scan-core.js` (added to the service-worker app-shell cache and
+  the deploy checklist).
+- Tests: 58 integration + 4 guard + 5 detection + 23 scenario + 8 colour +
+  7 version = 105 checks, all passing.
+
+## [v10.25] — 2026-06-16 — Audit fixes: no password hang, text-safe compress, a11y
+
+Acted on the priority findings from the v10.24 full-app audit. No existing
+feature behaviour changed except where noted; 105 checks pass (was 90).
+
+- **Password sheet no longer hangs the Open flow.** Tapping outside the password
+  prompt (or pressing Esc) used to dismiss it without resolving, leaving the open
+  in limbo. Sheets now register a dismiss handler that `closeSheet()` fires, so a
+  backdrop/Esc dismiss cleanly cancels ("Open cancelled"). New tests S12c/S12d.
+- **Compress protects real text.** When the lossless pass misses the target on a
+  document that contains actual text, the app now asks before rasterising —
+  Keep text (text-safe lossless result), Make smallest (pictures), or Cancel —
+  instead of silently turning selectable/searchable text into images. Scanned /
+  image-only PDFs still compress straight through. New tests T38, T39a–e.
+- **Lower peak memory on heavy ops.** Compress now runs the lossless pass and
+  decides BEFORE taking the Undo snapshot, and both Compress and Merge skip the
+  full-document Undo copy above 48 MB (the original is still in Files), telling
+  you when a step can't be undone. Reduces OOM risk on large files (iOS).
+- **Accessibility.** Bottom sheets are now exposed as `role="dialog"
+  aria-modal="true"`, labelled from their heading, with focus moved in on open
+  and restored on close, and Esc closes them. Status-bar text 9px → 11px for
+  legibility (reclaims slightly less page height; worth it).
+- **Release hygiene.** `APP_VERSION` and the About cache label now derive from a
+  single `APP_BUILD` constant (no more drifting literals). DEPLOY.md no longer
+  hard-codes a stale build number. New `tests/version-tests.mjs` enforces that
+  `data-build` (index.html), `APP_BUILD` (app.js) and `APP_CACHE` (sw.js) agree.
+- Tests: 58 integration + 4 guard + 5 detection + 23 scenario + 8 colour +
+  7 version = 105 checks, all passing.
+
 ## [v10.24] — 2026-06-15 — Full-app review: leak fix, faster zoom, sharper view
 
 From a full read-through of the codebase. Three safe improvements; no feature

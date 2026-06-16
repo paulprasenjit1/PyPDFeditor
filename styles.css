@@ -36,6 +36,13 @@ button:active:not(:disabled) { transform:scale(.97); filter:brightness(.92); }
 button.ghost { background:var(--panel2); border:1px solid var(--line); color:var(--txt); }
 button.on { background:var(--ok); }
 button:disabled { opacity:.4; }
+/* visible keyboard focus ring (iPad + keyboard, desktop). tap-highlight is
+   suppressed globally, so without this keyboard users get no focus cue (#10).
+   :focus-visible only shows for keyboard focus, never for touch/mouse taps. */
+button:focus-visible, a:focus-visible, .span:focus-visible,
+input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px;
+}
 @media (prefers-reduced-motion: reduce){
   button { transition:none; }
   button:active:not(:disabled) { transform:none; }
@@ -110,7 +117,7 @@ button:disabled { opacity:.4; }
 .welcome .big { width:min(280px,80vw); padding:16px 18px; font-size:17px; border-radius:15px;
         box-shadow:0 8px 24px rgba(43,99,235,.30); }
 .welcome .big.ghost { border-width:1.5px; box-shadow:none; }
-.status { font-size:9px; padding:2px 14px calc(1px + env(safe-area-inset-bottom));
+.status { font-size:11px; padding:3px 14px calc(2px + env(safe-area-inset-bottom));
           border-top:1px solid var(--line); background:var(--panel); color:var(--muted);
           min-height:0; line-height:1.3; }
 .status.ok { color:var(--ok); font-weight:600; background:rgba(63,185,80,.07); }
@@ -171,7 +178,9 @@ button:disabled { opacity:.4; }
 .porow img { width:46px; height:auto; min-height:58px; background:#fff; border-radius:3px; }
 .porow .pn { flex:1; font-size:14px; }
 .porow.del { opacity:.4; text-decoration:line-through; }
-.porow button { padding:7px 9px; }
+/* bigger touch targets for the page row controls (↑ ↓ ⟳ Delete) — was ~30px
+   tall, fiddly on a phone; now a comfortable 44px tap height (#11) */
+.porow button { padding:9px 10px; min-width:34px; min-height:44px; }
 input[type=file] { display:none; }
 .spin { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
         background:rgba(0,0,0,.5); z-index:120; color:#fff; font-size:14px; text-align:center; padding:24px; }
