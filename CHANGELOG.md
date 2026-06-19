@@ -4,6 +4,14 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.28] — 2026-06-19 — New dark-theme app icon
+
+- **New icon.** Replaced the red square icon with a dark, OLED-black icon that
+  matches the app's dark UI: a dark "glass" document with a soft red glow and
+  red "PDF" wordmark. Full-bleed (no transparent corners) so iOS masks it
+  cleanly. Regenerated at 180 / 192 / 512 px; cache bumped so installed Home
+  Screen apps refetch the new artwork.
+
 ## [v10.27] — 2026-06-19 — Audit fixes: signatures, undo/dirty, save & tests
 
 Fixes for five issues from the latest code audit. No feature removed.
