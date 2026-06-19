@@ -79,9 +79,8 @@ let epoch = 0;                 // bumps on every change (invalidates caches)
 let fileName = "document.pdf";
 let zoomPct = 100;             // 50–300, 25% steps; 100% = fit to viewer width
 let mergeSources = null;       // staged docs awaiting a chosen merge order
-let signImgDataUrl = null;     // processed signature PNG dataURL (as placed)
-let signRawUrl = null;         // original loaded signature, so we can re-derive on toggle
-let signRemoveWhite = true;    // default: knock the white background out (README behaviour)
+let signImgDataUrl = null;     // processed signature PNG dataURL
+let signRemoveWhite = false;   // place signatures as-is (background kept)
 let mode = null;               // null | "sign" | "text"
 const spanCache = new Map();   // key `${epoch}:${page}` -> spans[]
 let pageObserver = null;       // single lazy-render observer (disconnected on hide/close)
@@ -797,14 +796,13 @@ $("textBtn").onclick = ()=> setMode(mode==="text" ? null : "text");
 // ---------------- sign (entered from the More sheet) ----------------
 function startSign(){
   if (mode==="sign"){ setMode(null); return; }   // toggling off cancels sign mode
-  if (!signImgDataUrl) $("sigInput").click(); else setMode("sign");
+  $("sigInput").click();   // always pick a signature image before placing
 }
 $("sigInput").onchange = async e=>{
   const f=e.target.files[0]; if(!f) return;
   showSpin(true,"Loading signature…");
   try {
     const url = await fileToDataURL(f);
-    signRawUrl = url;
     signImgDataUrl = signRemoveWhite ? await knockoutWhite(url) : await toPng(url);
     setMode("sign");
   } catch(err){ setStatus("Could not load that image: "+friendly(err),"err"); }
@@ -868,7 +866,6 @@ $("moreBtn").onclick = ()=>{
     <h3>More actions</h3>
     <div class="row"><button class="full" id="mScan">📷 Scan a document</button></div>
     <div class="row"><button class="full" id="mSign" ${d}>✍️ Add my signature</button></div>
-    <div class="row"><button class="full" id="mSigBg">🪧 Signature background: ${signRemoveWhite ? "removed" : "kept"}</button></div>
     <div class="row"><button class="full" id="mOrg" ${d}>📑 Pages — reorder · rotate · delete</button></div>
     <div class="row"><button class="full" id="mExtract" ${d}>📄 Copy pages → new PDF</button></div>
     <div class="row"><button class="full" id="mMerge" ${d}>➕ Combine PDFs</button></div>
@@ -878,18 +875,6 @@ $("moreBtn").onclick = ()=>{
     <div class="row"><button class="ghost full" id="mClose">Cancel</button></div>`;
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
   $("mSign").onclick  = ()=>{ closeSheet(); startSign(); };
-  $("mSigBg").onclick = async ()=>{
-    signRemoveWhite = !signRemoveWhite;
-    // re-derive the already-loaded signature so the change takes effect immediately
-    if (signRawUrl){
-      showSpin(true,"Updating signature…");
-      try { signImgDataUrl = signRemoveWhite ? await knockoutWhite(signRawUrl) : await toPng(signRawUrl); }
-      catch(e){}
-      showSpin(false);
-    }
-    closeSheet();
-    setStatus("Signature background will be "+(signRemoveWhite?"removed":"kept")+".","ok");
-  };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mExtract").onclick = ()=>{ closeSheet(); openExtract(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };

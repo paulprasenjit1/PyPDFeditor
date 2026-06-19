@@ -8,10 +8,10 @@ the new build.
 
 Fixes for five issues from the latest code audit. No feature removed.
 
-- **Signature white-knockout now matches the docs.** White backgrounds are
-  knocked out by default again, and **More ▾** has a "Signature background:
-  removed / kept" toggle that re-processes the loaded signature immediately.
-  Previously the knockout was dead code (flag defaulted off, no toggle existed).
+- **Sign now always asks for a signature image.** Tapping "Add my signature"
+  opens the image picker every time instead of silently reusing the previously
+  loaded signature. The signature is placed as-is with its background kept (the
+  long-standing default); the docs were corrected to match.
 - **Undo no longer leaves a false "unsaved changes" flag.** Each undo step now
   remembers the dirty state at the time, so undoing back to the originally
   opened document restores a clean (not-dirty) state.
