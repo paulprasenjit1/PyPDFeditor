@@ -4,6 +4,27 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.27] — 2026-06-19 — Audit fixes: signatures, undo/dirty, save & tests
+
+Fixes for five issues from the latest code audit. No feature removed.
+
+- **Signature white-knockout now matches the docs.** White backgrounds are
+  knocked out by default again, and **More ▾** has a "Signature background:
+  removed / kept" toggle that re-processes the loaded signature immediately.
+  Previously the knockout was dead code (flag defaulted off, no toggle existed).
+- **Undo no longer leaves a false "unsaved changes" flag.** Each undo step now
+  remembers the dirty state at the time, so undoing back to the originally
+  opened document restores a clean (not-dirty) state.
+- **Merge validates inputs before mutating.** All source PDFs are parsed first;
+  a corrupt input now aborts cleanly without marking the document dirty or
+  leaving a bogus undo step.
+- **Save uses the real iOS share sheet.** Save now uses the Web Share API
+  (Save to Files / AirDrop / Mail…) with a download fallback, and **"Save
+  first"** in the unsaved-changes dialog now continues the original action.
+- **Tooling & deploy hygiene.** `tests/version-tests.mjs` works from a path
+  containing spaces (e.g. "PY EDITOR SCAN"); `.gitignore` now also excludes
+  `tests/` and `node_modules/`.
+
 ## [v10.26] — 2026-06-16 — Audit polish: shared scanner core, a11y & quality nits
 
 The "polish" set from the v10.24 audit. Behaviour is unchanged for users except

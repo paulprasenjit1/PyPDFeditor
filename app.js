@@ -13,7 +13,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.26";
+const APP_BUILD = "10.27";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -69,7 +69,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "16 Jun 2026";
+const BUILD_DATETIME = "19 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -79,8 +79,9 @@ let epoch = 0;                 // bumps on every change (invalidates caches)
 let fileName = "document.pdf";
 let zoomPct = 100;             // 50–300, 25% steps; 100% = fit to viewer width
 let mergeSources = null;       // staged docs awaiting a chosen merge order
-let signImgDataUrl = null;     // processed signature PNG dataURL
-let signRemoveWhite = false;   // place signatures as-is (background kept)
+let signImgDataUrl = null;     // processed signature PNG dataURL (as placed)
+let signRawUrl = null;         // original loaded signature, so we can re-derive on toggle
+let signRemoveWhite = true;    // default: knock the white background out (README behaviour)
 let mode = null;               // null | "sign" | "text"
 const spanCache = new Map();   // key `${epoch}:${page}` -> spans[]
 let pageObserver = null;       // single lazy-render observer (disconnected on hide/close)
@@ -188,7 +189,7 @@ function confirmDiscard(actionLabel, proceed){
     <div class="row"><button class="full" id="udSave">Save first</button></div>
     <div class="row"><button class="ghost full" id="udGo">Continue without saving</button></div>
     <div class="row"><button class="ghost full" id="udCancel">Cancel</button></div>`;
-  $("udSave").onclick   = ()=>{ closeSheet(); $("saveBtn").onclick(); };
+  $("udSave").onclick   = ()=>{ closeSheet(); openSaveSheet(proceed); };
   $("udGo").onclick     = ()=>{ closeSheet(); proceed(); };
   $("udCancel").onclick = closeSheet;
   openSheet();
@@ -803,6 +804,7 @@ $("sigInput").onchange = async e=>{
   showSpin(true,"Loading signature…");
   try {
     const url = await fileToDataURL(f);
+    signRawUrl = url;
     signImgDataUrl = signRemoveWhite ? await knockoutWhite(url) : await toPng(url);
     setMode("sign");
   } catch(err){ setStatus("Could not load that image: "+friendly(err),"err"); }
@@ -866,6 +868,7 @@ $("moreBtn").onclick = ()=>{
     <h3>More actions</h3>
     <div class="row"><button class="full" id="mScan">📷 Scan a document</button></div>
     <div class="row"><button class="full" id="mSign" ${d}>✍️ Add my signature</button></div>
+    <div class="row"><button class="full" id="mSigBg">🪧 Signature background: ${signRemoveWhite ? "removed" : "kept"}</button></div>
     <div class="row"><button class="full" id="mOrg" ${d}>📑 Pages — reorder · rotate · delete</button></div>
     <div class="row"><button class="full" id="mExtract" ${d}>📄 Copy pages → new PDF</button></div>
     <div class="row"><button class="full" id="mMerge" ${d}>➕ Combine PDFs</button></div>
@@ -875,6 +878,18 @@ $("moreBtn").onclick = ()=>{
     <div class="row"><button class="ghost full" id="mClose">Cancel</button></div>`;
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
   $("mSign").onclick  = ()=>{ closeSheet(); startSign(); };
+  $("mSigBg").onclick = async ()=>{
+    signRemoveWhite = !signRemoveWhite;
+    // re-derive the already-loaded signature so the change takes effect immediately
+    if (signRawUrl){
+      showSpin(true,"Updating signature…");
+      try { signImgDataUrl = signRemoveWhite ? await knockoutWhite(signRawUrl) : await toPng(signRawUrl); }
+      catch(e){}
+      showSpin(false);
+    }
+    closeSheet();
+    setStatus("Signature background will be "+(signRemoveWhite?"removed":"kept")+".","ok");
+  };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mExtract").onclick = ()=>{ closeSheet(); openExtract(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
@@ -1119,14 +1134,24 @@ function openMergeOrder(){
 async function doMerge(sources){
   showSpin(true,"Combining "+sources.length+" PDFs…");
   try {
-    const undoKept = pushUndoGuarded();   // skip the snapshot on very large files (#5)
+    // Parse and validate EVERY source first. If any input PDF is unreadable we
+    // bail out here, before pushUndoGuarded()/dirty are touched, so a failed
+    // merge can't leave a stale "unsaved changes"/undo step on an unchanged doc.
+    const docs = [];
+    try {
+      for (const s of sources)
+        docs.push(mupdf.Document.openDocument(s.bytes.slice(0), "application/pdf").asPDF());
+    } catch(err){
+      for (const d of docs){ try{ d.destroy(); }catch(e){} }
+      throw err;
+    }
+    const undoKept = pushUndoGuarded();   // now committed; skip the snapshot on very large files (#5)
     // first source is the base; graft the rest onto its end, in order
-    const base = mupdf.Document.openDocument(sources[0].bytes.slice(0), "application/pdf").asPDF();
-    for (let k=1;k<sources.length;k++){
-      const src = mupdf.Document.openDocument(sources[k].bytes.slice(0), "application/pdf").asPDF();
-      const c = src.countPages();
-      for (let i=0;i<c;i++) base.graftPage(-1, src, i);
-      src.destroy();
+    const base = docs[0];
+    for (let k=1;k<docs.length;k++){
+      const c = docs[k].countPages();
+      for (let i=0;i<c;i++) base.graftPage(-1, docs[k], i);
+      docs[k].destroy();
     }
     workingBytes = u8(base.saveToBuffer("garbage").asUint8Array());
     base.destroy();
@@ -1935,7 +1960,10 @@ async function exportVisiblePng(){
 }
 
 // ---------------- save ----------------
-$("saveBtn").onclick = ()=>{
+// Opens the Save / Share sheet. `after` (optional) runs only once the document
+// has actually been saved/shared — used by the unsaved-changes dialog so that
+// "Save first" then continues the action the user originally asked for.
+function openSaveSheet(after){
   if (!workingBytes) return;
   $("sheet").innerHTML = h`
     <h3>Save / Share</h3>
@@ -1944,20 +1972,23 @@ $("saveBtn").onclick = ()=>{
     <div class="row"><button class="full" id="svGo">Save</button></div>
     <div class="row"><button class="ghost full" id="svCancel">Cancel</button></div>`;
   $("svName").value = baseName();
-  $("svGo").onclick = ()=>{
+  $("svGo").onclick = async ()=>{
     const nm = safeFileName(($("svName").value.trim()||baseName()).replace(/\.pdf$/i,"")+".pdf");
     fileName = nm;
     closeSheet();
-    downloadBlob(new Blob([workingBytes], {type:"application/pdf"}), nm);
+    const ok = await saveOrShare(workingBytes, nm);
+    if (!ok){ setStatus("Save cancelled.","ok"); return; }   // share sheet dismissed
     dirty = false;                 // saved — nothing unsaved any more
     if (MDOC) $("meta").textContent = nm+" • "+MDOC.countPages()+" pages • "+fmtKB(workingBytes.length);
     schedulePersistDoc();
-    setStatus("Now pick where to keep it — e.g. Save to Files.","ok");
+    setStatus("Saved — now pick where to keep it (e.g. Save to Files).","ok");
+    if (after) after();
   };
   $("svCancel").onclick = closeSheet;
   openSheet();
   setTimeout(()=>{ try{ $("svName").select(); }catch(e){} }, 100);
-};
+}
+$("saveBtn").onclick = ()=> openSaveSheet();
 
 // ---------------- compress ----------------
 const COMPRESS = {
@@ -2088,13 +2119,16 @@ const UNDO_LIMIT = 10;                       // max steps
 const UNDO_BYTES_CAP = 120*1024*1024;        // max total memory for undo copies
 let undoStack = [];
 function pushUndo(){
+  // Each entry remembers BOTH the pre-mutation bytes and the dirty state at that
+  // point, so undoing back to the originally-opened document also restores
+  // dirty=false (rather than always leaving a spurious "unsaved changes" flag).
+  undoStack.push({ bytes: workingBytes ? workingBytes.slice(0) : null, dirty });
   dirty = true;                              // every mutation passes through here
-  undoStack.push(workingBytes ? workingBytes.slice(0) : null);
   if (undoStack.length>UNDO_LIMIT) undoStack.shift();
   // large documents: keep undo memory bounded by dropping the oldest steps
-  let total=0; for (const b of undoStack) total += b ? b.length : 0;
+  let total=0; for (const e of undoStack) total += e.bytes ? e.bytes.length : 0;
   while (total > UNDO_BYTES_CAP && undoStack.length > 1){
-    const drop = undoStack.shift(); total -= drop ? drop.length : 0;
+    const drop = undoStack.shift(); total -= drop.bytes ? drop.bytes.length : 0;
   }
   refreshUndo();
 }
@@ -2114,10 +2148,11 @@ function pushUndoGuarded(){
 }
 async function doUndo(){
   if (!undoStack.length){ setStatus("Nothing to undo.","err"); return; }
-  workingBytes = undoStack.pop();
+  const snap = undoStack.pop();
+  workingBytes = snap.bytes;
   showSpin(true,"Undoing…");
-  if (workingBytes){ dirty = true; reopen(); await render(); }
-  else { closeDoc(); dirty = false; try{ idbDel("doc").catch(()=>{}); }catch(e){} await render(); }
+  if (workingBytes){ dirty = snap.dirty; reopen(); await render(); }
+  else { closeDoc(); dirty = snap.dirty; try{ idbDel("doc").catch(()=>{}); }catch(e){} await render(); }
   enableDocButtons(!!workingBytes);
   showSpin(false); setStatus("Undone.","ok");
 }
@@ -2165,6 +2200,22 @@ function downloadBlob(blob, name){
   const url=URL.createObjectURL(blob); const a=document.createElement("a");
   a.href=url; a.download=safeFileName(name); a.rel="noopener"; document.body.appendChild(a); a.click();
   setTimeout(()=>{ a.remove(); URL.revokeObjectURL(url); }, 4000);
+}
+// Save the PDF. Prefer the Web Share API (the real iOS share sheet — Save to
+// Files, AirDrop, Mail…) when the browser can share files; otherwise fall back
+// to a normal download. Must be called from a user gesture for share to work.
+// Returns true if saved/shared, false if the user dismissed the share sheet.
+async function saveOrShare(bytes, name){
+  const nm = safeFileName(name);
+  try {
+    const file = new File([bytes], nm, { type:"application/pdf" });
+    if (navigator.canShare && navigator.canShare({ files:[file] })){
+      try { await navigator.share({ files:[file] }); return true; }
+      catch(e){ if (e && e.name === "AbortError") return false; /* unsupported at runtime → fall through */ }
+    }
+  } catch(e){ /* File ctor or canShare unavailable → fall through to download */ }
+  downloadBlob(new Blob([bytes], {type:"application/pdf"}), nm);
+  return true;
 }
 
 // ---------------- "Page 3 of 12" pill while scrolling ----------------
