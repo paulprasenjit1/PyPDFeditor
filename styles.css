@@ -101,11 +101,12 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 .stage .ovl { position:absolute; inset:0; pointer-events:none; }
 .stage.placing .ovl { cursor:crosshair; touch-action:none; pointer-events:auto; }
 .selrect { position:absolute; border:1.5px dashed var(--ok); background:rgba(63,185,80,.18); }
-/* text-edit span boxes (only visible/tappable in text mode); pan-y keeps
-   vertical scrolling working even when a swipe starts on a span. */
+/* text-edit span boxes (only visible/tappable in text mode); pan-x pan-y keeps
+   scrolling working in any direction even when a swipe starts on a span (a tap
+   with no movement still opens the editor). */
 .span { position:absolute; display:none; border:1px solid rgba(79,140,255,.0);
         border-radius:2px; pointer-events:none; }
-.viewer.textmode .span { display:block; pointer-events:auto; touch-action:pan-y;
+.viewer.textmode .span { display:block; pointer-events:auto; touch-action:pan-x pan-y;
         border-color:rgba(79,140,255,.45); background:rgba(79,140,255,.10); }
 .viewer.textmode .span:active { background:rgba(79,140,255,.30); }
 .empty { color:var(--muted); text-align:center; margin:auto; font-size:14px; line-height:1.7; padding:24px; }

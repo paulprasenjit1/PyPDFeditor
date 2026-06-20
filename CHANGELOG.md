@@ -4,6 +4,24 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.43] — 2026-06-20 — Edit mode: pinch-zoom + scroll + colour fill
+
+- **Pinch-zoom now works in Edit mode.** You no longer have to leave Edit mode to
+  zoom in on a small field — pinch (and the − / + buttons) work while editing, so
+  you can zoom in, tap the field, and change it in place. Only Sign mode keeps
+  pinch off (its one-finger box drag would clash).
+- **Scrolling in Edit mode** works in any direction now (the text boxes were
+  limited to vertical pans); a tap with no movement still opens the editor.
+- **Coloured-cell edits keep their colour.** Editing a field on a coloured panel
+  (e.g. the green warranty table) was still leaving a white box, because the
+  background sampler distrusted the ring when it clipped a dark grid line or
+  glyph. It now accepts the sampled colour when it's the dominant colour of the
+  ring, so the fill matches the cell — while a genuine photo/mixed background
+  still falls back to white.
+
+Scanner edge detection is left as-is (it's detecting well now); the manual
+Adjust-edges crop remains the reliable path for awkward scenes.
+
 ## [v10.42] — 2026-06-20 — Reliable manual crop (move the box + Reset)
 
 Auto edge-detection stays a best-effort hint; the dependable path is now the

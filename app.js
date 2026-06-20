@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.42";
+const APP_BUILD = "10.43";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -356,7 +356,10 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
   const dist = (t)=>Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
 
   v.addEventListener("touchstart", (e)=>{
-    if (e.touches.length===2 && workingBytes && !mode){
+    // allow pinch-zoom in Edit (text) mode too, so you can zoom in to tap a small
+    // field without leaving edit mode; only Sign mode (one-finger box drag) keeps
+    // it off to avoid a stray signature box
+    if (e.touches.length===2 && workingBytes && mode!=="sign"){
       e.preventDefault();
       const cx=(e.touches[0].clientX+e.touches[1].clientX)/2;
       const cy=(e.touches[0].clientY+e.touches[1].clientY)/2;
@@ -791,9 +794,14 @@ function sampleSpanBg(pageIndex, sp){
     if (rs.length < 8) return null;
     const med = ch => { const a=rs.map(c=>c[ch]).sort((u,v)=>u-v); return a[a.length>>1]|0; };
     const r=med(0), g=med(1), b=med(2);
-    const lum=c=>(c[0]*77+c[1]*151+c[2]*28)>>8, Lm=(r*77+g*151+b*28)>>8;
-    let dev=0; for(const c of rs) dev+=Math.abs(lum(c)-Lm); dev/=rs.length;
-    return { r, g, b, uniform: dev < 16 };           // low spread => trustworthy flat colour
+    // Trust the sampled colour when it is the DOMINANT colour of the ring (a
+    // majority of pixels are close to the median). This holds for a flat coloured
+    // cell even when the ring clips a few dark grid lines or glyphs — the median
+    // stays the cell colour and most pixels match it — but fails on a photo /
+    // mixed background, where we keep the safe white fill.
+    let close=0;
+    for (const c of rs){ if (Math.abs(c[0]-r)<40 && Math.abs(c[1]-g)<40 && Math.abs(c[2]-b)<40) close++; }
+    return { r, g, b, uniform: close/rs.length >= 0.55 };
   } catch(e){ return null; }
   finally { try{ if(pix) pix.destroy(); }catch(e){} try{ if(page) page.destroy(); }catch(e){} }
 }
