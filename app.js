@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.47";
+const APP_BUILD = "10.46";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -1368,10 +1368,7 @@ let scanQuality = "std";      // "std" | "small" — JPEG quality + output size
 try { if (localStorage.getItem("scanQuality")==="small") scanQuality="small"; } catch(e){}
 let scanEnhance = true;       // "Whiten": flatten illumination so paper reads white
 try { if (localStorage.getItem("scanEnhance")==="0") scanEnhance=false; } catch(e){}
-// Standard caps the warped page at 3200px on the long side (raised from 2560 to
-// keep the extra detail a 4K capture provides on a well-framed document); Small
-// file stays compact. JPEG quality unchanged.
-const SCAN_Q = { std:{ jpeg:0.95, maxDim:3200 }, small:{ jpeg:0.62, maxDim:1400 } };
+const SCAN_Q = { std:{ jpeg:0.95, maxDim:2560 }, small:{ jpeg:0.62, maxDim:1400 } };
 let dragIdx = -1;             // corner handle being dragged
 let torchOn = false;          // rear-camera torch state
 
@@ -1499,25 +1496,9 @@ async function startCamera(){
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
       audio:false,
-      // Request the highest practical resolution — the rear-camera video stream is
-      // the ceiling on scan sharpness, so a document that doesn't fill the frame
-      // captures with far more detail at 4K than at 1080p. `ideal` negotiates down
-      // gracefully on devices that can't do 4K (it never fails), so this is safe.
-      video:{ facingMode:{ideal:"environment"},
-              width:{ideal:3840}, height:{ideal:2160}, frameRate:{ideal:30} }
+      video:{ facingMode:{ideal:"environment"}, width:{ideal:2560}, height:{ideal:1440} }
     });
   } catch(e){ enterFallback(); return; }
-  // Some iOS devices cap the INITIAL negotiation but honour a higher resolution
-  // via applyConstraints — push to the track's max if there's headroom. Fully
-  // best-effort: any failure leaves the working stream untouched.
-  try {
-    const tr = scanStream.getVideoTracks()[0];
-    const caps = tr.getCapabilities ? tr.getCapabilities() : null;
-    const cur = tr.getSettings ? tr.getSettings() : {};
-    if (caps && caps.width && caps.height && (cur.width||0) < caps.width.max){
-      await tr.applyConstraints({ width:{ideal:caps.width.max}, height:{ideal:caps.height.max} });
-    }
-  } catch(e){}
   const v = $("scanVideo");
   v.srcObject = scanStream;
   try { await v.play(); } catch(e){ /* autoplay is allowed: muted+playsinline */ }
