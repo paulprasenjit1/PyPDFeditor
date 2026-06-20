@@ -4,6 +4,30 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.35] — 2026-06-20 — Scanner polish: trim edge bleed, lighter preview
+
+- **Cleaner scanned borders.** Before warping, the four corners are pulled a hair
+  (~0.8%) toward the centre, so a thin sliver of desk/shadow just outside the page
+  edge is no longer sampled into the scanned border. The page's own white margin
+  means no real content is lost.
+- **Lighter live-preview overlay.** The green detection fill was heavy enough to
+  tint the whole document while framing; it's now a light wash with a slightly
+  bolder, brighter outline, so you can see what you're capturing.
+
+## [v10.34] — 2026-06-20 — Fix: yellow/green cast on captured scans
+
+- **Captured pages no longer pick up a yellow/green cast.** The scanner's
+  "grey-world over the paper" white balance assumed the bright region was neutral
+  paper under a warm or cool light. When the brightest thing in frame was a
+  strongly coloured surface instead (e.g. a pink/magenta wall), neutralising it
+  injected the complementary colour — a green/yellow tint — across the rest of
+  the image. The white balance is now skipped when the bright region is clearly
+  an off-axis colour (green sitting well above or below the red-blue midpoint, as
+  with pink/magenta or green surfaces); contrast and crispening still run, so a
+  genuine warm/cool cast on real paper is still corrected exactly as before. A
+  new colour test (C6) covers the coloured-surface case, and the warm-paper
+  correction tests (C1-C3) still pass.
+
 ## [v10.33] — 2026-06-20 — Scanner detection, engine progress & detection pooling
 
 - **Live edge detection is snappy again.** The green auto-detect outline is back

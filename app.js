@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.33";
+const APP_BUILD = "10.35";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -1535,9 +1535,11 @@ function drawLiveQuad(q, stable){
   q.forEach((p,i)=>{ const x=p.x*fit.scale+fit.offX, y=p.y*fit.scale+fit.offY;
                      i ? ctx.lineTo(x,y) : ctx.moveTo(x,y); });
   ctx.closePath();
-  ctx.fillStyle="rgba(63,185,80,.16)"; ctx.fill();
-  ctx.lineWidth = stable>=2 ? 4 : 2.5;
-  ctx.strokeStyle="#3fb950"; ctx.stroke();
+  // light fill so the document stays clearly visible while framing; the outline
+  // carries the signal (a touch bolder/brighter to compensate for less fill)
+  ctx.fillStyle="rgba(63,185,80,.07)"; ctx.fill();
+  ctx.lineWidth = stable>=2 ? 4 : 3;
+  ctx.strokeStyle="#46d65c"; ctx.stroke();
   if (stable>=2){                       // auto-capture imminent: tell the user
     ctx.font="600 15px -apple-system,sans-serif";
     ctx.textAlign="center";
@@ -1777,7 +1779,7 @@ $("cropUse").onclick = async ()=>{
   showSpin(true,"Straightening page…");
   try {
     await new Promise(r=>setTimeout(r,30));    // let the spinner paint first
-    const q = orderQuad(cropQuad);
+    const q = insetQuad(orderQuad(cropQuad), 0.008);   // trim a sliver of edge bleed
     // preferred path: warp + filter in the worker (UI stays responsive)
     const sctx = capFrame.getContext("2d",{willReadFrequently:true});
     const Q = SCAN_Q[scanQuality] || SCAN_Q.std;
@@ -1844,6 +1846,15 @@ function orderQuad(q){
   const [a,b]=bySum.slice(1,3);
   const tr = (a.x-a.y) > (b.x-b.y) ? a : b;
   return [tl, tr, br, tr===a ? b : a];
+}
+// Pull the 4 corners a hair toward their centroid before warping, so a thin
+// sliver of background/shadow just outside the page edge isn't sampled into the
+// scanned border. The page itself almost always has a small white margin, so
+// this trims bleed without eating content. frac is a fraction of each corner's
+// distance to the centre (≈0.8% ≈ a few px on a phone capture).
+function insetQuad(q, frac){
+  const cx=(q[0].x+q[1].x+q[2].x+q[3].x)/4, cy=(q[0].y+q[1].y+q[2].y+q[3].y)/4;
+  return q.map(p=>({ x:p.x+(cx-p.x)*frac, y:p.y+(cy-p.y)*frac }));
 }
 
 // ---- perspective correction (main-thread fallback) ----

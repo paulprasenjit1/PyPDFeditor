@@ -101,18 +101,31 @@ export function colourBalanceCore(d,w,h){
   let sR=0,sG=0,sB=0,c=0;
   for (let i=0;i<n;i++){ if (lum[i]>=thr){ const j=i*4; sR+=d[j]; sG+=d[j+1]; sB+=d[j+2]; c++; } }
   if (c>0){
-    const TGT=245, GMAX=2.2;
-    const gr=Math.min(GMAX, Math.max(1, TGT/Math.max(1,sR/c)));
-    const gg=Math.min(GMAX, Math.max(1, TGT/Math.max(1,sG/c)));
-    const gb=Math.min(GMAX, Math.max(1, TGT/Math.max(1,sB/c)));
-    if (gr>1.001 || gg>1.001 || gb>1.001){
-      const lr=new Uint8Array(256), lg=new Uint8Array(256), lb=new Uint8Array(256);
-      for (let t=0;t<256;t++){
-        lr[t]=Math.min(255,Math.round(t*gr));
-        lg[t]=Math.min(255,Math.round(t*gg));
-        lb[t]=Math.min(255,Math.round(t*gb));
+    const mR=sR/c, mG=sG/c, mB=sB/c, mean=(mR+mG+mB)/3;
+    // Grey-world white balance assumes the bright region is neutral paper seen
+    // under a warm or cool light — a cast in which green sits BETWEEN red and
+    // blue (R>=G>=B warm, or B>=G>=R cool). If instead the bright region is a
+    // strongly COLOURED surface — a pink/magenta wall (green well below the
+    // red-blue midpoint) or a green surface (well above it) — then forcing it
+    // neutral injects the complementary cast into the rest of the frame. That is
+    // the reported yellow/green tint on captures of non-document scenes. Detect
+    // that off-axis (green<->magenta) tint and skip the white balance; the
+    // contrast + crispen steps below still run, so real documents are unaffected.
+    const offAxis = Math.abs(mG - (mR+mB)/2) / Math.max(1, mean);
+    if (offAxis < 0.12){
+      const TGT=245, GMAX=2.2;
+      const gr=Math.min(GMAX, Math.max(1, TGT/Math.max(1,mR)));
+      const gg=Math.min(GMAX, Math.max(1, TGT/Math.max(1,mG)));
+      const gb=Math.min(GMAX, Math.max(1, TGT/Math.max(1,mB)));
+      if (gr>1.001 || gg>1.001 || gb>1.001){
+        const lr=new Uint8Array(256), lg=new Uint8Array(256), lb=new Uint8Array(256);
+        for (let t=0;t<256;t++){
+          lr[t]=Math.min(255,Math.round(t*gr));
+          lg[t]=Math.min(255,Math.round(t*gg));
+          lb[t]=Math.min(255,Math.round(t*gb));
+        }
+        for (let i=0;i<n;i++){ const j=i*4; d[j]=lr[d[j]]; d[j+1]=lg[d[j+1]]; d[j+2]=lb[d[j+2]]; }
       }
-      for (let i=0;i<n;i++){ const j=i*4; d[j]=lr[d[j]]; d[j+1]=lg[d[j+1]]; d[j+2]=lb[d[j+2]]; }
     }
   }
   applyAutoContrast(d,w,h);
