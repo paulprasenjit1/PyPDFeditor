@@ -4,6 +4,28 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.33] — 2026-06-20 — Scanner detection, engine progress & detection pooling
+
+- **Live edge detection is snappy again.** The green auto-detect outline is back
+  on the main thread, where the 300px detection costs well under a frame. Moving
+  it into the worker (v10.30) had added a round-trip plus cold-start/fallback lag
+  that made the outline slow to appear. The heavy full-res warp on "Use page"
+  still runs in the worker. This also removes the problem where a slow detect
+  could disable the warp worker for the session — detection no longer touches it.
+- **Documents framed large are detected.** The "whole frame isn't a document"
+  area cap was raised from 92% to 95%, so a page that nearly fills the viewfinder
+  now gets the green outline. The reject fixtures (blank frame, bright wall,
+  L-shape) still pass, and a new fixture covers the large-framed case.
+- **First-launch engine download shows real progress.** The ~10MB engine now
+  loads behind a live percentage bar on the welcome screen instead of a static
+  "Loading engine…". Implemented through MuPDF's `instantiateWasm` hook (a single
+  download, no vendor files changed); it falls back to the engine's own loader on
+  any error and shows no bar at all on instant cached loads.
+- **Detection scratch buffers are pooled.** The per-frame `mask`/`seen`/`stack`/
+  `boundary`/`mag`/`dil` arrays are reused across calls (with correct zeroing),
+  cutting main-thread allocation churn now that detection runs there every 300ms.
+  A new idempotency test guards against stale pooled state.
+
 ## [v10.32] — 2026-06-20 — Fix: "Go to page" box zooming in and hiding the toolbar
 
 - **The "Go to page" number box no longer zooms the page in.** Its input is

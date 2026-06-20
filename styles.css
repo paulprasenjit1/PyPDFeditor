@@ -117,6 +117,13 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 .welcome .big { width:min(280px,80vw); padding:16px 18px; font-size:17px; border-radius:15px;
         box-shadow:0 8px 24px rgba(43,99,235,.30); }
 .welcome .big.ghost { border-width:1.5px; box-shadow:none; }
+/* engine download progress bar — inserted by engine-watchdog.js on first launch
+   only (the ~10MB WASM engine). Fill width is set via the CSSOM (CSP-safe). */
+.welcome .engbar { width:min(280px,80vw); height:6px; border-radius:3px; background:var(--panel2);
+        border:1px solid var(--line); overflow:hidden; }
+.welcome .engbar-fill { height:100%; width:0%; border-radius:3px;
+        background:linear-gradient(90deg, var(--grad-a), var(--grad-b)); transition:width .2s ease; }
+@media (prefers-reduced-motion: reduce){ .welcome .engbar-fill { transition:none; } }
 .status { font-size:11px; padding:3px 14px calc(2px + env(safe-area-inset-bottom));
           border-top:1px solid var(--line); background:var(--panel); color:var(--muted);
           min-height:0; line-height:1.3; }

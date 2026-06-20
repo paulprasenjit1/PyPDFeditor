@@ -192,7 +192,7 @@ export function detectQuad(im){
   }
   // pass 1: document-like regions (paper is usually brighter; try dark second)
   for (const bright of [true,false]){
-    const mask=new Uint8Array(n);
+    const mask=dqBuf("mask",n,Uint8Array,false);   // pooled; fully overwritten below
     if (bright){ for (let i=0;i<n;i++) mask[i]=bl[i]>thr?1:0; }
     else       { for (let i=0;i<n;i++) mask[i]=bl[i]<=thr?1:0; }
     const q=bestRegionQuad(mask,w,h);
@@ -206,9 +206,9 @@ export function detectQuad(im){
 // passes the document-shape tests
 function bestRegionQuad(mask,w,h){
   const n=w*h;
-  const seen=new Uint8Array(n);
-  const stack=new Int32Array(n);
-  let best=null, bestArea=0, boundary=null;
+  const seen=dqBuf("seen",n,Uint8Array,true);    // visited flags: must start zeroed
+  const stack=dqBuf("stack",n,Int32Array,false); // written via top pointer before read
+  let best=null, bestArea=0, boundary=null;       // boundary stays lazy (built once per call)
   for (let i0=0;i0<n;i0++){
     if (seen[i0] || !mask[i0]) continue;
     let top=0; stack[top++]=i0; seen[i0]=1;
@@ -228,13 +228,13 @@ function bestRegionQuad(mask,w,h){
     if (area < n*0.12 || area <= bestArea) continue;
     const q=[tl,tr,br,blc];
     const qa=quadArea(q);
-    if (qa > n*0.92) continue;            // whole frame is not a document
+    if (qa > n*0.95) continue;            // whole frame is not a document (allow docs framed large)
     if (area < qa*0.85) continue;         // poorly filled: L-shape, frame, etc.
     if (!quadIsSane(q,w,h)) continue;
     // the quad's outline must follow the region's actual boundary — an
     // L-shape's extreme-corner quad cuts across empty space and fails this
     if (!boundary){
-      boundary=new Uint8Array(n);
+      boundary=dqBuf("boundary",n,Uint8Array,true);   // pooled; zeroed, then we set edge pixels
       for (let y=0;y<h;y++) for (let x=0;x<w;x++){
         const i=y*w+x;
         if (!mask[i]) continue;
@@ -266,7 +266,7 @@ function quadIsSane(q,w,h){
 // corner extremes -> accept only if edges cover most of the quad outline
 function gradientQuad(bl,g,w,h){
   const n=w*h;
-  const mag=new Float32Array(n);
+  const mag=dqBuf("mag",n,Float32Array,true);   // interior only written; borders must be 0
   let sum=0, cnt=0;
   for (let y=1;y<h-1;y++) for (let x=1;x<w-1;x++){
     const i=y*w+x;
@@ -276,16 +276,16 @@ function gradientQuad(bl,g,w,h){
     mag[i]=m; sum+=m; cnt++;
   }
   const thr=Math.max(30, (sum/cnt)*2.5);
-  const mask=new Uint8Array(n);
+  const mask=dqBuf("mask",n,Uint8Array,false);   // fully overwritten for every pixel
   for (let i=0;i<n;i++) mask[i]=mag[i]>thr?1:0;
   // dilate once so the boundary survives small gaps
-  const dil=new Uint8Array(n);
+  const dil=dqBuf("dil",n,Uint8Array,true);      // interior only written; borders must be 0
   for (let y=1;y<h-1;y++) for (let x=1;x<w-1;x++){
     const i=y*w+x;
     dil[i]=mask[i]|mask[i-1]|mask[i+1]|mask[i-w]|mask[i+w];
   }
   // largest connected edge structure
-  const seen=new Uint8Array(n), stack=new Int32Array(n);
+  const seen=dqBuf("seen",n,Uint8Array,true), stack=dqBuf("stack",n,Int32Array,false);
   let best=null, bestSpan=0;
   for (let i0=0;i0<n;i0++){
     if (seen[i0] || !dil[i0]) continue;
@@ -308,7 +308,7 @@ function gradientQuad(bl,g,w,h){
     const span=(maxX-minX)*(maxY-minY);
     if (span < n*0.15 || span <= bestSpan) continue;
     const q=[tl,tr,br,blc];
-    if (quadArea(q) > n*0.92) continue;
+    if (quadArea(q) > n*0.95) continue;
     if (!quadIsSane(q,w,h)) continue;
     if (outlineCoverage(q,dil,w,h) < 0.80) continue;   // outline must really exist
     best=q; bestSpan=span;

@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.32";
+const APP_BUILD = "10.33";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -1499,59 +1499,31 @@ function quadClose(a,b){
   for (let i=0;i<4;i++) if (Math.hypot(a[i].x-b[i].x, a[i].y-b[i].y)>tol) return false;
   return true;
 }
-let liveBusy = false;            // a detection (worker or sync) is in flight
 function startLiveDetect(){
   if (scanLive) clearInterval(scanLive);
   resetLiveQuad();
-  liveBusy = false;
   scanLive = setInterval(()=>{
-    if (liveBusy) return;        // never queue frames faster than we can detect
     try {
       const v = $("scanVideo");
       if (!v.videoWidth || document.hidden) return;
-      liveBusy = true;
-      detectOnVideoFrame(v).then(raw=>{
-        liveBusy = false;
-        drawLiveQuad(smoothQuad(raw), 0);
-      }).catch(()=>{ liveBusy = false; });   // one bad frame must not kill the loop
-    } catch(e){ liveBusy = false; }
+      drawLiveQuad(smoothQuad(detectOnVideoFrame(v)), 0);
+    } catch(e){ /* one bad camera frame must not kill the preview loop */ }
   }, 300);
 }
-// Grab a small frame and detect the document quad. Prefers the scan worker
-// (off the main thread); falls back to synchronous detection on the main
-// thread when the worker is unavailable. Returns the quad in video px, or null.
+// Live-preview detection runs SYNCHRONOUSLY on the main thread. At the 300px
+// working size it costs well under one frame, and keeping it inline makes the
+// green outline track the camera with no worker round-trip, cold-start or
+// fallback lag (that latency was why the outline felt slow to appear). The
+// heavy full-res warp on "Use page" still runs in the worker. detectQuad is the
+// shared detector from scan-core.js.
 function detectOnVideoFrame(v){
   const vw=v.videoWidth, vh=v.videoHeight;
   const s = 300/Math.max(vw,vh);   // v10.20: higher working res = finer edges
   const sw=Math.max(2,Math.round(vw*s)), sh=Math.max(2,Math.round(vh*s));
   const ctx = scratch(sw,sh).getContext("2d",{willReadFrequently:true});
   ctx.drawImage(v,0,0,sw,sh);
-  const im = ctx.getImageData(0,0,sw,sh);
-  const toVideoPx = q => (q ? q.map(p=>({x:p.x/s, y:p.y/s})) : null);   // → video px
-  return detectQuadOffThread(im).then(q=>
-    q === undefined ? toVideoPx(detectQuad(im))    // no worker: synchronous fallback
-                    : toVideoPx(q));               // worker answered (quad or null)
-}
-// Ask the scan worker to detect the quad off the main thread. Resolves to the
-// quad, to null (worker ran, found nothing), or to undefined (no worker / it
-// failed → caller falls back to the synchronous path). Never rejects. We send a
-// COPY of the pixels so the original ImageData survives for the fallback.
-function detectQuadOffThread(im){
-  const w = getScanWorker();
-  if (!w) return Promise.resolve(undefined);
-  return new Promise((resolve)=>{
-    const id = ++scanJobId;
-    const wd = setTimeout(()=>{ w.removeEventListener("message", onMsg); scanWorker = false; resolve(undefined); }, 2000);
-    const onMsg = (e)=>{
-      if (!e.data || e.data.id !== id || e.data.kind !== "detect") return;
-      clearTimeout(wd);
-      w.removeEventListener("message", onMsg);
-      resolve(e.data.ok ? (e.data.quad || null) : undefined);
-    };
-    w.addEventListener("message", onMsg);
-    const buf = im.data.buffer.slice(0);
-    w.postMessage({ type:"detect", id, buf, w:im.width, h:im.height }, [buf]);
-  });
+  const q = detectQuad(ctx.getImageData(0,0,sw,sh));
+  return q ? q.map(p=>({x:p.x/s, y:p.y/s})) : null;   // → video px
 }
 function drawLiveQuad(q, stable){
   const cnv=$("scanQuad"), ctx=cnv.getContext("2d");
