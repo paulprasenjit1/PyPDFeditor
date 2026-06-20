@@ -4,6 +4,31 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.47] — 2026-06-20 — Higher-resolution scan capture
+
+- **Sharper scans.** The scanner now requests a 4K camera stream (up from ~1080p)
+  and, where a device allows, pushes the live track to its maximum resolution. The
+  rear-camera video stream is the ceiling on scan detail, so a document that
+  doesn't fill the frame now captures with far more pixels. It degrades gracefully
+  on devices that can't do 4K (no failure, no behaviour change there).
+- **Larger output cap.** The Standard quality keeps the warped page at up to
+  3200px on the long side (raised from 2560) so that extra detail isn't thrown
+  away on a well-framed document. JPEG quality is unchanged; "Small file" is still
+  compact for sharing.
+
+On iOS, getUserMedia is still capped below the camera's full photo resolution
+(ImageCapture.takePhoto isn't supported in iOS Safari), so filling more of the
+frame with the document remains the best way to maximise sharpness.
+
+## [v10.46] — 2026-06-20 — Fix: editing a scanned/image PDF balloons the file
+
+- **Editing text on an image-based PDF no longer bloats the file ~10x.** When a
+  page is a full-page image (a scan, or a card like the Amaron warranty), the
+  redaction that removes the old glyphs re-rasterises the whole page image to
+  UNCOMPRESSED RGB — a 2.3 MB file was ballooning to ~26 MB after one edit. The
+  redaction save now re-compresses images, bringing it back to ~2.8 MB. Verified
+  on the real Amaron PDF; harmless on ordinary text PDFs.
+
 ## [v10.45] — 2026-06-20 — Colour-fill sampling verified against a real card
 
 - **Coloured-cell edits keep the panel colour — verified on the Amaron card.**
