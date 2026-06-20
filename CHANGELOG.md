@@ -4,6 +4,47 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.30] — 2026-06-20 — Phase 3: accessibility, navigation & polish
+
+Larger UX / accessibility items from the review, plus the remaining polish. No
+feature removed or changed in behaviour except where noted. All checks pass.
+
+Accessibility:
+
+- **Text edits are keyboard / VoiceOver reachable.** The tappable text boxes in
+  Edit mode are now real buttons: Tab to one and press Enter or Space to edit it
+  (the focus ring was already styled for this).
+- **Crop corners are keyboard adjustable.** On the scanner's Adjust-edges screen
+  you can Tab to a corner and nudge it with the arrow keys (Shift = bigger steps),
+  not only drag it.
+
+Navigation:
+
+- **Go to page.** Long documents get a "Go to page…" item in More (multi-page
+  only) that scrolls straight to a page, instead of relying on scrolling and the
+  transient page pill.
+- **Zoom hint matches the device.** On phones (where the − / + buttons are
+  hidden) the open message now says "Pinch or double-tap to zoom" instead of
+  pointing at buttons that aren't there.
+
+Quality & performance:
+
+- **Live scanner edge detection moved off the main thread.** The detector
+  (`detectQuad` and helpers) now lives in `scan-core.js`, shared by the app and
+  the scan worker, so the 300 ms live-preview detection runs in the worker. It
+  falls back to the original synchronous path if the worker is unavailable, and
+  the one-shot still-capture detection is unchanged.
+- **Compress wording is honest about targets.** The size labels now say "aim
+  for ~1 MB" etc. and the sheet explains a text PDF may stay larger and an
+  already-small file is left unchanged.
+- **"Save this page as a picture" picks the centred page**, matching the page
+  pill, so a partly-scrolled tall page isn't mistaken for its neighbour.
+- **Sharper list thumbnails** (Pages / Copy-pages): JPEG quality raised from 70
+  to 82.
+- **Error log no longer keeps document names.** Messages written to the on-device
+  error log are scrubbed of the open file's name and other filename-looking
+  tokens.
+
 ## [v10.29] — 2026-06-20 — Reviewer fixes: reliability, scanner & polish
 
 Two passes of fixes from an external code review. No feature removed; behaviour

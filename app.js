@@ -1,7 +1,8 @@
 "use strict";
 import * as mupdf from "./vendor/mupdf/mupdf.js";
-// shared scanner pixel math (also imported by the scan worker — one source)
-import { warpCore, colourBalanceCore } from "./scan-core.js";
+// shared scanner pixel math + edge detection (also imported by the scan worker
+// — one source of truth for the warp, filters and document edge detection)
+import { warpCore, colourBalanceCore, detectQuad } from "./scan-core.js";
 
 const $ = id => document.getElementById(id);
 const PDFLib = window.PDFLib;
@@ -13,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.29";
+const APP_BUILD = "10.30";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -49,11 +50,19 @@ const APP_BUILD = "10.29";
 // Surface unexpected errors in the status bar — a visible message instead of
 // silently dead buttons — and keep the last few in a small on-device log
 // (shown in More → About) so problems can be reported precisely.
+// Remove the open document's name (and anything that looks like a filename)
+// before a message is written to the persisted on-device error log, so a
+// document title can't linger in localStorage on a shared device.
+function scrubForLog(s){
+  s = String(s==null ? "" : s);
+  try { if (fileName && fileName!=="document.pdf") s = s.split(fileName).join("[file]"); } catch(e){}
+  return s.replace(/[^\s/\\]+\.(pdf|png|jpe?g|gif|webp|heic|docx?)/gi, "[file]");
+}
 function reportError(kind, msg, src){
   const text = kind+": "+(msg||"unknown")+(src ? " @ "+src : "");
   try {
     const log = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]");
-    log.unshift(new Date().toISOString().slice(0,16).replace("T"," ")+" "+text);
+    log.unshift(new Date().toISOString().slice(0,16).replace("T"," ")+" "+scrubForLog(text));
     localStorage.setItem("pypdf-errlog", JSON.stringify(log.slice(0,3)));
   } catch(e){}
   try { setStatus(text+" — the app keeps running; if something stops working, close and reopen it.", "err"); } catch(e){}
@@ -115,7 +124,7 @@ function friendly(err){
   const m = String((err && err.message) || err || "");
   try {
     const log = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]");
-    log.unshift(new Date().toISOString().slice(0,16).replace("T"," ")+" "+m.slice(0,120));
+    log.unshift(new Date().toISOString().slice(0,16).replace("T"," ")+" "+scrubForLog(m).slice(0,120));
     localStorage.setItem("pypdf-errlog", JSON.stringify(log.slice(0,3)));
   } catch(e){}
   if (/password/i.test(m))                                   return "this PDF is password-protected.";
@@ -325,6 +334,12 @@ async function setZoom(newPct, anchorX, anchorY){
   zooming = false;
 }
 function applyZoom(delta){ setZoom(zoomPct + delta); }
+// On phones (<600px) the − / + buttons are hidden, so the hint must point at the
+// gestures that actually work there; tablets/desktop keep the buttons.
+function zoomTip(){
+  const phone = (typeof window.matchMedia === "function") && window.matchMedia("(max-width:599px)").matches;
+  return phone ? "Pinch or double-tap to zoom." : "Pinch or use − / + to zoom.";
+}
 $("undoBtn").onclick = ()=> doUndo();
 $("closeBtn").onclick = ()=> confirmDiscard("close this PDF", closeFile);
 $("zoomOut").onclick = ()=> applyZoom(-25);
@@ -439,7 +454,7 @@ async function openBytes(bytes, name){
   setMode(null);
   await render();
   enableDocButtons(true);
-  setStatus("Opened "+fileName+". Pinch or use − / + to zoom.","ok");
+  setStatus("Opened "+fileName+". "+zoomTip(),"ok");
 }
 function baseFrom(n){ return (n||"document.pdf").replace(/\.[^.]+$/,""); }
 
@@ -676,11 +691,18 @@ async function buildSpanBoxes(stage, pageIndex){
   spans.forEach((sp, idx)=>{
     const b = document.createElement("div");
     b.className = "span";
+    // keyboard + VoiceOver reachable: each span is a real button you can Tab to
+    // and activate with Enter/Space (the CSS already styles .span:focus-visible)
+    b.tabIndex = 0;
+    b.setAttribute("role", "button");
+    const lbl = sp.text.length > 40 ? sp.text.slice(0,40)+"…" : sp.text;
+    b.setAttribute("aria-label", "Edit text: "+lbl);
     b.style.left   = (sp.x0*s)+"px";
     b.style.top    = (sp.y0*s)+"px";
     b.style.width  = ((sp.x1-sp.x0)*s)+"px";
     b.style.height = ((sp.y1-sp.y0)*s)+"px";
     b.onclick = (ev)=>{ ev.stopPropagation(); openTextEditor(pageIndex, idx); };
+    b.onkeydown = (ev)=>{ if (ev.key==="Enter" || ev.key===" "){ ev.preventDefault(); ev.stopPropagation(); openTextEditor(pageIndex, idx); } };
     ovl.appendChild(b);
   });
 }
@@ -888,12 +910,36 @@ async function placeSignature(pageIndex, xPt, yTopPt, wPt, hPt){
   showSpin(false);
 }
 
+// ---------------- jump to a page (long documents) ----------------
+function scrollToPage(i){
+  const stage = $("pageWrap").querySelector('.stage[data-page="'+i+'"]');
+  if (stage) stage.scrollIntoView({ behavior:"smooth", block:"start" });
+}
+function openJumpToPage(){
+  const n = (workingBytes && MDOC) ? MDOC.countPages() : 0;
+  if (n < 2) return;
+  $("sheet").innerHTML = h`
+    <h3>Go to page</h3>
+    <p class="hint">This document has ${n} pages. Enter a page number.</p>
+    <div class="row"><input type="number" id="jpIn" min="1" max="${n}" inputmode="numeric" placeholder="1–${n}"></div>
+    <div class="row"><button class="full" id="jpGo">Go</button></div>
+    <div class="row"><button class="ghost full" id="jpCancel">Cancel</button></div>`;
+  const go = ()=>{ const v=Math.max(1,Math.min(n, parseInt($("jpIn").value,10)||1)); closeSheet(); scrollToPage(v-1); };
+  $("jpGo").onclick = go;
+  $("jpIn").onkeydown = e=>{ if (e.key==="Enter"){ e.preventDefault(); go(); } };
+  $("jpCancel").onclick = closeSheet;
+  openSheet();
+  setTimeout(()=>{ try{ $("jpIn").focus(); }catch(e){} }, 100);
+}
+
 // ---------------- More ▾ sheet ----------------
 $("moreBtn").onclick = ()=>{
   const has = !!workingBytes, d = has?"":"disabled";
+  const multi = has && MDOC && MDOC.countPages() > 1;
   $("sheet").innerHTML = h`
     <h3>More actions</h3>
     <div class="row"><button class="full" id="mScan">📷 Scan a document</button></div>
+    <div class="row"><button class="full" id="mGoto" ${multi?"":"disabled"}>🔢 Go to page…</button></div>
     <div class="row"><button class="full" id="mSign" ${d}>✍️ Add my signature</button></div>
     <div class="row"><button class="full" id="mOrg" ${d}>📑 Pages — reorder · rotate · delete</button></div>
     <div class="row"><button class="full" id="mExtract" ${d}>📄 Copy pages → new PDF</button></div>
@@ -902,6 +948,7 @@ $("moreBtn").onclick = ()=>{
     <div class="row"><button class="full" id="mPng" ${d}>⬇ Save this page as a picture</button></div>
     <div class="row"><button class="full" id="mAbout">About</button></div>
     <div class="row"><button class="ghost full" id="mClose">Cancel</button></div>`;
+  $("mGoto").onclick  = ()=>{ closeSheet(); openJumpToPage(); };
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
   $("mSign").onclick  = ()=>{ closeSheet(); startSign(); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
@@ -980,7 +1027,7 @@ function pageThumb(i){
   const [x0,y0,x1,y1] = page.getBounds();
   const s = (46*DPR)/(x1-x0);
   const pix = page.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false);
-  const jpg = u8(pix.asJPEG(70)); pix.destroy(); page.destroy();
+  const jpg = u8(pix.asJPEG(82)); pix.destroy(); page.destroy();   // q82: crisper thumbs on dense pages
   let bin=""; for (let k=0;k<jpg.length;k+=8192) bin += String.fromCharCode.apply(null, jpg.subarray(k,k+8192));
   const url = "data:image/jpeg;base64,"+btoa(bin);
   thumbCache.set(key, url);
@@ -1436,27 +1483,59 @@ function quadClose(a,b){
   for (let i=0;i<4;i++) if (Math.hypot(a[i].x-b[i].x, a[i].y-b[i].y)>tol) return false;
   return true;
 }
+let liveBusy = false;            // a detection (worker or sync) is in flight
 function startLiveDetect(){
   if (scanLive) clearInterval(scanLive);
   resetLiveQuad();
+  liveBusy = false;
   scanLive = setInterval(()=>{
+    if (liveBusy) return;        // never queue frames faster than we can detect
     try {
       const v = $("scanVideo");
       if (!v.videoWidth || document.hidden) return;
-      const raw = detectOnVideoFrame(v);
-      const q = smoothQuad(raw);
-      drawLiveQuad(q, 0);
-    } catch(e){ /* one bad camera frame must not kill the preview loop */ }
+      liveBusy = true;
+      detectOnVideoFrame(v).then(raw=>{
+        liveBusy = false;
+        drawLiveQuad(smoothQuad(raw), 0);
+      }).catch(()=>{ liveBusy = false; });   // one bad frame must not kill the loop
+    } catch(e){ liveBusy = false; }
   }, 300);
 }
+// Grab a small frame and detect the document quad. Prefers the scan worker
+// (off the main thread); falls back to synchronous detection on the main
+// thread when the worker is unavailable. Returns the quad in video px, or null.
 function detectOnVideoFrame(v){
   const vw=v.videoWidth, vh=v.videoHeight;
   const s = 300/Math.max(vw,vh);   // v10.20: higher working res = finer edges
   const sw=Math.max(2,Math.round(vw*s)), sh=Math.max(2,Math.round(vh*s));
   const ctx = scratch(sw,sh).getContext("2d",{willReadFrequently:true});
   ctx.drawImage(v,0,0,sw,sh);
-  const q = detectQuad(ctx.getImageData(0,0,sw,sh));
-  return q ? q.map(p=>({x:p.x/s, y:p.y/s})) : null;   // → video px
+  const im = ctx.getImageData(0,0,sw,sh);
+  const toVideoPx = q => (q ? q.map(p=>({x:p.x/s, y:p.y/s})) : null);   // → video px
+  return detectQuadOffThread(im).then(q=>
+    q === undefined ? toVideoPx(detectQuad(im))    // no worker: synchronous fallback
+                    : toVideoPx(q));               // worker answered (quad or null)
+}
+// Ask the scan worker to detect the quad off the main thread. Resolves to the
+// quad, to null (worker ran, found nothing), or to undefined (no worker / it
+// failed → caller falls back to the synchronous path). Never rejects. We send a
+// COPY of the pixels so the original ImageData survives for the fallback.
+function detectQuadOffThread(im){
+  const w = getScanWorker();
+  if (!w) return Promise.resolve(undefined);
+  return new Promise((resolve)=>{
+    const id = ++scanJobId;
+    const wd = setTimeout(()=>{ w.removeEventListener("message", onMsg); scanWorker = false; resolve(undefined); }, 2000);
+    const onMsg = (e)=>{
+      if (!e.data || e.data.id !== id || e.data.kind !== "detect") return;
+      clearTimeout(wd);
+      w.removeEventListener("message", onMsg);
+      resolve(e.data.ok ? (e.data.quad || null) : undefined);
+    };
+    w.addEventListener("message", onMsg);
+    const buf = im.data.buffer.slice(0);
+    w.postMessage({ type:"detect", id, buf, w:im.width, h:im.height }, [buf]);
+  });
 }
 function drawLiveQuad(q, stable){
   const cnv=$("scanQuad"), ctx=cnv.getContext("2d");
@@ -1599,6 +1678,21 @@ function hideLoupe(){ $("loupe").hidden=true; }
 (function wireCropHandles(){
   for (let i=0;i<4;i++){
     const hEl=$("h"+i);
+    // keyboard accessible: Tab to a corner, then nudge with the arrow keys
+    // (Shift = bigger steps). Mirrors the drag, for VoiceOver / external keyboards.
+    hEl.setAttribute("tabindex","0");
+    hEl.addEventListener("keydown", e=>{
+      if (!cropFit || !capFrame) return;
+      const step = e.shiftKey ? 10 : 2;
+      let dx=0, dy=0;
+      if (e.key==="ArrowLeft") dx=-step; else if (e.key==="ArrowRight") dx=step;
+      else if (e.key==="ArrowUp") dy=-step; else if (e.key==="ArrowDown") dy=step;
+      else return;
+      e.preventDefault();
+      cropQuad[i]={ x:Math.max(0,Math.min(capFrame.width , cropQuad[i].x+dx)),
+                    y:Math.max(0,Math.min(capFrame.height, cropQuad[i].y+dy)) };
+      updateCropOverlay();
+    });
     hEl.addEventListener("pointerdown", e=>{
       dragIdx=i; hEl.setPointerCapture(e.pointerId); e.preventDefault();
       if (cropFit && capFrame) showLoupe(cropQuad[i]);
@@ -1726,206 +1820,10 @@ async function createScanPdf(){
   showSpin(false);
 };
 
-// ---- document edge detection (pure JS, no OpenCV) ----
-// v10.2: smarter and stricter.
-//  1. Region pass: Otsu threshold, then consider EVERY sizeable connected
-//     component (both polarities), not just the largest — pick the biggest one
-//     that actually looks like a document: convex, real side lengths, well
-//     filled (≥85% of its quad — rejects L-shapes/door frames), and not the
-//     whole frame.
-//  2. Gradient fallback: when regions fail (white paper on a white desk), a
-//     Sobel edge map finds the boundary/shadow line instead; a candidate is
-//     only accepted if edges actually cover ≥80% of its outline.
-// Pooled scratch buffers for the live-preview detector (runs every 300ms).
-// Reused across frames to avoid re-allocating the big full-frame arrays each
-// time (#7). Self-contained (pool hangs off the function) so the detection
-// tests can eval it in isolation. `zero` is only requested for buffers that
-// are read before being fully written (the histogram); g/bl are overwritten
-// in full, so they skip the wasted clear.
-function dqBuf(key, len, Ctor, zero){
-  const pool = dqBuf._p || (dqBuf._p = new Map());
-  let b = pool.get(key);
-  if (!b || b.length !== len || b.constructor !== Ctor){ b = new Ctor(len); pool.set(key, b); }
-  else if (zero) b.fill(0);
-  return b;
-}
-function detectQuad(im){
-  const w=im.width, h=im.height, n=w*h, d=im.data;
-  const g=dqBuf("g",n,Uint8Array,false);
-  for (let i=0,j=0;i<n;i++,j+=4) g[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
-  const bl=dqBuf("bl",n,Uint8Array,false);
-  for (let y=0;y<h;y++) for (let x=0;x<w;x++){
-    let s=0,c=0;
-    for (let dy=-1;dy<=1;dy++){ const yy=y+dy; if(yy<0||yy>=h) continue;
-      for (let dx=-1;dx<=1;dx++){ const xx=x+dx; if(xx<0||xx>=w) continue; s+=g[yy*w+xx]; c++; } }
-    bl[y*w+x]=(s/c)|0;
-  }
-  // Otsu threshold
-  const hist=dqBuf("hist",256,Float64Array,true);
-  for (let i=0;i<n;i++) hist[bl[i]]++;
-  let sumAll=0; for (let t=0;t<256;t++) sumAll+=t*hist[t];
-  let sumB=0,wB=0,maxVar=-1,thr=127;
-  for (let t=0;t<256;t++){
-    wB+=hist[t]; if(!wB) continue;
-    const wF=n-wB; if(!wF) break;
-    sumB+=t*hist[t];
-    const mB=sumB/wB, mF=(sumAll-sumB)/wF, vr=wB*wF*(mB-mF)*(mB-mF);
-    if (vr>maxVar){ maxVar=vr; thr=t; }
-  }
-  // pass 1: document-like regions (paper is usually brighter; try dark second)
-  for (const bright of [true,false]){
-    const mask=new Uint8Array(n);
-    if (bright){ for (let i=0;i<n;i++) mask[i]=bl[i]>thr?1:0; }
-    else       { for (let i=0;i<n;i++) mask[i]=bl[i]<=thr?1:0; }
-    const q=bestRegionQuad(mask,w,h);
-    if (q) return q;
-  }
-  // pass 2: gradient fallback (same-tone paper separated only by an edge/shadow)
-  return gradientQuad(bl,g,w,h);
-}
-
-// scan all connected components of a binary mask; return the largest one that
-// passes the document-shape tests
-function bestRegionQuad(mask,w,h){
-  const n=w*h;
-  const seen=new Uint8Array(n);
-  const stack=new Int32Array(n);
-  let best=null, bestArea=0, boundary=null;
-  for (let i0=0;i0<n;i0++){
-    if (seen[i0] || !mask[i0]) continue;
-    let top=0; stack[top++]=i0; seen[i0]=1;
-    let area=0, minSum=1e9,maxSum=-1e9,minDif=1e9,maxDif=-1e9, tl=null,tr=null,br=null,blc=null;
-    while (top){
-      const i=stack[--top]; area++;
-      const x=i%w, y=(i/w)|0, su=x+y, di=x-y;
-      if (su<minSum){minSum=su; tl={x,y};}
-      if (su>maxSum){maxSum=su; br={x,y};}
-      if (di>maxDif){maxDif=di; tr={x,y};}
-      if (di<minDif){minDif=di; blc={x,y};}
-      if (x>0   && !seen[i-1] && mask[i-1]){seen[i-1]=1; stack[top++]=i-1;}
-      if (x<w-1 && !seen[i+1] && mask[i+1]){seen[i+1]=1; stack[top++]=i+1;}
-      if (y>0   && !seen[i-w] && mask[i-w]){seen[i-w]=1; stack[top++]=i-w;}
-      if (y<h-1 && !seen[i+w] && mask[i+w]){seen[i+w]=1; stack[top++]=i+w;}
-    }
-    if (area < n*0.12 || area <= bestArea) continue;
-    const q=[tl,tr,br,blc];
-    const qa=quadArea(q);
-    if (qa > n*0.92) continue;            // whole frame is not a document
-    if (area < qa*0.85) continue;         // poorly filled: L-shape, frame, etc.
-    if (!quadIsSane(q,w,h)) continue;
-    // the quad's outline must follow the region's actual boundary — an
-    // L-shape's extreme-corner quad cuts across empty space and fails this
-    if (!boundary){
-      boundary=new Uint8Array(n);
-      for (let y=0;y<h;y++) for (let x=0;x<w;x++){
-        const i=y*w+x;
-        if (!mask[i]) continue;
-        if (x===0||y===0||x===w-1||y===h-1 ||
-            !mask[i-1]||!mask[i+1]||!mask[i-w]||!mask[i+w]) boundary[i]=1;
-      }
-    }
-    if (outlineCoverage(q,boundary,w,h) < 0.80) continue;
-    best=q; bestArea=area;
-  }
-  return best;
-}
-
-// document-shape sanity: big enough, convex, no degenerate sides
-function quadIsSane(q,w,h){
-  if (quadArea(q) < w*h*0.10) return false;
-  const minSide = 0.15*Math.min(w,h);
-  let sign=0;
-  for (let i=0;i<4;i++){
-    const a=q[i], b=q[(i+1)&3], c=q[(i+2)&3];
-    if (Math.hypot(b.x-a.x, b.y-a.y) < minSide) return false;
-    const cr=(b.x-a.x)*(c.y-b.y)-(b.y-a.y)*(c.x-b.x);
-    if (cr){ const s=cr>0?1:-1; if(!sign) sign=s; else if(s!==sign) return false; }
-  }
-  return true;
-}
-
-// gradient fallback: Sobel edges -> dilate -> largest edge structure ->
-// corner extremes -> accept only if edges cover most of the quad outline
-function gradientQuad(bl,g,w,h){
-  const n=w*h;
-  const mag=new Float32Array(n);
-  let sum=0, cnt=0;
-  for (let y=1;y<h-1;y++) for (let x=1;x<w-1;x++){
-    const i=y*w+x;
-    const gx=(bl[i-w+1]+2*bl[i+1]+bl[i+w+1])-(bl[i-w-1]+2*bl[i-1]+bl[i+w-1]);
-    const gy=(bl[i+w-1]+2*bl[i+w]+bl[i+w+1])-(bl[i-w-1]+2*bl[i-w]+bl[i-w+1]);
-    const m=Math.abs(gx)+Math.abs(gy);
-    mag[i]=m; sum+=m; cnt++;
-  }
-  const thr=Math.max(30, (sum/cnt)*2.5);
-  const mask=new Uint8Array(n);
-  for (let i=0;i<n;i++) mask[i]=mag[i]>thr?1:0;
-  // dilate once so the boundary survives small gaps
-  const dil=new Uint8Array(n);
-  for (let y=1;y<h-1;y++) for (let x=1;x<w-1;x++){
-    const i=y*w+x;
-    dil[i]=mask[i]|mask[i-1]|mask[i+1]|mask[i-w]|mask[i+w];
-  }
-  // largest connected edge structure
-  const seen=new Uint8Array(n), stack=new Int32Array(n);
-  let best=null, bestSpan=0;
-  for (let i0=0;i0<n;i0++){
-    if (seen[i0] || !dil[i0]) continue;
-    let top=0; stack[top++]=i0; seen[i0]=1;
-    let area=0, minSum=1e9,maxSum=-1e9,minDif=1e9,maxDif=-1e9, tl=null,tr=null,br=null,blc=null;
-    let minX=1e9,maxX=-1e9,minY=1e9,maxY=-1e9;
-    while (top){
-      const i=stack[--top]; area++;
-      const x=i%w, y=(i/w)|0, su=x+y, di=x-y;
-      if (su<minSum){minSum=su; tl={x,y};}
-      if (su>maxSum){maxSum=su; br={x,y};}
-      if (di>maxDif){maxDif=di; tr={x,y};}
-      if (di<minDif){minDif=di; blc={x,y};}
-      if (x<minX)minX=x; if (x>maxX)maxX=x; if (y<minY)minY=y; if (y>maxY)maxY=y;
-      if (x>0   && !seen[i-1] && dil[i-1]){seen[i-1]=1; stack[top++]=i-1;}
-      if (x<w-1 && !seen[i+1] && dil[i+1]){seen[i+1]=1; stack[top++]=i+1;}
-      if (y>0   && !seen[i-w] && dil[i-w]){seen[i-w]=1; stack[top++]=i-w;}
-      if (y<h-1 && !seen[i+w] && dil[i+w]){seen[i+w]=1; stack[top++]=i+w;}
-    }
-    const span=(maxX-minX)*(maxY-minY);
-    if (span < n*0.15 || span <= bestSpan) continue;
-    const q=[tl,tr,br,blc];
-    if (quadArea(q) > n*0.92) continue;
-    if (!quadIsSane(q,w,h)) continue;
-    if (outlineCoverage(q,dil,w,h) < 0.80) continue;   // outline must really exist
-    best=q; bestSpan=span;
-  }
-  return best;
-}
-
-// fraction of points sampled along the quad's outline that sit on (or within
-// 2px of) an edge pixel
-function outlineCoverage(q,mask,w,h){
-  let hit=0, tot=0;
-  for (let s=0;s<4;s++){
-    const a=q[s], b=q[(s+1)&3];
-    const steps=Math.max(8, Math.round(Math.hypot(b.x-a.x,b.y-a.y)/2));
-    for (let k=0;k<=steps;k++){
-      const x=Math.round(a.x+(b.x-a.x)*k/steps), y=Math.round(a.y+(b.y-a.y)*k/steps);
-      tot++;
-      let found=false;
-      for (let dy=-2;dy<=2 && !found;dy++){
-        const yy=y+dy; if (yy<0||yy>=h) continue;
-        for (let dx=-2;dx<=2;dx++){
-          const xx=x+dx; if (xx<0||xx>=w) continue;
-          if (mask[yy*w+xx]){ found=true; break; }
-        }
-      }
-      if (found) hit++;
-    }
-  }
-  return hit/tot;
-}
-function quadArea(q){
-  let a=0;
-  for (let i=0;i<4;i++){ const p=q[i], r=q[(i+1)&3]; a+=p.x*r.y-r.x*p.y; }
-  return Math.abs(a)/2;
-}
+// ---- document edge detection ----
+// detectQuad and its helpers now live in scan-core.js (imported above), so the
+// main thread (still-capture auto-detect + live-preview fallback) and the scan
+// worker (off-thread live detection) share ONE copy. See scan-core.js.
 // re-derive TL,TR,BR,BL after the user has dragged corners around
 function orderQuad(q){
   const bySum=[...q].sort((a,b)=>(a.x+a.y)-(b.x+b.y));
@@ -1954,9 +1852,14 @@ window.addEventListener("resize", ()=>{
 
 // ---------------- current page -> PNG (mupdf) ----------------
 async function exportVisiblePng(){
-  const v=$("viewer"), vTop=v.getBoundingClientRect().top; let target=0, best=1e9;
+  // pick the page most CENTRED in the viewport (matches the "Page x of n" pill),
+  // so a tall page that's only partly scrolled into view isn't mistaken for its
+  // neighbour the way a nearest-to-top test could.
+  const v=$("viewer"), vr=v.getBoundingClientRect(), mid=vr.top+vr.height/2;
+  let target=0, best=1e9;
   document.querySelectorAll(".stage").forEach(s=>{
-    const d=Math.abs(s.getBoundingClientRect().top - vTop);   // viewer rect hoisted out of the loop (#6)
+    const r=s.getBoundingClientRect();
+    const d=Math.abs((r.top+r.bottom)/2 - mid);
     if (d<best){ best=d; target=+s.dataset.page; }
   });
   showSpin(true,"Rendering page "+(target+1)+"…");
@@ -2019,10 +1922,10 @@ $("compBtn").onclick = ()=>{
   if (!workingBytes) return;
   $("sheet").innerHTML = h`
     <h3>Compress</h3>
-    <p class="hint">Smaller files are easier to send and store. Pick how small:</p>
-    <div class="row"><button class="full" id="cpHigh">High quality — about 1 MB</button></div>
-    <div class="row"><button class="full" id="cpMed">Balanced — about 700 KB</button></div>
-    <div class="row"><button class="full" id="cpLow">Smallest — about 200 KB</button></div>
+    <p class="hint">Pick a size to aim for. These are targets — a PDF with real text may stay larger so the text stays selectable, and a file that's already small is left unchanged.</p>
+    <div class="row"><button class="full" id="cpHigh">High quality — aim for ~1 MB</button></div>
+    <div class="row"><button class="full" id="cpMed">Balanced — aim for ~700 KB</button></div>
+    <div class="row"><button class="full" id="cpLow">Smallest — aim for ~200 KB</button></div>
     <div class="row"><button class="ghost full" id="cpCancel">Cancel</button></div>`;
   $("cpHigh").onclick = ()=>{ closeSheet(); runCompress("high"); };
   $("cpMed").onclick  = ()=>{ closeSheet(); runCompress("medium"); };
