@@ -4,6 +4,20 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.48] — 2026-06-20 — Revert 4K capture (clean forward version) + quiet benign errors
+
+- **Reverts the 10.47 higher-resolution scan capture** (the camera is back to the
+  2560 request and 2560 output cap). Shipped as a version AHEAD of 10.47 rather
+  than re-deploying 10.46, so the service-worker cache updates forward cleanly
+  instead of backwards (a backwards version can leave a mix of old and new files
+  during the update — a common cause of transient load errors). Build 10.47 is
+  skipped on purpose.
+- **No more alarming "Script error." banner.** iOS reports many benign
+  cross-context errors as an opaque "Script error." with no detail while the app
+  keeps running. Those are now ignored instead of shown in the status bar; when
+  the browser does provide real detail it's still captured. A genuinely failed
+  engine load is still surfaced by the watchdog.
+
 ## [v10.46] — 2026-06-20 — Fix: editing a scanned/image PDF balloons the file
 
 - **Editing text on an image-based PDF no longer bloats the file ~10x.** When a

@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.46";
+const APP_BUILD = "10.48";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -68,8 +68,16 @@ function reportError(kind, msg, src){
   try { setStatus(text+" — the app keeps running; if something stops working, close and reopen it.", "err"); } catch(e){}
 }
 window.addEventListener("error", (e)=>{
+  // iOS reports many benign cross-context errors as an opaque "Script error."
+  // with NO detail (no e.error, no filename) while the app keeps running — they
+  // carry zero diagnostic value and need no user action, so ignore them rather
+  // than alarming with a red banner. A genuinely failed engine load is surfaced
+  // separately by engine-watchdog.js.
+  if (!e.error && !e.filename && /^\s*script error/i.test(String(e.message||""))) return;
   const src = e.filename ? e.filename.split("/").pop()+":"+e.lineno+":"+e.colno : "";
-  reportError("Error", e.message, src);
+  // prefer the real message/stack when the browser exposes it
+  const detail = (e.error && (e.error.message || e.error.stack)) || e.message;
+  reportError("Error", detail, src);
 });
 window.addEventListener("unhandledrejection", (e)=>{
   reportError("Async error", (e.reason && e.reason.message) || String(e.reason||""), "");
