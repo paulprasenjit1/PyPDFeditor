@@ -4,6 +4,27 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.40] — 2026-06-20 — Better scanner edge detection
+
+Two fixes for the live document outline, from real failure captures.
+
+- **Stops locking onto the wrong rectangle.** The detector now applies a centre
+  bias when choosing between candidates, so it prefers the document you're aiming
+  at in the middle of the frame over a strong off-centre rectangle like a
+  trackpad, keyboard or phone at the edge.
+- **Finds faint-edged paper more often.** A relaxed fallback pass runs only when
+  the confident passes find nothing, so plain paper on a pale or busy desk (where
+  the edges are low-contrast) gets an outline instead of none. It stays safe from
+  false positives: the fallback relaxes only the region pass (its fill guard plus
+  a new per-side outline check still reject L-shapes), and walls / blank frames /
+  the whole-frame case are still rejected. The detect-test fixtures (including the
+  L-shape, blank and wall rejections) all still pass, with new fixtures for the
+  centre preference and a ragged-edge document.
+
+Edge detection on arbitrary real-world scenes is inherently imperfect; when the
+live outline is wrong or missing you can still drag the corners on the Adjust
+screen.
+
 ## [v10.39] — 2026-06-20 — Text edits keep background colour + fit width; scan/engine polish
 
 - **Text edits keep the background colour (item 7).** Editing text that sits on a

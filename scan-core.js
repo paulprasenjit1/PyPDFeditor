@@ -290,16 +290,39 @@ export function detectQuad(im){
     if (q) return q;
   }
   // pass 2: gradient fallback (same-tone paper separated only by an edge/shadow)
-  return gradientQuad(bl,g,w,h);
+  const gq=gradientQuad(bl,g,w,h);
+  if (gq) return gq;
+  // pass 3: RELAXED REGION fallback — only runs when the confident passes above
+  // found nothing, so it can pick up a faint-edged document (white paper on a
+  // pale or busy desk) without changing any case that already detects. Only the
+  // REGION pass is relaxed (its fill guard still rejects L-shapes); the gradient
+  // pass is NOT relaxed, because edge-only shapes like an L can sneak past a
+  // looser outline test. Size, shape, convexity and not-the-whole-frame guards
+  // all still apply, so walls and blank frames stay rejected.
+  const RX={ fill:0.82, outline:0.68, minSide:0.55 };
+  for (const bright of [true,false]){
+    const mask=dqBuf("mask",n,Uint8Array,false);
+    if (bright){ for (let i=0;i<n;i++) mask[i]=bl[i]>thr?1:0; }
+    else       { for (let i=0;i<n;i++) mask[i]=bl[i]<=thr?1:0; }
+    const q=bestRegionQuad(mask,w,h,RX);
+    if (q) return q;
+  }
+  return null;
 }
 
-// scan all connected components of a binary mask; return the largest one that
-// passes the document-shape tests
-function bestRegionQuad(mask,w,h){
+// scan all connected components of a binary mask; return the best one that
+// passes the document-shape tests. "best" = largest, but with a centre bias so
+// the aimed-at document is preferred over an off-centre distractor (a trackpad,
+// a keyboard, a phone) of comparable size. `opts.fill` / `opts.outline` relax
+// the shape gates for the fallback pass (defaults are the strict values).
+function bestRegionQuad(mask,w,h,opts){
   const n=w*h;
+  const fillT=(opts&&opts.fill)||0.85, outT=(opts&&opts.outline)||0.80;
+  const minSideT=(opts&&opts.minSide)||0;   // 0 = no per-side requirement (strict)
+  const cw=w/2, ch=h/2, diag=Math.hypot(w,h)||1;
   const seen=dqBuf("seen",n,Uint8Array,true);    // visited flags: must start zeroed
   const stack=dqBuf("stack",n,Int32Array,false); // written via top pointer before read
-  let best=null, bestArea=0, boundary=null;       // boundary stays lazy (built once per call)
+  let best=null, bestScore=0, boundary=null;      // boundary stays lazy (built once per call)
   for (let i0=0;i0<n;i0++){
     if (seen[i0] || !mask[i0]) continue;
     let top=0; stack[top++]=i0; seen[i0]=1;
@@ -316,11 +339,13 @@ function bestRegionQuad(mask,w,h){
       if (y>0   && !seen[i-w] && mask[i-w]){seen[i-w]=1; stack[top++]=i-w;}
       if (y<h-1 && !seen[i+w] && mask[i+w]){seen[i+w]=1; stack[top++]=i+w;}
     }
-    if (area < n*0.12 || area <= bestArea) continue;
+    // area is the maximum possible (centre-weighted) score, so this still skips
+    // components that can't beat the current best
+    if (area < n*0.12 || area <= bestScore) continue;
     const q=[tl,tr,br,blc];
     const qa=quadArea(q);
     if (qa > n*0.95) continue;            // whole frame is not a document (allow docs framed large)
-    if (area < qa*0.85) continue;         // poorly filled: L-shape, frame, etc.
+    if (area < qa*fillT) continue;        // poorly filled: L-shape, frame, etc.
     if (!quadIsSane(q,w,h)) continue;
     // the quad's outline must follow the region's actual boundary — an
     // L-shape's extreme-corner quad cuts across empty space and fails this
@@ -333,8 +358,13 @@ function bestRegionQuad(mask,w,h){
             !mask[i-1]||!mask[i+1]||!mask[i-w]||!mask[i+w]) boundary[i]=1;
       }
     }
-    if (outlineCoverage(q,boundary,w,h) < 0.80) continue;
-    best=q; bestArea=area;
+    if (outlineCoverage(q,boundary,w,h) < outT) continue;
+    // relaxed pass: also require every side (not just the average) to follow the
+    // boundary, so an L-shape's cut-across side can't sneak through a looser bar
+    if (minSideT>0 && worstSideCoverage(q,boundary,w,h) < minSideT) continue;
+    const qx=(tl.x+tr.x+br.x+blc.x)/4, qy=(tl.y+tr.y+br.y+blc.y)/4;
+    const score=area*(1 - 0.6*Math.hypot(qx-cw,qy-ch)/diag);   // centre bias
+    if (score>bestScore){ best=q; bestScore=score; }
   }
   return best;
 }
@@ -355,8 +385,10 @@ function quadIsSane(q,w,h){
 
 // gradient fallback: Sobel edges -> dilate -> largest edge structure ->
 // corner extremes -> accept only if edges cover most of the quad outline
-function gradientQuad(bl,g,w,h){
+function gradientQuad(bl,g,w,h,opts){
   const n=w*h;
+  const outT=(opts&&opts.outline)||0.80;
+  const cw=w/2, ch=h/2, diag=Math.hypot(w,h)||1;
   const mag=dqBuf("mag",n,Float32Array,true);   // interior only written; borders must be 0
   let sum=0, cnt=0;
   for (let y=1;y<h-1;y++) for (let x=1;x<w-1;x++){
@@ -377,7 +409,7 @@ function gradientQuad(bl,g,w,h){
   }
   // largest connected edge structure
   const seen=dqBuf("seen",n,Uint8Array,true), stack=dqBuf("stack",n,Int32Array,false);
-  let best=null, bestSpan=0;
+  let best=null, bestScore=0;
   for (let i0=0;i0<n;i0++){
     if (seen[i0] || !dil[i0]) continue;
     let top=0; stack[top++]=i0; seen[i0]=1;
@@ -397,12 +429,14 @@ function gradientQuad(bl,g,w,h){
       if (y<h-1 && !seen[i+w] && dil[i+w]){seen[i+w]=1; stack[top++]=i+w;}
     }
     const span=(maxX-minX)*(maxY-minY);
-    if (span < n*0.15 || span <= bestSpan) continue;
+    if (span < n*0.15 || span <= bestScore) continue;   // span is the max possible score
     const q=[tl,tr,br,blc];
     if (quadArea(q) > n*0.95) continue;
     if (!quadIsSane(q,w,h)) continue;
-    if (outlineCoverage(q,dil,w,h) < 0.80) continue;   // outline must really exist
-    best=q; bestSpan=span;
+    if (outlineCoverage(q,dil,w,h) < outT) continue;   // outline must really exist
+    const qx=(tl.x+tr.x+br.x+blc.x)/4, qy=(tl.y+tr.y+br.y+blc.y)/4;
+    const score=span*(1 - 0.6*Math.hypot(qx-cw,qy-ch)/diag);   // centre bias
+    if (score>bestScore){ best=q; bestScore=score; }
   }
   return best;
 }
@@ -429,6 +463,32 @@ function outlineCoverage(q,mask,w,h){
     }
   }
   return hit/tot;
+}
+// Worst coverage among the 4 sides. A real (even faint) document has all four
+// sides on the boundary, so its worst side is still decent; an L-shape has one
+// side cutting across empty space (very low). Used as the relaxed pass's guard.
+function worstSideCoverage(q,mask,w,h){
+  let worst=1;
+  for (let s=0;s<4;s++){
+    const a=q[s], b=q[(s+1)&3];
+    const steps=Math.max(8, Math.round(Math.hypot(b.x-a.x,b.y-a.y)/2));
+    let hit=0, tot=0;
+    for (let k=0;k<=steps;k++){
+      const x=Math.round(a.x+(b.x-a.x)*k/steps), y=Math.round(a.y+(b.y-a.y)*k/steps);
+      tot++;
+      let found=false;
+      for (let dy=-2;dy<=2 && !found;dy++){
+        const yy=y+dy; if (yy<0||yy>=h) continue;
+        for (let dx=-2;dx<=2;dx++){
+          const xx=x+dx; if (xx<0||xx>=w) continue;
+          if (mask[yy*w+xx]){ found=true; break; }
+        }
+      }
+      if (found) hit++;
+    }
+    const cov=tot?hit/tot:0; if (cov<worst) worst=cov;
+  }
+  return worst;
 }
 function quadArea(q){
   let a=0;
