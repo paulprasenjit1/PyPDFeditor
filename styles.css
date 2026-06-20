@@ -130,13 +130,16 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 .status.ok { color:var(--ok); font-weight:600; background:rgba(63,185,80,.07); }
 .status.err { color:var(--err); font-weight:600; background:rgba(248,81,73,.08); }
 .status.warn { color:var(--warn); font-weight:600; background:rgba(210,153,34,.08); }
-/* "Page 3 of 12" pill: fades in while scrolling, out when you stop */
+/* "Page 3 of 12" pill: fades in while scrolling, out when you stop. It is also a
+   shortcut — tap it to open Go to page — so it gets an accent outline and is
+   only tappable while visible (pointer-events:auto on .show). */
 .pgpill { position:fixed; left:50%; transform:translateX(-50%);
           bottom:calc(56px + env(safe-area-inset-bottom)); z-index:50;
-          background:rgba(13,15,20,.88); color:#fff; font-size:12px; font-weight:600;
-          padding:6px 13px; border-radius:15px; border:1px solid var(--line);
-          opacity:0; pointer-events:none; transition:opacity .25s ease; }
-.pgpill.show { opacity:1; }
+          background:rgba(13,15,20,.92); color:#fff; font-size:12px; font-weight:600;
+          padding:6px 13px; border-radius:15px; border:1.5px solid var(--accent);
+          opacity:0; pointer-events:none; cursor:pointer; transition:opacity .25s ease; }
+.pgpill.show { opacity:1; pointer-events:auto; }
+.pgpill:active { background:rgba(13,15,20,1); }
 @media (prefers-reduced-motion: reduce){ .pgpill { transition:none; } }
 /* Layering: scanner (90) < sheets (110) < spinner (120), so dialogs and the
    working spinner are always visible, including on top of the scanner. */

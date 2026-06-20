@@ -4,6 +4,33 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.37] — 2026-06-20 — Tappable page pill (shortcut to Go to page)
+
+- **The page pill is now a shortcut.** The "Page 3 of 12" indicator that appears
+  while you scroll a multi-page document is now tappable — it opens the same Go to
+  page dialog as More → Go to page. It gets a subtle accent outline and a ↕ hint
+  so its tappability is clear, stays visible a little longer (2.5s) so it's
+  comfortable to hit, and won't fade while your finger is on it. Go to page also
+  remains in the More menu.
+
+## [v10.36] — 2026-06-20 — Whiten paper, multi-line edit fix, drop auto-capture
+
+- **"Whiten" — optional illumination flattening.** A new toggle on the scanner's
+  Adjust-edges screen evens out shadows and uneven lighting so crumpled or
+  shadowed paper reads as uniform white. It's halo-free by design: the background
+  is estimated at a coarse scale (far larger than any glyph, so text can't pull it
+  down), then applied as a gentle, clamped, brighten-only luminance gain that
+  leaves hue unchanged and keeps text dark. On by default; toggle it off on the
+  Adjust screen to compare before tapping Use page. New colour tests (F1-F3) cover
+  flattening, text darkness and the no-halo guarantee.
+- **Multi-line text edits no longer overflow.** A text "span" is a single line;
+  if you typed newlines into the editor the replacement used to flow downward past
+  where the original sat and over the content below. Newlines are now collapsed to
+  spaces so the replacement stays on its line.
+- **Auto-capture removed for good.** Per your call, the scanner stays manual-shutter
+  only; the unreachable "Hold still…" auto-capture overlay was deleted.
+- **Lighter detection overlay & trimmed edge bleed** carried over from 10.35.
+
 ## [v10.35] — 2026-06-20 — Scanner polish: trim edge bleed, lighter preview
 
 - **Cleaner scanned borders.** Before warping, the four corners are pulled a hair

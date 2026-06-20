@@ -2,7 +2,7 @@
 import * as mupdf from "./vendor/mupdf/mupdf.js";
 // shared scanner pixel math + edge detection (also imported by the scan worker
 // — one source of truth for the warp, filters and document edge detection)
-import { warpCore, colourBalanceCore, detectQuad } from "./scan-core.js";
+import { warpCore, colourBalanceCore, detectQuad, flattenIllumination } from "./scan-core.js";
 
 const $ = id => document.getElementById(id);
 const PDFLib = window.PDFLib;
@@ -14,12 +14,12 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.35";
+const APP_BUILD = "10.37";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
-    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","cropRetake","cropUse"];
+    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","cropRetake","cropUse"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
     try { sessionStorage.removeItem("pypdf-healed"); } catch(e){}
@@ -783,7 +783,10 @@ async function applyTextEdit(pageIndex, sp, newText){
     const H = pg.getHeight();
     const w = (sp.x1-sp.x0)+2, h = (sp.y1-sp.y0)+2;
     pg.drawRectangle({ x:sp.x0-1, y:H-(sp.y1+1), width:w, height:h, color:rgb(1,1,1) });
-    const text = (newText||"");
+    // a text span is a single line; collapse any newlines the user typed so the
+    // replacement stays on that line and can't flow downward past where the
+    // original sat (and over the content below it)
+    const text = (newText||"").replace(/[\r\n]+/g, " ");
     let substituted = false;
     if (text.trim() !== ""){
       const font = await doc.embedFont(pickFont(sp.font));
@@ -1293,6 +1296,8 @@ let cropFit = null;           // image→display fit for the crop screen
 const cropFilter = "colour";  // scanner is colour-only (B&W removed in v10.20)
 let scanQuality = "std";      // "std" | "small" — JPEG quality + output size
 try { if (localStorage.getItem("scanQuality")==="small") scanQuality="small"; } catch(e){}
+let scanEnhance = true;       // "Whiten": flatten illumination so paper reads white
+try { if (localStorage.getItem("scanEnhance")==="0") scanEnhance=false; } catch(e){}
 const SCAN_Q = { std:{ jpeg:0.95, maxDim:2560 }, small:{ jpeg:0.62, maxDim:1400 } };
 let dragIdx = -1;             // corner handle being dragged
 let torchOn = false;          // rear-camera torch state
@@ -1321,7 +1326,7 @@ function getScanWorker(){
   }
   return scanWorker;
 }
-function processPageOffThread(srcIm, quad, filter, maxDim){
+function processPageOffThread(srcIm, quad, filter, maxDim, enhance){
   const w = getScanWorker();
   if (!w) return Promise.resolve(null);
   return new Promise((resolve)=>{
@@ -1340,7 +1345,7 @@ function processPageOffThread(srcIm, quad, filter, maxDim){
     w.addEventListener("message", onMsg);
     w.addEventListener("error", onErr, { once:true });
     // transfer the pixels (zero-copy); the canvas still holds its own copy
-    w.postMessage({ id, buf:srcIm.data.buffer, w:srcIm.width, h:srcIm.height, quad, filter, maxDim },
+    w.postMessage({ id, buf:srcIm.data.buffer, w:srcIm.width, h:srcIm.height, quad, filter, maxDim, enhance },
                   [srcIm.data.buffer]);
   });
 }
@@ -1506,7 +1511,7 @@ function startLiveDetect(){
     try {
       const v = $("scanVideo");
       if (!v.videoWidth || document.hidden) return;
-      drawLiveQuad(smoothQuad(detectOnVideoFrame(v)), 0);
+      drawLiveQuad(smoothQuad(detectOnVideoFrame(v)));
     } catch(e){ /* one bad camera frame must not kill the preview loop */ }
   }, 300);
 }
@@ -1525,7 +1530,10 @@ function detectOnVideoFrame(v){
   const q = detectQuad(ctx.getImageData(0,0,sw,sh));
   return q ? q.map(p=>({x:p.x/s, y:p.y/s})) : null;   // → video px
 }
-function drawLiveQuad(q, stable){
+// Draw the detected document outline on the live preview. Capture is always
+// manual (the shutter) — there is no auto-capture, so there's no "hold still"
+// state here.
+function drawLiveQuad(q){
   const cnv=$("scanQuad"), ctx=cnv.getContext("2d");
   ctx.clearRect(0,0,cnv.width,cnv.height);
   if (!q) return;
@@ -1538,17 +1546,8 @@ function drawLiveQuad(q, stable){
   // light fill so the document stays clearly visible while framing; the outline
   // carries the signal (a touch bolder/brighter to compensate for less fill)
   ctx.fillStyle="rgba(63,185,80,.07)"; ctx.fill();
-  ctx.lineWidth = stable>=2 ? 4 : 3;
+  ctx.lineWidth = 3;
   ctx.strokeStyle="#46d65c"; ctx.stroke();
-  if (stable>=2){                       // auto-capture imminent: tell the user
-    ctx.font="600 15px -apple-system,sans-serif";
-    ctx.textAlign="center";
-    ctx.fillStyle="rgba(0,0,0,.55)";
-    const cx=cnv.width/2, cy=cnv.height-34;
-    ctx.fillRect(cx-66, cy-20, 132, 28);
-    ctx.fillStyle="#fff";
-    ctx.fillText("Hold still…", cx, cy);
-  }
 }
 
 // ---- capture ----
@@ -1737,6 +1736,18 @@ function setScanQuality(q){
   $("qStd").classList.toggle("on", q==="std");
   $("qSmall").classList.toggle("on", q==="small");
 }
+// "Whiten": flatten illumination so shadowed/crumpled paper reads as white. An
+// independent on/off toggle (not part of the size choice). Re-renders the crop
+// preview so you can compare before tapping Use page.
+try { $("enhToggle").classList.toggle("on", scanEnhance); $("enhToggle").setAttribute("aria-pressed", String(scanEnhance)); } catch(e){}
+$("enhToggle").onclick = ()=> setScanEnhance(!scanEnhance);
+function setScanEnhance(on){
+  scanEnhance = !!on;
+  try { localStorage.setItem("scanEnhance", scanEnhance ? "1" : "0"); } catch(e){}
+  $("enhToggle").classList.toggle("on", scanEnhance);
+  $("enhToggle").setAttribute("aria-pressed", String(scanEnhance));
+  renderCropPreview();
+}
 // draw the captured photo onto the crop canvas with the active filter applied,
 // so Colour / B&W switch what you see instantly (preview runs at display
 // resolution — the final page is processed at full resolution on "Use page")
@@ -1748,6 +1759,7 @@ function renderCropPreview(){
   ctx.drawImage(capFrame,0,0,ph.width,ph.height);
   const im=ctx.getImageData(0,0,ph.width,ph.height);
   colourBalanceCore(im.data, im.width, im.height);
+  if (scanEnhance) flattenIllumination(im.data, im.width, im.height);
   ctx.putImageData(im,0,0);
 }
 
@@ -1784,10 +1796,11 @@ $("cropUse").onclick = async ()=>{
     const sctx = capFrame.getContext("2d",{willReadFrequently:true});
     const Q = SCAN_Q[scanQuality] || SCAN_Q.std;
     let out = await processPageOffThread(
-      sctx.getImageData(0,0,capFrame.width,capFrame.height), q, cropFilter, Q.maxDim);
+      sctx.getImageData(0,0,capFrame.width,capFrame.height), q, cropFilter, Q.maxDim, scanEnhance);
     if (!out){                                 // fallback: same math, main thread
       out = warpPerspective(capFrame, q, Q.maxDim);
       colourBalanceCore(out.data, out.width, out.height);
+      if (scanEnhance) flattenIllumination(out.data, out.width, out.height);
     }
     const c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
     c.getContext("2d").putImageData(out,0,0);
@@ -2183,13 +2196,21 @@ $("viewer").addEventListener("scroll", ()=>{
         if (d < bd){ bd = d; best = +s.dataset.page; }
       });
       const p = $("pagePill");
-      p.textContent = "Page "+(best+1)+" of "+n;
+      p.textContent = "↕ Page "+(best+1)+" of "+n;       // ↕ hints it's tappable
+      p.setAttribute("aria-label", "Go to page — currently page "+(best+1)+" of "+n);
       p.classList.add("show");
       clearTimeout(pillT);
-      pillT = setTimeout(()=>p.classList.remove("show"), 1200);
+      // stay visible a little longer than before so it's comfortable to tap
+      pillT = setTimeout(()=>p.classList.remove("show"), 2500);
     } catch(e){}
   });
 }, { passive:true });
+// the pill is a shortcut to Go to page; tapping it opens the same dialog as More
+$("pagePill").onclick = ()=>{ if (workingBytes && MDOC && MDOC.countPages()>1) openJumpToPage(); };
+// don't let it fade while a finger/cursor is on it, so the tap can't miss
+["pointerenter","pointerdown"].forEach(ev=>$("pagePill").addEventListener(ev, ()=>{ clearTimeout(pillT); }));
+$("pagePill").addEventListener("pointerleave", ()=>{ clearTimeout(pillT);
+  pillT = setTimeout(()=>$("pagePill").classList.remove("show"), 1200); });
 
 // Re-render on rotate / real width change only. iOS fires "resize" constantly
 // as the address bar shows/hides (height-only changes); re-rendering on those

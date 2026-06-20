@@ -164,6 +164,78 @@ export function boxBlurF(a,w,h,r){
   }
 }
 
+// ---- illumination flattening ("whiten paper", optional) ----
+// Evens out uneven lighting / shadows so crumpled or shadowed paper reads as
+// uniform white, WITHOUT the dark halos around text that a small-radius unsharp
+// or illumination map causes (the old v10.14 "magic scan" problem). The trick is
+// to estimate the background at a COARSE scale, far larger than any glyph, so
+// text cannot pull the estimate down:
+//   1) Split the image into a coarse grid (~32 cells on the long side). For each
+//      cell, estimate the PAPER colour as the mean of its brighter-than-average
+//      pixels — text is darker, so it drops out of the estimate.
+//   2) Lightly blur that small grid and pick a robust paper-white target.
+//   3) Upscale the grid smoothly (bilinear) and multiply each pixel by
+//      target/localPaper as a single LUMINANCE gain (equal on R/G/B, so hue is
+//      unchanged), clamped to only ever brighten and never by more than GMAX.
+// Shadowed paper lifts to white; text keeps its colour because the gain under
+// text equals the gain of the paper immediately around it. Gentle and clamped.
+function smoothGrid(g, gw, gh){
+  if (gw<3 && gh<3) return;
+  const t=Float32Array.from(g);
+  for (let y=0;y<gh;y++) for (let x=0;x<gw;x++){
+    let s=0,c=0;
+    for (let dy=-1;dy<=1;dy++){ const yy=y+dy; if(yy<0||yy>=gh) continue;
+      for (let dx=-1;dx<=1;dx++){ const xx=x+dx; if(xx<0||xx>=gw) continue; s+=t[yy*gw+xx]; c++; } }
+    g[y*gw+x]=s/c;
+  }
+}
+export function flattenIllumination(d, w, h){
+  const n=w*h;
+  if (n < 64) return;
+  const GW = Math.max(1, Math.min(32, w));
+  const GH = Math.max(1, Math.min(64, Math.round(GW*h/w) || 1));
+  const cells = GW*GH;
+  const cx = i => Math.min(GW-1, (i*GW/w)|0);
+  // pass 1: cell mean luminance
+  const sumL=new Float32Array(cells), cnt=new Float32Array(cells);
+  for (let y=0;y<h;y++){ const gy=Math.min(GH-1,(y*GH/h)|0), row=gy*GW;
+    for (let x=0;x<w;x++){ const j=(y*w+x)*4;
+      const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+      const gi=row+cx(x); sumL[gi]+=L; cnt[gi]++; } }
+  const meanL=new Float32Array(cells);
+  for (let i=0;i<cells;i++) meanL[i]=sumL[i]/(cnt[i]||1);
+  // pass 2: paper luminance = mean of pixels brighter than the cell mean
+  const pSum=new Float32Array(cells), pCnt=new Float32Array(cells);
+  for (let y=0;y<h;y++){ const gy=Math.min(GH-1,(y*GH/h)|0), row=gy*GW;
+    for (let x=0;x<w;x++){ const j=(y*w+x)*4;
+      const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+      const gi=row+cx(x); if (L>=meanL[gi]){ pSum[gi]+=L; pCnt[gi]++; } } }
+  const paper=new Float32Array(cells);
+  for (let i=0;i<cells;i++) paper[i]= pCnt[i]?pSum[i]/pCnt[i]:meanL[i];
+  smoothGrid(paper, GW, GH);
+  // robust paper-white target: 85th percentile of the grid, sensibly capped
+  const sorted=Float32Array.from(paper).sort();
+  let target=sorted[Math.min(cells-1, Math.floor(cells*0.85))];
+  target=Math.max(170, Math.min(244, target));
+  // apply: bilinear-upscaled gain, luminance-only, gentle + clamped (brighten only)
+  const GMAX=2.0, S=0.85;
+  for (let y=0;y<h;y++){
+    const fy=Math.max(0, Math.min(GH-1.0001, y*GH/h - 0.5)), y0=Math.floor(fy), y1=Math.min(GH-1,y0+1), wy=fy-y0;
+    for (let x=0;x<w;x++){
+      const fx=Math.max(0, Math.min(GW-1.0001, x*GW/w - 0.5)), x0=Math.floor(fx), x1=Math.min(GW-1,x0+1), wx=fx-x0;
+      const p0=paper[y0*GW+x0]*(1-wx)+paper[y0*GW+x1]*wx;
+      const p1=paper[y1*GW+x0]*(1-wx)+paper[y1*GW+x1]*wx;
+      const bg=p0*(1-wy)+p1*wy;
+      let gain=target/Math.max(1,bg);
+      gain=1+(Math.max(1,Math.min(GMAX,gain))-1)*S;   // only brighten, capped, gentle
+      const j=(y*w+x)*4;
+      d[j]  =Math.min(255, d[j]  *gain);
+      d[j+1]=Math.min(255, d[j+1]*gain);
+      d[j+2]=Math.min(255, d[j+2]*gain);
+    }
+  }
+}
+
 // ---- document edge detection (pure JS, no OpenCV) ----
 // Lives here (since v10.30) so BOTH the main thread (app.js: the still-capture
 // auto-detect and the synchronous live-preview fallback) and the scan worker
