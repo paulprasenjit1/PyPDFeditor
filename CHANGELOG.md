@@ -4,6 +4,30 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.42] — 2026-06-20 — Reliable manual crop (move the box + Reset)
+
+Auto edge-detection stays a best-effort hint; the dependable path is now the
+Adjust-edges screen, which got two big usability additions:
+
+- **Drag the whole box.** Dragging the interior of the crop box slides all four
+  corners together, so when the outline is the right shape but the wrong place
+  (e.g. it grabbed a keyboard), you can just slide it onto the document and
+  fine-tune the corners — instead of dragging each corner from scratch.
+- **Reset button.** One tap snaps the crop to a near-full-page rectangle, a clean
+  starting point when auto-detection grabbed the wrong thing or nothing. Drag the
+  box / corners onto the document from there.
+
+The corner handles keep their enlarged hit areas, magnifier loupe and arrow-key
+nudge from before.
+
+## [v10.41] — 2026-06-20 — Revert over-eager edge detection
+
+- **Reverted the 10.40 relaxed detection fallback.** On cluttered desks it
+  over-included — outlining a keyboard/laptop together with the paper. Detection
+  is back to the conservative confident passes, keeping only the safe centre-bias
+  (prefer the document aimed at the middle of frame over an off-centre rectangle).
+  When the live outline is wrong or missing, drag the corners on the Adjust screen.
+
 ## [v10.40] — 2026-06-20 — Better scanner edge detection
 
 Two fixes for the live document outline, from real failure captures.

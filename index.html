@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="10.40">
+<html lang="en" data-build="10.42">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -107,7 +107,10 @@
 <div class="scanui" id="scanCrop">
   <div class="scantop">
     <span class="ttl">Adjust edges</span>
-    <span class="pgct" id="cropHint">Drag the corners</span>
+    <span class="tools">
+      <span class="pgct" id="cropHint">Drag the box or its corners</span>
+      <button class="ghost mini" id="cropReset" aria-label="Reset the crop to the full page">Reset</button>
+    </span>
   </div>
   <div class="cropwrap" id="cropWrap">
     <canvas class="photo" id="cropPhoto"></canvas>

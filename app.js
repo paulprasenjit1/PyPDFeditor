@@ -14,12 +14,12 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.40";
+const APP_BUILD = "10.42";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
-    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","cropRetake","cropUse"];
+    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","cropReset","cropRetake","cropUse"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
     try { sessionStorage.removeItem("pypdf-healed"); } catch(e){}
@@ -1778,6 +1778,51 @@ function hideLoupe(){ $("loupe").hidden=true; }
     hEl.addEventListener("pointerup",end);
     hEl.addEventListener("pointercancel",end);
   }
+})();
+
+// Reset the crop to a near-full-page rectangle — a clean starting point for the
+// reliable manual path when auto-detection grabbed the wrong thing (a keyboard,
+// the desk) or nothing at all.
+function resetCropQuad(){
+  if (!capFrame || !cropFit) return;
+  const mx=capFrame.width*0.04, my=capFrame.height*0.04;
+  cropQuad=[{x:mx,y:my},{x:capFrame.width-mx,y:my},
+            {x:capFrame.width-mx,y:capFrame.height-my},{x:mx,y:capFrame.height-my}];
+  updateCropOverlay();
+  setStatus("Reset to the full page — drag the box or its corners onto the document.","ok");
+}
+$("cropReset").onclick = ()=> resetCropQuad();
+
+// Drag the WHOLE crop box (move all 4 corners together) by dragging its interior,
+// so a correctly-shaped box can be slid onto the document and then fine-tuned at
+// the corners. The corner hit-circles sit on top, so grabbing near a corner still
+// drags just that corner.
+(function wireCropBody(){
+  const poly=$("cropPoly");
+  let start=null, base=null;
+  poly.addEventListener("pointerdown", e=>{
+    if (!cropFit || !capFrame) return;
+    try{ poly.setPointerCapture(e.pointerId); }catch(_){}
+    e.preventDefault();
+    const r=$("cropSvg").getBoundingClientRect();
+    start={ x:(e.clientX-r.left)/cropFit.scale, y:(e.clientY-r.top)/cropFit.scale };
+    base=cropQuad.map(p=>({x:p.x,y:p.y}));
+  });
+  poly.addEventListener("pointermove", e=>{
+    if (!start || !base) return;
+    const r=$("cropSvg").getBoundingClientRect();
+    let dx=(e.clientX-r.left)/cropFit.scale - start.x;
+    let dy=(e.clientY-r.top)/cropFit.scale - start.y;
+    const xs=base.map(p=>p.x), ys=base.map(p=>p.y);
+    const minX=Math.min(...xs), maxX=Math.max(...xs), minY=Math.min(...ys), maxY=Math.max(...ys);
+    dx=Math.max(-minX, Math.min(capFrame.width -maxX, dx));   // keep the box inside the image
+    dy=Math.max(-minY, Math.min(capFrame.height-maxY, dy));
+    cropQuad=base.map(p=>({x:p.x+dx, y:p.y+dy}));
+    updateCropOverlay();
+  });
+  const end=()=>{ start=null; base=null; };
+  poly.addEventListener("pointerup",end);
+  poly.addEventListener("pointercancel",end);
 })();
 
 // output size: Standard (sharp) or Small file (lighter PDFs)
