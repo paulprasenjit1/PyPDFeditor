@@ -146,7 +146,12 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 .sheet .full { width:100%; }
 .sheet textarea { width:100%; min-height:84px; background:var(--bg); color:var(--txt);
          border:1px solid var(--line); border-radius:8px; padding:10px; font-size:16px; resize:vertical; }
-.sheet input[type=password], .sheet input[type=text]{ flex:1; background:var(--bg); color:var(--txt);
+/* font-size MUST stay >= 16px on every text-entry field: iOS Safari auto-zooms
+   the whole page when you focus an input smaller than 16px, and that zoom pushes
+   the header + toolbar out of view (and doesn't reset). type=number was missing
+   here, which is why the "Go to page" box zoomed in and hid the toolbar. */
+.sheet input[type=password], .sheet input[type=text], .sheet input[type=number]{
+         flex:1; background:var(--bg); color:var(--txt);
          border:1px solid var(--line); border-radius:8px; padding:10px; font-size:16px; }
 .sheet .pgprev { width:100%; height:auto; max-height:46dvh; object-fit:contain;
          background:#fff; border-radius:8px; border:1px solid var(--line); }

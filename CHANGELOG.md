@@ -4,6 +4,16 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.32] — 2026-06-20 — Fix: "Go to page" box zooming in and hiding the toolbar
+
+- **The "Go to page" number box no longer zooms the page in.** Its input is
+  `type=number`, which wasn't covered by the rule that keeps text fields at a
+  16px font. iOS Safari auto-zooms the whole page whenever you focus an input
+  smaller than 16px, and that zoom was what pushed the header + toolbar off
+  screen (so you couldn't get back to page 1) — not the page scroll. All sheet
+  inputs, including number fields, now use a 16px font, so focusing the box no
+  longer zooms and the toolbar stays put. A version test locks this in.
+
 ## [v10.31] — 2026-06-20 — Fixes: page jump, scan rotate, live rotate preview
 
 Three reported issues fixed. No other behaviour changed; all checks pass.
