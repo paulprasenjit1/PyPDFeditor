@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.43";
+const APP_BUILD = "10.45";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -778,12 +778,12 @@ function sampleSpanBg(pageIndex, sp){
   let page=null, pix=null;
   try {
     page = MDOC.loadPage(pageIndex);
-    const s = 1.5;                                   // ~108 dpi: plenty for a flat colour
+    const s = 2.0;                                   // ~144 dpi: more pixels for small fields
     pix = page.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false);
     const W=pix.getWidth(), Hh=pix.getHeight(), stride=pix.getStride(), n=pix.getNumberOfComponents();
     const ox=pix.getX(), oy=pix.getY();
     const data = pix.getPixels();                    // heap VIEW — read into rs[] before any wasm alloc
-    const rs=[], pad=2;
+    const rs=[], pad=3;                              // sample just clear of the text's anti-aliased edge
     const at=(X,Y)=>{ const x=Math.round(X*s)-ox, y=Math.round(Y*s)-oy;
       if (x<0||y<0||x>=W||y>=Hh) return; const i=y*stride+x*n; rs.push([data[i],data[i+1],data[i+2]]); };
     const line=(x0,y0,x1,y1)=>{ for(let k=0;k<=12;k++) at(x0+(x1-x0)*k/12, y0+(y1-y0)*k/12); };
@@ -800,8 +800,12 @@ function sampleSpanBg(pageIndex, sp){
     // stays the cell colour and most pixels match it — but fails on a photo /
     // mixed background, where we keep the safe white fill.
     let close=0;
-    for (const c of rs){ if (Math.abs(c[0]-r)<40 && Math.abs(c[1]-g)<40 && Math.abs(c[2]-b)<40) close++; }
-    return { r, g, b, uniform: close/rs.length >= 0.55 };
+    for (const c of rs){ if (Math.abs(c[0]-r)<85 && Math.abs(c[1]-g)<85 && Math.abs(c[2]-b)<85) close++; }
+    // accept the median when it's clearly the panel colour (a solid majority of
+    // the ring is near it). The wide tolerance lets in the panel's own texture and
+    // anti-aliased edges around short labels; a real photo still has no such
+    // majority, so it keeps the safe white fill.
+    return { r, g, b, uniform: close/rs.length >= 0.6 };
   } catch(e){ return null; }
   finally { try{ if(pix) pix.destroy(); }catch(e){} try{ if(page) page.destroy(); }catch(e){} }
 }

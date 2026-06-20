@@ -4,6 +4,33 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.45] — 2026-06-20 — Colour-fill sampling verified against a real card
+
+- **Coloured-cell edits keep the panel colour — verified on the Amaron card.**
+  Tested the background sampler against the actual warranty PDF: the median was
+  always the right green, but short labels (Type, Code) fell just under the
+  confidence bar and still went white. Widened the colour-match tolerance so a
+  solid majority of the ring is recognised as the panel colour; now every field
+  (Warranty, Date, Type, Code, Customer, Mobile) samples the green and fills
+  green, while photos still keep the safe white fill.
+
+## [v10.44] — 2026-06-20 — Crop-corner box bug + stronger colour-fill sampling
+
+- **No more stray box in the corner while cropping.** The crop corner handles are
+  keyboard-focusable (arrow-key nudge), and iOS was drawing a focus rectangle in
+  the corner after a touch-drag. That outline is now suppressed; the white grip
+  still shows the active corner.
+- **Coloured-cell edits sample the colour more reliably.** The background sampler
+  now renders at a higher resolution, samples a little further from the text's
+  anti-aliased edge, and tolerates texture / a few border pixels — so editing a
+  field on a textured colour panel keeps the panel colour instead of a white box.
+  White backgrounds and photos are still handled as before.
+
+Verified (no change needed): the scan warp/colour/quality pipeline is byte-for-byte
+identical to 10.39, and PDF merge is lossless (the merged page images are identical
+to the sources). Differences in scan sharpness come from capture resolution/framing
+and the Whiten toggle, not the app.
+
 ## [v10.43] — 2026-06-20 — Edit mode: pinch-zoom + scroll + colour fill
 
 - **Pinch-zoom now works in Edit mode.** You no longer have to leave Edit mode to
