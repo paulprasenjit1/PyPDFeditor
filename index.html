@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="10.4">
+<html lang="en" data-build="10.38">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -26,7 +26,8 @@
 <meta name="referrer" content="no-referrer">
 <title>PyPDF</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta name="theme-color" content="#0f1115">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b0d12">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#eef0f5">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -43,21 +44,19 @@
 
 <div class="toolbar" id="toolbar">
   <button id="openBtn" disabled>Open</button>
-  <button class="ghost" id="textBtn" disabled>Edit text</button>
-  <button class="ghost" id="undoBtn" disabled>Undo</button>
+  <div class="seg">
+    <button class="segbtn" id="textBtn" disabled>Edit</button>
+    <button class="segbtn" id="undoBtn" disabled>Undo</button>
+    <button class="segbtn" id="compBtn" disabled>Compress</button>
+    <button class="segbtn" id="moreBtn" disabled>More</button>
+  </div>
   <div class="zoomctl">
     <button class="ghost" id="zoomOut" aria-label="Zoom out" disabled>−</button>
     <span class="zlbl" id="zoomLbl">100%</span>
     <button class="ghost" id="zoomIn" aria-label="Zoom in" disabled>+</button>
   </div>
-  <select id="compLevel" class="lvl" aria-label="Compression level" title="High &lt;1MB · Medium &lt;700KB · Low &lt;200KB" disabled>
-    <option value="high">High</option>
-    <option value="medium" selected>Medium</option>
-    <option value="low">Low</option>
-  </select>
-  <button class="ghost" id="compBtn" disabled>Compress</button>
-  <button class="ghost" id="moreBtn" disabled>More ▾</button>
   <button id="saveBtn" disabled>Save</button>
+  <button class="xbtn" id="closeBtn" aria-label="Close this PDF" disabled>✕</button>
 </div>
 
 <div class="viewer" id="viewer">
@@ -81,16 +80,12 @@
 <input type="file" id="sigInput" accept="image/*">
 <!-- fallback when getUserMedia is unavailable/denied: native camera capture -->
 <input type="file" id="camInput" accept="image/*" capture="environment">
-<!-- photo-library import into the scan pipeline (no capture attr = picker) -->
-<input type="file" id="photoInput" accept="image/*">
 
 <!-- ---------------- document scanner: camera screen ---------------- -->
 <div class="scanui" id="scanCam">
   <div class="scantop">
     <span class="ttl">Scan document</span>
     <span class="tools">
-      <button class="ghost mini" id="photoBtn">Photos</button>
-      <button class="ghost mini" id="autoBtn" aria-label="Automatic capture">Auto</button>
       <button class="ghost mini" id="torchBtn" aria-label="Camera torch" hidden>Torch</button>
       <span class="pgct" id="scanCount"></span>
     </span>
@@ -128,22 +123,29 @@
     </svg>
   </div>
   <div class="scanfilters">
-    <button id="fltColour" class="on">Colour</button>
-    <button id="fltBw">Black &amp; white</button>
     <button id="qStd" class="on">Standard</button>
     <button id="qSmall">Small file</button>
+    <button id="enhToggle" class="on" aria-pressed="true">Whiten</button>
   </div>
   <div class="scanctl">
     <button class="ghost" id="cropRetake">Retake</button>
+    <button class="ghost" id="cropRotate" aria-label="Rotate the page a quarter turn">⟳ Rotate</button>
     <button id="cropUse">Use page</button>
   </div>
 </div>
 
-<div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
+<div class="pgpill" id="pagePill" role="button" aria-label="Go to page"></div>
+
+<div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet" role="dialog" aria-modal="true" tabindex="-1"></div></div>
 <div class="spin" id="spin">Working…</div>
 
 <!-- pdf-lib (vendored, offline) — used as the "pen" to draw replacement text/images -->
 <script src="./vendor/pdf-lib.min.js"></script>
+
+<!-- Classic (non-module) watchdog: shows a visible message + reload if the
+     module engine below never initialises. Must load BEFORE the module so its
+     timer is armed even when the module pipeline fails. -->
+<script src="./engine-watchdog.js"></script>
 
 <!-- MuPDF.js is the core engine; ESM module with WASM (vendored, offline) -->
 <!-- App logic lives in an external module so the CSP can forbid inline scripts -->

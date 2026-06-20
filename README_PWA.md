@@ -58,8 +58,8 @@ Compress · Save** — with the rest under **More ▾**.
   piece, change it, and it's replaced in place — the original glyphs are
   removed and the new text is drawn at the same position, size and colour.
   Leave it empty to just delete the text.
-- **Sign** — tap Sign, choose a signature image, then drag a box on the page.
-  By default the white background is knocked out (toggle under **More ▾**).
+- **Sign** — tap Sign and choose a signature image each time, then drag a box on
+  the page. The signature is placed as-is, with its background kept.
 - **Compress** — High (<1 MB), Medium (<700 KB) or Low (<200 KB). Tries a
   lossless pass first and only rasterises if needed to hit the target.
 - **Save** — opens the iOS share sheet; choose **Save to Files** (or AirDrop,

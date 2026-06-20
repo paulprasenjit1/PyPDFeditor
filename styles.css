@@ -1,9 +1,20 @@
 /* PyPDF Editor — all styles live in this external sheet so the CSP can be
    `style-src 'self'` (no inline styles, no style attributes anywhere). */
 
-:root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --txt:#e6e9ef; --muted:#8b93a3;
-        --accent:#4f8cff; --accent2:#1f6feb; --ok:#3fb950; --warn:#d29922; --err:#f85149; }
+:root { --bg:#0b0d12; --panel:#141823; --panel2:#1a1f2d; --line:#272e3d; --txt:#e8ebf2;
+        --muted:#8d95a8; --accent:#5b95ff; --accent2:#1f6feb; --grad-a:#3b82f6; --grad-b:#1d5fd6;
+        --ok:#3fb950; --warn:#d29922; --err:#f85149;
+        --scrolltrack:#0b0d12; --scrollthumb:#3d6fd6; --shadow:rgba(0,0,0,.55); }
+/* automatic light theme — follows the iPhone's system setting; the scanner
+   screens stay dark by design (they are hard-coded camera-black) */
+@media (prefers-color-scheme: light){
+  :root { --bg:#eef0f5; --panel:#ffffff; --panel2:#f6f7fa; --line:#d9dde6; --txt:#1b1e27;
+          --muted:#68707f; --accent:#2563eb; --accent2:#1f6feb; --grad-a:#4f8cff; --grad-b:#2563eb;
+          --ok:#1a7f37; --warn:#9a6700; --err:#cf222e;
+          --scrolltrack:#e3e6ee; --scrollthumb:#9db8ec; --shadow:rgba(30,40,70,.25); }
+}
 * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html { background:var(--panel); }
 html,body { margin:0; height:100%; }
 body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
        background:var(--bg); color:var(--txt); display:flex; flex-direction:column;
@@ -13,37 +24,72 @@ header { display:flex; align-items:center; gap:10px; padding:max(8px,env(safe-ar
 header h1 { font-size:15px; margin:0; font-weight:600; }
 header .meta { color:var(--muted); font-size:11px; margin-left:auto; text-align:right; max-width:55%;
                overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.toolbar { display:flex; flex-wrap:nowrap; gap:5px; padding:8px 8px; background:var(--panel);
+.toolbar { display:flex; flex-wrap:nowrap; gap:8px; padding:7px 8px; background:var(--panel);
            border-bottom:1px solid var(--line); align-items:center; overflow-x:auto; }
 .toolbar > * { flex:0 0 auto; white-space:nowrap; }
 .toolbar::-webkit-scrollbar { height:6px; }
 .toolbar::-webkit-scrollbar-thumb { background:var(--line); border-radius:3px; }
-button { background:var(--accent2); color:#fff; border:0; border-radius:8px; padding:9px 10px;
-         font-size:13px; cursor:pointer; }
-button:active { background:var(--accent); }
-button.ghost { background:transparent; border:1px solid var(--line); color:var(--txt); }
+button { background:linear-gradient(180deg, var(--grad-a), var(--grad-b)); color:#fff; border:0;
+         border-radius:9px; padding:9px 10px; font-size:13px; cursor:pointer;
+         transition:transform .08s ease, filter .12s ease; }
+button:active:not(:disabled) { transform:scale(.97); filter:brightness(.92); }
+button.ghost { background:var(--panel2); border:1px solid var(--line); color:var(--txt); }
 button.on { background:var(--ok); }
 button:disabled { opacity:.4; }
-select.lvl { background:var(--bg); color:var(--txt); border:1px solid var(--line);
-             border-radius:8px; padding:8px 4px; font-size:13px; width:74px; }
+/* visible keyboard focus ring (iPad + keyboard, desktop). tap-highlight is
+   suppressed globally, so without this keyboard users get no focus cue (#10).
+   :focus-visible only shows for keyboard focus, never for touch/mouse taps. */
+button:focus-visible, a:focus-visible, .span:focus-visible,
+input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px;
+}
+@media (prefers-reduced-motion: reduce){
+  button { transition:none; }
+  button:active:not(:disabled) { transform:none; }
+}
 .zoomctl { display:flex; align-items:center; gap:2px; border:1px solid var(--line);
            border-radius:8px; padding:2px; }
-.zoomctl button { padding:6px 9px; }
-.zlbl { font-size:12px; color:var(--txt); min-width:42px; text-align:center; }
+.zoomctl button { padding:6px 8px; }
+.zlbl { font-size:12px; color:var(--txt); min-width:36px; text-align:center; }
+/* phones (incl. Pro Max at 440pt): pinch and double-tap zoom the pages, so
+   the buttons step aside and the whole toolbar fits with no scrolling.
+   Tablets/desktop (≥600px) keep the buttons. */
+@media (max-width: 599px){ .zoomctl { display:none; } }
+.toolbar button { padding:10px 14px; font-size:14px; }
+/* the middle actions live in one quiet segmented group that stretches to
+   absorb the leftover width — calm, even, no scattered pills */
+.seg { display:flex; flex:1 1 auto; min-width:0; align-items:center;
+       background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:2px; }
+/* flex-basis auto: spare width is shared on TOP of each label's natural
+   width, so "Compress" never truncates while "Edit" floats in slack */
+.toolbar .seg .segbtn { flex:1 1 auto; min-width:0; white-space:nowrap;
+       background:transparent; border:0; color:var(--txt);
+       padding:8px 5px; font-size:14px; border-radius:8px; }
+.seg .segbtn:not(:first-child) { border-left:1px solid var(--line); border-radius:0; }
+.seg .segbtn:first-child { border-radius:7px 0 0 7px; }
+.seg .segbtn:last-child { border-radius:0 7px 7px 0; }
+.toolbar .seg .segbtn:active:not(:disabled) { background:var(--panel); transform:none; filter:none; }
+.toolbar .seg .segbtn.on { background:var(--ok); color:#fff; }
+.toolbar .seg .segbtn:disabled { opacity:.35; }
+/* borderless close (✕) beside Save — red so its meaning is unmistakable */
+.toolbar .xbtn { background:transparent; border:0; color:var(--err);
+       font-size:16px; line-height:1; padding:8px 6px; }
 /* touch-action pan-x pan-y: one/two-finger panning stays native, but the
    browser's own pinch-zoom is suppressed so the app can pinch-zoom the PAGES */
 .viewer { flex:1; overflow:auto; padding:18px 12px calc(18px + env(safe-area-inset-bottom));
           display:flex; flex-direction:column; gap:18px; -webkit-overflow-scrolling:touch;
           align-items:safe center; touch-action:pan-x pan-y; }
-.pagewrap { display:flex; flex-direction:column; gap:18px; align-items:safe center;
-          will-change:transform; }
+.pagewrap { display:flex; flex-direction:column; gap:18px; align-items:safe center; }
+/* GPU promotion ONLY during an active pinch — a permanently promoted wrapper
+   the height of a 500-page book exhausts compositor memory (black screen) */
+.pagewrap.pinching { will-change:transform; }
 .viewer::-webkit-scrollbar { width:12px; height:12px; }
-.viewer::-webkit-scrollbar-track { background:#0b0d12; }
-.viewer::-webkit-scrollbar-thumb { background:#3d6fd6; border-radius:7px; border:3px solid #0b0d12; }
+.viewer::-webkit-scrollbar-track { background:var(--scrolltrack); }
+.viewer::-webkit-scrollbar-thumb { background:var(--scrollthumb); border-radius:7px; border:3px solid var(--scrolltrack); }
 /* content-visibility:auto lets the browser skip rendering offscreen pages
    entirely — a big CPU/GPU/battery win on long PDFs. contain-intrinsic-size
    is set per-stage in JS so scrollbar/layout stay stable. */
-.stage { position:relative; box-shadow:0 6px 24px rgba(0,0,0,.55); background:#fff;
+.stage { position:relative; box-shadow:0 6px 24px var(--shadow); background:#fff; border-radius:2px;
          content-visibility:auto; }
 .stage .plabel { position:absolute; top:4px; left:4px; font-size:10px; color:#fff;
          background:rgba(0,0,0,.45); padding:1px 6px; border-radius:5px; z-index:2; }
@@ -65,46 +111,95 @@ select.lvl { background:var(--bg); color:var(--txt); border:1px solid var(--line
 .empty { color:var(--muted); text-align:center; margin:auto; font-size:14px; line-height:1.7; padding:24px; }
 /* welcome screen: the empty state is two big friendly buttons */
 .welcome { display:flex; flex-direction:column; gap:14px; align-items:center; }
-.welcome .wtitle { margin:0 0 6px; font-size:20px; font-weight:700; color:var(--txt); }
-.welcome .big { width:min(280px,80vw); padding:16px 18px; font-size:17px; border-radius:14px; }
-.welcome .big.ghost { border-width:1.5px; }
-.status { font-size:12px; padding:8px 14px calc(8px + env(safe-area-inset-bottom));
-          border-top:1px solid var(--line); background:var(--panel); color:var(--muted); min-height:18px; }
-.status.ok { color:var(--ok); font-weight:600; }
-.status.err { color:var(--err); font-weight:600; }
-.status.warn { color:var(--warn); font-weight:600; }
+.welcome .wtitle { margin:0 0 8px; font-size:27px; font-weight:800; letter-spacing:-.02em;
+        background:linear-gradient(120deg, var(--txt) 30%, var(--accent));
+        -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+.welcome .big { width:min(280px,80vw); padding:16px 18px; font-size:17px; border-radius:15px;
+        box-shadow:0 8px 24px rgba(43,99,235,.30); }
+.welcome .big.ghost { border-width:1.5px; box-shadow:none; }
+/* engine download progress bar — inserted by engine-watchdog.js on first launch
+   only (the ~10MB WASM engine). Fill width is set via the CSSOM (CSP-safe). */
+.welcome .engbar { width:min(280px,80vw); height:6px; border-radius:3px; background:var(--panel2);
+        border:1px solid var(--line); overflow:hidden; }
+.welcome .engbar-fill { height:100%; width:0%; border-radius:3px;
+        background:linear-gradient(90deg, var(--grad-a), var(--grad-b)); transition:width .2s ease; }
+@media (prefers-reduced-motion: reduce){ .welcome .engbar-fill { transition:none; } }
+.status { font-size:11px; padding:3px 14px calc(2px + env(safe-area-inset-bottom));
+          border-top:1px solid var(--line); background:var(--panel); color:var(--muted);
+          min-height:0; line-height:1.3; }
+.status.ok { color:var(--ok); font-weight:600; background:rgba(63,185,80,.07); }
+.status.err { color:var(--err); font-weight:600; background:rgba(248,81,73,.08); }
+.status.warn { color:var(--warn); font-weight:600; background:rgba(210,153,34,.08); }
+/* "Page 3 of 12" pill: fades in while scrolling, out when you stop. It is also a
+   shortcut — tap it to open Go to page — so it gets an accent outline and is
+   only tappable while visible (pointer-events:auto on .show). */
+.pgpill { position:fixed; left:50%; transform:translateX(-50%);
+          bottom:calc(56px + env(safe-area-inset-bottom)); z-index:50;
+          background:rgba(13,15,20,.92); color:#fff; font-size:12px; font-weight:600;
+          padding:6px 13px; border-radius:15px; border:1.5px solid var(--accent);
+          opacity:0; pointer-events:none; cursor:pointer; transition:opacity .25s ease; }
+.pgpill.show { opacity:1; pointer-events:auto; }
+.pgpill:active { background:rgba(13,15,20,1); }
+@media (prefers-reduced-motion: reduce){ .pgpill { transition:none; } }
 /* Layering: scanner (90) < sheets (110) < spinner (120), so dialogs and the
    working spinner are always visible, including on top of the scanner. */
 .sheet-bg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:flex-end; z-index:110; }
 .sheet-bg.show { display:flex; }
-.sheet { background:var(--panel); width:100%; border-top-left-radius:16px; border-top-right-radius:16px;
-         border-top:1px solid var(--line); padding:16px 16px calc(20px + env(safe-area-inset-bottom));
-         max-height:82dvh; overflow:auto; }
+.sheet { background:var(--panel); width:100%; border-top-left-radius:20px; border-top-right-radius:20px;
+         border-top:1px solid var(--line); padding:12px 16px calc(20px + env(safe-area-inset-bottom));
+         max-height:82dvh; overflow:auto; box-shadow:0 -10px 36px rgba(0,0,0,.35); }
+.sheet::before { content:""; display:block; width:38px; height:4px; border-radius:2px;
+         background:var(--line); margin:0 auto 12px; }
 .sheet h3 { margin:0 0 10px; font-size:15px; }
 .sheet .row { display:flex; gap:8px; align-items:center; margin:10px 0; flex-wrap:wrap; }
 .sheet label.ck { display:flex; gap:8px; align-items:center; font-size:14px; }
 .sheet .full { width:100%; }
 .sheet textarea { width:100%; min-height:84px; background:var(--bg); color:var(--txt);
          border:1px solid var(--line); border-radius:8px; padding:10px; font-size:16px; resize:vertical; }
-.sheet input[type=password], .sheet input[type=text]{ flex:1; background:var(--bg); color:var(--txt);
+/* font-size MUST stay >= 16px on every text-entry field: iOS Safari auto-zooms
+   the whole page when you focus an input smaller than 16px, and that zoom pushes
+   the header + toolbar out of view (and doesn't reset). type=number was missing
+   here, which is why the "Go to page" box zoomed in and hid the toolbar. */
+.sheet input[type=password], .sheet input[type=text], .sheet input[type=number]{
+         flex:1; background:var(--bg); color:var(--txt);
          border:1px solid var(--line); border-radius:8px; padding:10px; font-size:16px; }
 .sheet .pgprev { width:100%; height:auto; max-height:46dvh; object-fit:contain;
          background:#fff; border-radius:8px; border:1px solid var(--line); }
 .mt8  { margin-top:8px; }
 .mt12 { margin-top:12px; }
+/* sticky action footer for long list sheets (Pages / Copy pages / Combine):
+   Apply & Cancel stay pinned to the bottom of the sheet so you never have to
+   scroll a 500-page list to reach them. The sheet itself is the scroll
+   container; this bar sticks to its bottom edge with a solid panel background
+   so the list scrolls behind it. */
+.sheet .sheetfoot {
+  position: sticky; bottom: 0; z-index: 2;
+  background: var(--panel);
+  margin: 12px -16px 0; padding: 12px 16px 4px;
+  border-top: 1px solid var(--line);
+}
+.sheet .sheetfoot .row { margin: 0 0 8px; }
+.sheet .sheetfoot .row:last-child { margin-bottom: 0; }
 .hint { font-size:12px; color:var(--muted); line-height:1.5; }
-.about { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+.about { border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--panel2); }
 .about .abrow { display:flex; justify-content:space-between; gap:12px; padding:9px 12px;
          font-size:13px; border-bottom:1px solid var(--line); }
 .about .abrow:last-child { border-bottom:0; }
 .about .abrow span { color:var(--muted); }
 .about .abrow b { color:var(--txt); text-align:right; word-break:break-word; }
 .about a { color:var(--accent); }
-.porow { display:flex; align-items:center; gap:6px; padding:6px 0; border-bottom:1px solid var(--line); }
-.porow img { width:46px; height:auto; min-height:58px; background:#fff; border-radius:3px; }
+.porow { display:flex; align-items:center; gap:8px; padding:7px 9px; margin-bottom:7px;
+         background:var(--panel2); border:1px solid var(--line); border-radius:11px; }
+/* square, fixed footprint so a 90°/270° preview rotation stays fully inside the
+   box (the footprint is unchanged by a quarter turn) and never overlaps the row */
+.porow img { width:52px; height:52px; object-fit:contain; background:#fff; border-radius:3px;
+             transform-origin:center; transition:transform .15s ease; }
+@media (prefers-reduced-motion: reduce){ .porow img { transition:none; } }
 .porow .pn { flex:1; font-size:14px; }
 .porow.del { opacity:.4; text-decoration:line-through; }
-.porow button { padding:7px 9px; }
+/* bigger touch targets for the page row controls (↑ ↓ ⟳ Delete) — was ~30px
+   tall, fiddly on a phone; now a comfortable 44px tap height (#11) */
+.porow button { padding:9px 10px; min-width:34px; min-height:44px; }
 input[type=file] { display:none; }
 .spin { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
         background:rgba(0,0,0,.5); z-index:120; color:#fff; font-size:14px; text-align:center; padding:24px; }
