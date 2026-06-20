@@ -1,8 +1,472 @@
-# Changelog — PyPDF
+# Changelog — PyPDF Editor (iPhone/Android PWA)
 
-All notable changes to the on-device PWA. The "version" tag matches the
+All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
+
+## [v10.32] — 2026-06-20 — Fix: "Go to page" box zooming in and hiding the toolbar
+
+- **The "Go to page" number box no longer zooms the page in.** Its input is
+  `type=number`, which wasn't covered by the rule that keeps text fields at a
+  16px font. iOS Safari auto-zooms the whole page whenever you focus an input
+  smaller than 16px, and that zoom was what pushed the header + toolbar off
+  screen (so you couldn't get back to page 1) — not the page scroll. All sheet
+  inputs, including number fields, now use a 16px font, so focusing the box no
+  longer zooms and the toolbar stays put. A version test locks this in.
+
+## [v10.31] — 2026-06-20 — Fixes: page jump, scan rotate, live rotate preview
+
+Three reported issues fixed. No other behaviour changed; all checks pass.
+
+- **Go to page no longer hides the toolbar.** Jumping to a deep page (e.g. 500
+  of 524) used `element.scrollIntoView`, which on iOS bubbled up and scrolled the
+  whole app, pushing the header + toolbar off screen — so you couldn't get back
+  to page 1. It now scrolls the viewer itself, so the toolbar always stays put.
+- **Rotate a scan before saving.** The scanner's Adjust-edges screen has a new
+  "⟳ Rotate" button that turns a sideways capture a quarter-turn (re-detecting
+  the edges), so a scan that came out on its side can be made upright before it
+  becomes a PDF page.
+- **Live rotation preview in Pages.** Rotating a page in More → Pages now turns
+  its thumbnail immediately, instead of only showing the change after Apply. The
+  list thumbnails are now a fixed square so a rotated preview stays neatly inside
+  its row.
+
+## [v10.30] — 2026-06-20 — Phase 3: accessibility, navigation & polish
+
+Larger UX / accessibility items from the review, plus the remaining polish. No
+feature removed or changed in behaviour except where noted. All checks pass.
+
+Accessibility:
+
+- **Text edits are keyboard / VoiceOver reachable.** The tappable text boxes in
+  Edit mode are now real buttons: Tab to one and press Enter or Space to edit it
+  (the focus ring was already styled for this).
+- **Crop corners are keyboard adjustable.** On the scanner's Adjust-edges screen
+  you can Tab to a corner and nudge it with the arrow keys (Shift = bigger steps),
+  not only drag it.
+
+Navigation:
+
+- **Go to page.** Long documents get a "Go to page…" item in More (multi-page
+  only) that scrolls straight to a page, instead of relying on scrolling and the
+  transient page pill.
+- **Zoom hint matches the device.** On phones (where the − / + buttons are
+  hidden) the open message now says "Pinch or double-tap to zoom" instead of
+  pointing at buttons that aren't there.
+
+Quality & performance:
+
+- **Live scanner edge detection moved off the main thread.** The detector
+  (`detectQuad` and helpers) now lives in `scan-core.js`, shared by the app and
+  the scan worker, so the 300 ms live-preview detection runs in the worker. It
+  falls back to the original synchronous path if the worker is unavailable, and
+  the one-shot still-capture detection is unchanged.
+- **Compress wording is honest about targets.** The size labels now say "aim
+  for ~1 MB" etc. and the sheet explains a text PDF may stay larger and an
+  already-small file is left unchanged.
+- **"Save this page as a picture" picks the centred page**, matching the page
+  pill, so a partly-scrolled tall page isn't mistaken for its neighbour.
+- **Sharper list thumbnails** (Pages / Copy-pages): JPEG quality raised from 70
+  to 82.
+- **Error log no longer keeps document names.** Messages written to the on-device
+  error log are scrubbed of the open file's name and other filename-looking
+  tokens.
+
+## [v10.29] — 2026-06-20 — Reviewer fixes: reliability, scanner & polish
+
+Two passes of fixes from an external code review. No feature removed; behaviour
+only changes on previously-broken edge cases. All 105 checks pass.
+
+Phase 1:
+
+- **Compress never grows the file.** An already-optimised PDF could come back a
+  few bytes larger from the lossless structural pass; the app used to commit
+  that, growing the document, marking it dirty, adding a pointless undo step and
+  reporting a negative "% smaller". It now leaves the document untouched and
+  says it's already as small as it usefully gets.
+- **Copy-pages and Save-page-as-picture now use the iOS share sheet.** Both used
+  a synthetic `<a download>` click, which frequently does nothing in a
+  standalone Home-Screen PWA. They now go through the same Web Share path as
+  Save (with a download fallback), so the file actually reaches Files/AirDrop.
+- **Scanned-page preview no longer leaks a blob URL** when dismissed by tapping
+  the backdrop instead of Close.
+
+Phase 2:
+
+- **Engine-load watchdog.** `app.js` is a module that loads the MuPDF WASM
+  engine; if that import never resolves (partial cache, failed download) the
+  module body never runs and the UI used to sit on "Loading engine…" forever.
+  A tiny classic `engine-watchdog.js` now arms a timer before the module and,
+  if the engine hasn't signalled ready in 20 s, shows a tap-to-reload message.
+  It cancels silently on normal start. Added to the precache.
+- **Unencodable-character notice.** When replacement text contains glyphs the
+  base-14 fonts can't draw (shown as "?"), the status line now says so instead
+  of substituting silently.
+- **Signature on a rotated page now warns first**, matching the existing
+  text-edit guard (placement assumes an upright page).
+- **Removed dead code.** The unreachable `signRemoveWhite` / `knockoutWhite`
+  background-knockout branch (never wired to any control) was deleted; signatures
+  are placed as-is, exactly as before.
+- **About → engine source** opens in the real browser (`target="_blank"`)
+  instead of navigating the installed app away with no way back.
+
+## [v10.28] — 2026-06-19 — New dark-theme app icon
+
+- **New icon.** Replaced the red square icon with a dark, OLED-black icon that
+  matches the app's dark UI: a dark "glass" document with a soft red glow and
+  red "PDF" wordmark. Full-bleed (no transparent corners) so iOS masks it
+  cleanly. Regenerated at 180 / 192 / 512 px; cache bumped so installed Home
+  Screen apps refetch the new artwork.
+
+## [v10.27] — 2026-06-19 — Audit fixes: signatures, undo/dirty, save & tests
+
+Fixes for five issues from the latest code audit. No feature removed.
+
+- **Sign now always asks for a signature image.** Tapping "Add my signature"
+  opens the image picker every time instead of silently reusing the previously
+  loaded signature. The signature is placed as-is with its background kept (the
+  long-standing default); the docs were corrected to match.
+- **Undo no longer leaves a false "unsaved changes" flag.** Each undo step now
+  remembers the dirty state at the time, so undoing back to the originally
+  opened document restores a clean (not-dirty) state.
+- **Merge validates inputs before mutating.** All source PDFs are parsed first;
+  a corrupt input now aborts cleanly without marking the document dirty or
+  leaving a bogus undo step.
+- **Save uses the real iOS share sheet.** Save now uses the Web Share API
+  (Save to Files / AirDrop / Mail…) with a download fallback, and **"Save
+  first"** in the unsaved-changes dialog now continues the original action.
+- **Tooling & deploy hygiene.** `tests/version-tests.mjs` works from a path
+  containing spaces (e.g. "PY EDITOR SCAN"); `.gitignore` now also excludes
+  `tests/` and `node_modules/`.
+
+## [v10.26] — 2026-06-16 — Audit polish: shared scanner core, a11y & quality nits
+
+The "polish" set from the v10.24 audit. Behaviour is unchanged for users except
+the noted improvements; 105 checks pass.
+
+- **Scanner pixel math now lives in one file.** The perspective-warp and colour
+  filter code was previously copied verbatim into both app.js and scan-worker.js
+  and kept in sync by source-identity tests. It now lives once in `scan-core.js`,
+  imported by app.js (for the main-thread fallback and crop preview) and by the
+  scan worker (now a **module worker**). If module workers are unavailable the
+  app silently falls back to main-thread processing, exactly as before. The
+  colour parity tests are replaced by behavioural + single-source checks.
+- **Photos → PDF uses sensible page sizes.** Imported photos are now scaled to
+  A4-ish point dimensions (long side 842pt) like the scanner, instead of
+  1px-per-point (which made a phone photo a ~55-inch page).
+- **Accessibility polish.** Visible keyboard focus rings (`:focus-visible`) for
+  buttons, links, inputs and the editable-text spans; page-row controls (↑ ↓ ⟳
+  Delete) enlarged to a 44px touch height.
+- **Performance nits.** The "save this page as a picture" page-picker reads the
+  viewer rect once instead of once per page; the live document detector reuses
+  its big scratch buffers across the 300ms preview frames instead of
+  re-allocating them every tick.
+- **New file:** `scan-core.js` (added to the service-worker app-shell cache and
+  the deploy checklist).
+- Tests: 58 integration + 4 guard + 5 detection + 23 scenario + 8 colour +
+  7 version = 105 checks, all passing.
+
+## [v10.25] — 2026-06-16 — Audit fixes: no password hang, text-safe compress, a11y
+
+Acted on the priority findings from the v10.24 full-app audit. No existing
+feature behaviour changed except where noted; 105 checks pass (was 90).
+
+- **Password sheet no longer hangs the Open flow.** Tapping outside the password
+  prompt (or pressing Esc) used to dismiss it without resolving, leaving the open
+  in limbo. Sheets now register a dismiss handler that `closeSheet()` fires, so a
+  backdrop/Esc dismiss cleanly cancels ("Open cancelled"). New tests S12c/S12d.
+- **Compress protects real text.** When the lossless pass misses the target on a
+  document that contains actual text, the app now asks before rasterising —
+  Keep text (text-safe lossless result), Make smallest (pictures), or Cancel —
+  instead of silently turning selectable/searchable text into images. Scanned /
+  image-only PDFs still compress straight through. New tests T38, T39a–e.
+- **Lower peak memory on heavy ops.** Compress now runs the lossless pass and
+  decides BEFORE taking the Undo snapshot, and both Compress and Merge skip the
+  full-document Undo copy above 48 MB (the original is still in Files), telling
+  you when a step can't be undone. Reduces OOM risk on large files (iOS).
+- **Accessibility.** Bottom sheets are now exposed as `role="dialog"
+  aria-modal="true"`, labelled from their heading, with focus moved in on open
+  and restored on close, and Esc closes them. Status-bar text 9px → 11px for
+  legibility (reclaims slightly less page height; worth it).
+- **Release hygiene.** `APP_VERSION` and the About cache label now derive from a
+  single `APP_BUILD` constant (no more drifting literals). DEPLOY.md no longer
+  hard-codes a stale build number. New `tests/version-tests.mjs` enforces that
+  `data-build` (index.html), `APP_BUILD` (app.js) and `APP_CACHE` (sw.js) agree.
+- Tests: 58 integration + 4 guard + 5 detection + 23 scenario + 8 colour +
+  7 version = 105 checks, all passing.
+
+## [v10.24] — 2026-06-15 — Full-app review: leak fix, faster zoom, sharper view
+
+From a full read-through of the codebase. Three safe improvements; no feature
+behaviour changed.
+
+- **Storage leak fixed.** Discarding a restorable session (or undoing to empty)
+  deleted the `doc`/`scan` index records but left the individual scanned-page
+  blobs (`scan:p0…pN`) orphaned in IndexedDB forever. New `dropScanStorage()`
+  removes every per-page key, and restoring a scan now tracks its existing keys
+  so a later clear is complete. New test T32 covers it.
+- **IndexedDB connection reused.** Persisting the document or each scan page used
+  to open and close a fresh DB connection every time; it now reuses one cached
+  handle (the standard pattern), removing churn during scanning and editing.
+- **Zoom is faster on long PDFs.** Zoom/width changes now resize the existing
+  page nodes in place instead of rebuilding every one (O(n) DOM work — 525 nodes
+  on a big book per zoom tap). The lazy-render observer re-rasterises the visible
+  pages at the new scale. Content edits still do a full rebuild (they bump the
+  document epoch), so nothing stale survives.
+- **Reading view a touch sharper.** On-screen page render JPEG 92→94 (display
+  only — saved and exported files are unchanged).
+- Verified text-edit colour handling is correct (MuPDF returns normalised RGB).
+- Tests: 52 integration + 4 guard + 5 detection + 21 scenario + 8 colour = 90
+  checks, all passing.
+
+## [v10.23] — 2026-06-15 — Status banner trimmed further (9px)
+
+- Status banner font 11→9px with tighter padding (top 2px, bottom 1px + the
+  home-indicator safe area). Reclaims ~12px of page height versus v10.22's
+  11px. Confirmed against an on-screen mock before applying. CSS-only
+  (`.status`); 89 checks still pass. (9px is the practical floor — still legible
+  on a 3× iPhone screen.)
+
+## [v10.22] — 2026-06-15 — Slimmer status banner (more page on screen)
+
+- The bottom status banner is trimmed to give the page more room: font 12→11px,
+  top padding 9→4px, bottom padding 6→2px (plus the home-indicator safe area,
+  which stays so the text never hides under the indicator), and the 16px
+  min-height removed. Reclaims ~12px of vertical space for the document view.
+  CSS-only (`.status`) — no behaviour or layout logic changed; all 89 checks
+  still pass.
+
+## [v10.21] — 2026-06-13 — Sticky sheet buttons + higher export/scan quality
+
+### Pages / Copy pages / Combine — Apply & Cancel always visible
+- On long documents the Apply/Cancel (and "Save as new PDF" / "Combine")
+  buttons used to sit at the very bottom of the list, so a 500-page PDF meant
+  scrolling forever to reach them. They now sit in a **sticky footer** pinned
+  to the bottom of the sheet — the page list scrolls behind them, the actions
+  are always on screen. CSS + markup only; all button IDs unchanged.
+
+### Quality (analysed first; capture kept at 2.5K per request)
+- **PDF → picture (PNG)** now renders at ~400 dpi (was ~300) for crisper text,
+  with the long side capped at 4096px so huge/image-sized pages can't exhaust
+  memory. (The embedded scan is the real ceiling — rendering past it only
+  upsamples, so the cap also avoids needless bloat.)
+- **Scan Standard** JPEG quality 0.92 → 0.95 (less compression loss; small size
+  increase). "Small file" unchanged.
+- **Viewer** page render JPEG 90 → 92 — slightly crisper on-screen text.
+- **Image → PDF** was already lossless (it embeds your original JPEG/PNG bytes
+  at full resolution) — left unchanged.
+- Camera capture stays at 2560×1440 by choice. Note for later: that is the
+  detail ceiling for camera scans; raising it to 4K is the only way to push
+  scan/PNG sharpness further, and 4K does not cause the old darkness (that was
+  the removed pipeline).
+
+### Tests
+- 51 integration + 4 guard + 5 detection + 21 scenario + 8 colour = 89 checks,
+  all passing. `guard-tests.mjs` is now path-portable.
+
+## [v10.20] — 2026-06-13 — Scanner trimmed + brighter, crisper colour
+
+From device feedback on a real scan. Scoped entirely to the scanner.
+
+### Removed (as requested)
+- **Black & white mode** is gone — the scanner is colour-only. The B&W button,
+  its filter code, and `applyDocBW` are removed from `app.js` and the worker.
+- **Photos** and **Auto** buttons removed from the camera bar (and the
+  auto-capture logic). **Torch stays.** The native-camera fallback (used only
+  when the live camera can't start) is unaffected.
+
+### Colour quality (brightness + crispness)
+- New gentle `crispenAndLift` step after white balance: a 1px luminance unsharp
+  mask to sharpen letters and a small midtone brightness gain so the captured
+  still (which iOS often grabs darker/softer than the live preview) reads bright
+  and sharp. Deliberately mild — NOT the v10.14 magic-scan that caused halos.
+  Measured on a text capture: edge sharpness +65%, brightness +5, no wash-out.
+  Identical in worker and main thread (parity test-enforced).
+- **Standard output raised** to max 2560px / JPEG 0.92 (was 2000 / 0.85) for
+  sharper letters. "Small file" unchanged.
+- Re: the earlier 2.5K→4K question — capture was already reverted to 2560×1440
+  back in v10.16, so 4K is NOT in this build and is not the cause of dark/soft
+  scans. The real levers are a tight crop and the new sharpening, both addressed.
+
+### Detection
+- Edge detection now runs at higher working resolution (live 220→300px,
+  captured still 300→520px) for finer, more reliable edges on low-contrast
+  documents (e.g. a white envelope on a pale desk). Thresholds unchanged — the
+  past threshold-loosening (v10.15) proved unhelpful and was reverted.
+- Reminder: detection is for flat documents; a tight crop is what makes letters
+  sharp (more pixels land on the page). If it ever misses, the corners are
+  draggable.
+
+### Tests
+- `tests/colour-tests.mjs` updated (white balance ×3, crispen+lift ×2, parity
+  ×3); harness B&W step replaced with a quality-toggle check; `guard-tests.mjs`
+  made path-portable and its mismatch simulation no longer depends on removed
+  elements. Suite: 51 integration + 4 guard + 5 detection + 21 scenario + 8
+  colour = 89 checks, all passing.
+
+## [v10.19] — 2026-06-13 — Colour white balance back + softened B&W
+
+Two scoped scanner fixes from device screenshots. Nothing outside the scanner
+was touched.
+
+### Colour
+- The gentle global white balance (`colourBalanceCore`, first shipped v10.17)
+  is back on the Colour path: grey-world over the bright paper region lifts each
+  channel to neutral, removing the warm/yellow indoor cast, then the unchanged
+  gentle contrast stretch deepens text. Global per-channel gain (capped 2.2×),
+  so it can't blotch; no sharpening, so no halos.
+
+### Black & white
+- **B&W no longer blows out.** The old filter was a hard adaptive binariser:
+  on a flat text page it gives the clean scanned look, but on a 3-D or imperfect
+  capture (a shelf, a wall, an object) it forced everything bright to pure white
+  and everything else to black smears — an almost-blank result. It now blends
+  the crisp adaptive binary with a little of the real grayscale (≈0.72 / 0.28,
+  integer weights summing to 256), so flat text pages stay clean (paper light,
+  text dark) while non-flat scenes keep their tonal structure instead of
+  collapsing to a white void. The hard clip was also relaxed (215/40 → 238/22).
+  Proven on fixtures: a flat text page still reads paper≈248 / text≈15, and a
+  gradient-wall + object scene now retains ~90 tonal levels instead of ~2.
+
+### Parity / tests
+- Worker and main-thread copies verified identical: `applyAutoContrast` and
+  `colourBalanceCore` are source-identical, and `applyDocBW` (which differs only
+  by call signature) produces byte-identical output across the two.
+- `tests/colour-tests.mjs` now covers white balance (3), B&W softening (2), and
+  parity (3). Suite total: 51 integration + 4 guard + 5 detection + 21 scenario
+  + 8 colour = 89 checks, all passing.
+
+## [v10.18] — 2026-06-13 — Scanner reverted to the v10.12 pipeline
+
+Per request, the scanner is rolled back to the v10.12 version. The colour
+scan code (capture settings, edge detection, perspective warp, and the plain
+2nd–98th percentile auto-contrast filter) is byte-for-byte the v10.9–v10.13
+scanner — which IS the v10.12 scanner, since v10.10–v10.12 were toolbar-only
+releases that never touched scan code (verified by diffing the backups).
+
+- The v10.17 white-balance step (`colourBalanceCore`) is removed from both
+  `app.js` and `scan-worker.js`. Colour scans use the plain auto-contrast
+  filter again, exactly as in v10.12.
+- `app.js` and `scan-worker.js` now match the v10.13 backup byte-for-byte
+  (apart from the version tag). Nothing else was touched: the toolbar, themes,
+  reading view, compress, merge, organise, save/close and every other feature
+  are exactly as they were.
+- `tests/colour-tests.mjs` updated to match: it now verifies the plain
+  pipeline's worker/main-thread byte parity, that auto-contrast stretches the
+  tonal range, and that the white-balance code is fully gone.
+- Tests: 51 integration + 4 guard + 5 detection + 21 scenario + 3 colour = 84
+  checks, all passing.
+
+## [v10.17] — 2026-06-13 — Clean-scan white balance (cast fix, done safely)
+
+Builds on the v10.16 revert. The restored original pipeline was neutral but had
+no white balance, so warm/indoor-lit pages came out pale and yellow. This adds
+white balance back — but global and conservative, explicitly avoiding what made
+v10.14 fail.
+
+- **Global grey-world white balance over the paper.** The paper is the bright
+  majority of a document, so the colour of all pixels above the 60th-percentile
+  luminance is averaged (the estimated paper/light colour) and each channel is
+  scaled so that average lands on a neutral 245. Because it is area-averaged, a
+  small neutral element — a plastic address window, a white label — can't skew
+  it, and the warm cast on the paper is removed. One gain per channel for the
+  whole image (gain capped at 2.2×), so it physically cannot create the local
+  dark blotches v10.14 did. No unsharp mask, so no harsh halos.
+- Then the unchanged gentle 2nd–98th percentile luminance stretch deepens text.
+- Worker and main-thread copies are byte-identical (parity test-enforced).
+- New `tests/colour-tests.mjs`: a warm page (235/212/172) comes out neutral
+  white with dark ink; a neutral page stays neutral and is not darkened; a dim
+  page brightens (never darkens — the v10.14 failure mode); plus the two parity
+  checks. Proven visually on a synthetic warm, unevenly-lit page: cast roughly
+  halved on a deliberately pessimistic fixture, no dark patches anywhere.
+- Tests: 51 integration + 4 guard + 5 detection + 21 scenario + 5 colour = 86
+  checks, all passing.
+
+## [v10.16] — 2026-06-13 — Scanner reverted to v10.13 (drop "magic scan")
+
+Reverts the scanner to the last known-good build (v10.13). On real device
+photos the v10.14 "magic scan" colour pipeline produced a dark/odd colour
+cast and an over-processed look, and the v10.14/v10.15 detection and
+capture-resolution changes did not reliably help edge detection. Per
+request, the whole scan feature is rolled back rather than patched further.
+
+- **Colour pipeline restored** to the simple 2%-percentile auto-contrast
+  stretch (`applyAutoContrast`) in both `app.js` and `scan-worker.js`. The
+  per-channel shadow-lift gain + contrast stretch + unsharp mask that caused
+  the cast is gone. Clean, neutral scans again.
+- **Edge-detection thresholds restored** to v10.13 (frame-cover 0.92, fill
+  0.85, min size 0.12, outline coverage 0.80). If a page that fills the
+  whole frame isn't auto-outlined, the crop screen still lets you drag the
+  four corners by hand.
+- **Capture settings restored**: camera 2560×1440 (was 4K), Standard output
+  max 2000px / JPEG 0.85, photo-import downscale 2600px.
+- Only the scanner reverted. The v10.14–v10.15 toolbar polish (segmented
+  buttons, bigger targets, red ✕) and all other features are untouched.
+- Tests: 51 integration + 4 guard + 5 detection + 21 scenario = 81 checks,
+  all passing. (The v10.15 D6 "page fills 95% of frame" detection fixture is
+  removed with the threshold revert.)
+
+## [v10.15] — 2026-06-12 — Scan colour fix + detection fix (v10.14 regressions)
+
+Two regressions from v10.14, both reported from device screenshots, both mine:
+
+- **Yellow scans fixed.** The v10.14 shadow-lift multiplied all colour channels
+  by one brightness-based gain — under warm indoor light that preserves (even
+  amplifies) the yellow cast. The pipeline now white-balances **per channel**
+  locally, so paper lands on neutral white regardless of the room's lighting.
+  Fixture-proven: a warm-lit page (235/212/172) comes out at exactly
+  255/255/255 across both lit and shadowed regions, with text untouched, and
+  the worker/fallback remain byte-identical.
+- **Green detection outline restored when the page fills the frame.** The
+  detector rejected any candidate covering >92% of the frame — but filling the
+  frame with the page is precisely how people scan. The limit is now 97%, and
+  the shape thresholds were carefully loosened for real-world pages (boundary
+  coverage 0.80→0.76, fill 0.85→0.80, minimum size 12%→10%) while the L-shape
+  and blank/wall rejection fixtures still pass. New fixture: a page filling
+  95% of the frame must detect (it does, at 1px).
+
+All suites green: 51 integration + 4 guard + 6 detection + 21 scenario + 4
+colour-pipeline checks.
+
+## [v10.14] — 2026-06-12 — Toolbar polish + Adobe-grade scan quality
+
+### Toolbar (from screenshot feedback)
+- Segment buttons now share space in proportion to their labels — "Compress"
+  never truncates, "Edit"/"Undo" no longer swim in slack.
+- All toolbar buttons are bigger (14px text, taller targets), as mocked.
+- The ✕ close button is now red, so its meaning is unmistakable.
+- The stray pale block beneath the status banner now blends into the banner
+  (page root background matched) and the banner itself is slightly slimmer.
+
+### Scanner quality (Colour mode)
+- **Capture at up to 4K** (was 2.5K) — more pixels into the perspective
+  correction means visibly sharper text.
+- **New "magic scan" colour pipeline**, applied identically in the worker and
+  the fallback (parity test-enforced): local illumination correction lifts
+  shadows so paper comes out flat white like a flatbed scan, then contrast
+  stretch, then a luminance unsharp mask crisps text edges — the Adobe Scan
+  look. The crop-screen preview shows exactly the final result.
+- **Standard quality output raised**: max page 2000→2400px, JPEG 85→88.
+  "Small file" unchanged. Black & white pipeline unchanged (already binary-crisp).
+- Verified: app/worker byte parity on the new pipeline, shadow-gradient
+  fixture lifts 145→240 background, all 81 existing checks pass.
+
+## [v10.13] — 2026-06-12 — Segmented toolbar
+
+- The toolbar is now three calm zones: **Open** (primary, left) · an iOS-style
+  **segmented group** holding Edit / Undo / Compress / More (one soft container
+  with hairline dividers that stretches to fill the row — no more uneven gaps
+  or scattered pills) · **Save + ✕** (right; the ✕ is now a quiet borderless
+  glyph). Disabled actions dim inside the segment instead of looking like
+  washed-out buttons. The ▾ caret is gone from More.
+- Same heights, same tap targets, both themes. CSS + markup only.
+
+## [v10.12] — 2026-06-12 — Close in the toolbar
+
+- A compact **✕ (close)** button now sits right after Save in the toolbar —
+  one tap to close the document. Protected by the unsaved-changes guard, so a
+  stray tap can never lose work. "Close this PDF" is removed from the More
+  menu (it lived there before); More is now seven entries.
 
 ## [v10.11] — 2026-06-12 — Toolbar fit on Pro Max
 
@@ -516,7 +980,6 @@ which persists across releases. Updates now download ~100KB, not ~12MB.
   bold/italic) and the WinAnsi character set; unusual glyphs become `?`.
 - Text-edit and signature placement assume an upright (0°) page.
 - MuPDF.js is AGPL-3.0 (or commercial) — a public host must keep its source available.
-
 ##########################################################################################################################################
 
 # PyPDF Editor — PWA (MuPDF.js engine)
