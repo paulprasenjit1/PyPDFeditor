@@ -6,7 +6,7 @@
    - VENDOR_CACHE (~12MB: MuPDF wasm + pdf-lib) — bump ONLY when vendor/ files
      actually change. Kept across app releases, so updates no longer re-download
      the engine and the first load after an update is fast. */
-const APP_CACHE    = "pypdf-app-v10.38";
+const APP_CACHE    = "pypdf-app-v10.39";
 const VENDOR_CACHE = "pypdf-vendor-v1";
 
 const APP_SHELL = [
@@ -22,11 +22,15 @@ const APP_SHELL = [
   "./icon-192.png",
   "./icon-512.png",
 ];
+// NOTE: mupdf-wasm.wasm (~10MB) is deliberately NOT precached here. On first load
+// engine-watchdog.js fetches it once (with a progress bar) and stores it in
+// VENDOR_CACHE itself, so it is downloaded a SINGLE time instead of twice (once
+// by this install, once by the engine). The fetch handler below still serves and
+// caches it on later loads, so offline keeps working.
 const VENDOR = [
   "./vendor/pdf-lib.min.js",
   "./vendor/mupdf/mupdf.js",
   "./vendor/mupdf/mupdf-wasm.js",
-  "./vendor/mupdf/mupdf-wasm.wasm",
 ];
 
 self.addEventListener("install", (e)=>{

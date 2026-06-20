@@ -196,12 +196,18 @@ export function flattenIllumination(d, w, h){
   const GH = Math.max(1, Math.min(64, Math.round(GW*h/w) || 1));
   const cells = GW*GH;
   const cx = i => Math.min(GW-1, (i*GW/w)|0);
-  // pass 1: cell mean luminance
+  // pass 1: cell mean luminance (also count genuinely dark pixels)
   const sumL=new Float32Array(cells), cnt=new Float32Array(cells);
+  let dark=0;
   for (let y=0;y<h;y++){ const gy=Math.min(GH-1,(y*GH/h)|0), row=gy*GW;
     for (let x=0;x<w;x++){ const j=(y*w+x)*4;
       const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+      if (L<64) dark++;
       const gi=row+cx(x); sumL[gi]+=L; cnt[gi]++; } }
+  // photo-heavy / mostly-dark page: flattening would lift the big dark region
+  // into grey, so leave it untouched. A real text document is well under 10%
+  // dark (just the ink), so this only triggers on photos / dark-filled pages.
+  if (dark > n*0.40) return;
   const meanL=new Float32Array(cells);
   for (let i=0;i<cells;i++) meanL[i]=sumL[i]/(cnt[i]||1);
   // pass 2: paper luminance = mean of pixels brighter than the cell mean

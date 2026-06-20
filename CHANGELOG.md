@@ -4,6 +4,25 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.39] — 2026-06-20 — Text edits keep background colour + fit width; scan/engine polish
+
+- **Text edits keep the background colour (item 7).** Editing text that sits on a
+  coloured cell, banner or shaded box no longer leaves a white patch. Before the
+  original glyphs are erased, the app samples the colour of a thin ring just
+  outside the text and fills with that instead of white. It only does this when
+  the surrounding colour is a trustworthy flat colour and clearly not white —
+  ordinary white-page edits are byte-for-byte unchanged.
+- **Replacement text shrinks to fit.** A single replacement line that's wider than
+  the original now shrinks just enough to fit the original width (down to half
+  size at most) instead of running off the right edge.
+- **"Whiten" guards photo-heavy pages.** Illumination flattening is skipped when
+  more than 40% of the page is genuinely dark (a photo or dark-filled page), so it
+  can't lift a big dark region into grey. Normal text scans are well under that.
+- **Engine downloads once on first load.** The ~10MB WASM engine is no longer
+  precached by the service worker AND fetched by the engine separately; the
+  progress fetch now caches it to the vendor cache, halving first-load bandwidth.
+  Offline still works (the fetch handler serves and re-caches it on later loads).
+
 ## [v10.38] — 2026-06-20 — Simpler page pill label
 
 - **Page pill reads just "7 of 524"** now — the ↕ icon and the word "Page" were

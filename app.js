@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.38";
+const APP_BUILD = "10.39";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -764,10 +764,56 @@ function openTextEditorSheet(pageIndex, sp){
   openSheet();  setTimeout(()=>$("teIn").focus(), 100);
 }
 
+// Estimate the background colour immediately AROUND a text span by rendering the
+// page and sampling a thin ring just outside the span (top/bottom/left/right),
+// where there are no glyphs from this span. Returns { r,g,b, uniform } in 0–255,
+// or null. `uniform` is false when the ring is mixed (text-dense / an image edge)
+// — in that case the caller keeps the safe white fill. Used so a text edit on a
+// coloured cell or banner reconstructs that colour instead of leaving a white
+// patch. White pages sample near-white, so they're unaffected.
+function sampleSpanBg(pageIndex, sp){
+  let page=null, pix=null;
+  try {
+    page = MDOC.loadPage(pageIndex);
+    const s = 1.5;                                   // ~108 dpi: plenty for a flat colour
+    pix = page.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false);
+    const W=pix.getWidth(), Hh=pix.getHeight(), stride=pix.getStride(), n=pix.getNumberOfComponents();
+    const ox=pix.getX(), oy=pix.getY();
+    const data = pix.getPixels();                    // heap VIEW — read into rs[] before any wasm alloc
+    const rs=[], pad=2;
+    const at=(X,Y)=>{ const x=Math.round(X*s)-ox, y=Math.round(Y*s)-oy;
+      if (x<0||y<0||x>=W||y>=Hh) return; const i=y*stride+x*n; rs.push([data[i],data[i+1],data[i+2]]); };
+    const line=(x0,y0,x1,y1)=>{ for(let k=0;k<=12;k++) at(x0+(x1-x0)*k/12, y0+(y1-y0)*k/12); };
+    line(sp.x0, sp.y0-pad, sp.x1, sp.y0-pad);        // above
+    line(sp.x0, sp.y1+pad, sp.x1, sp.y1+pad);        // below
+    line(sp.x0-pad, sp.y0, sp.x0-pad, sp.y1);        // left
+    line(sp.x1+pad, sp.y0, sp.x1+pad, sp.y1);        // right
+    if (rs.length < 8) return null;
+    const med = ch => { const a=rs.map(c=>c[ch]).sort((u,v)=>u-v); return a[a.length>>1]|0; };
+    const r=med(0), g=med(1), b=med(2);
+    const lum=c=>(c[0]*77+c[1]*151+c[2]*28)>>8, Lm=(r*77+g*151+b*28)>>8;
+    let dev=0; for(const c of rs) dev+=Math.abs(lum(c)-Lm); dev/=rs.length;
+    return { r, g, b, uniform: dev < 16 };           // low spread => trustworthy flat colour
+  } catch(e){ return null; }
+  finally { try{ if(pix) pix.destroy(); }catch(e){} try{ if(page) page.destroy(); }catch(e){} }
+}
+// Shrink the draw size so a one-line replacement fits the original span width
+// (pdf-lib doesn't wrap). Never shrink below half — better a slight overflow
+// than illegible text. Only shrinks; never enlarges.
+function fitFontSize(font, text, size, avail){
+  if (!(avail>1) || !text) return size;
+  try { const wAt = font.widthOfTextAtSize(text, size);
+    if (wAt>avail) return Math.max(size*0.5, size*avail/wAt);
+  } catch(e){}
+  return size;
+}
+
 async function applyTextEdit(pageIndex, sp, newText){
   showSpin(true,"Editing text…");
   try {
     pushUndo();
+    // sample the original background colour BEFORE redaction erases the area
+    const bg = sampleSpanBg(pageIndex, sp);
     // 1) remove the original glyphs with a MuPDF redaction (no black box)
     const page = MDOC.loadPage(pageIndex);
     const an = page.createAnnotation("Redact");
@@ -782,7 +828,14 @@ async function applyTextEdit(pageIndex, sp, newText){
     const pg = doc.getPage(pageIndex);
     const H = pg.getHeight();
     const w = (sp.x1-sp.x0)+2, h = (sp.y1-sp.y0)+2;
-    pg.drawRectangle({ x:sp.x0-1, y:H-(sp.y1+1), width:w, height:h, color:rgb(1,1,1) });
+    // fill the erased area with the original background colour so an edit on a
+    // coloured cell/banner doesn't leave a white patch. Keep pure white when the
+    // background is (near-)white or not a trustworthy flat colour — so ordinary
+    // white-page edits are byte-for-byte unchanged.
+    const nearWhite = bg && bg.r>=245 && bg.g>=245 && bg.b>=245;
+    const fillCol = (bg && bg.uniform && !nearWhite)
+                  ? rgb(bg.r/255, bg.g/255, bg.b/255) : rgb(1,1,1);
+    pg.drawRectangle({ x:sp.x0-1, y:H-(sp.y1+1), width:w, height:h, color:fillCol });
     // a text span is a single line; collapse any newlines the user typed so the
     // replacement stays on that line and can't flow downward past where the
     // original sat (and over the content below it)
@@ -792,8 +845,10 @@ async function applyTextEdit(pageIndex, sp, newText){
       const font = await doc.embedFont(pickFont(sp.font));
       const safe = sanitizeForFont(text);
       substituted = safe !== text;     // some glyphs fell outside the base font
-      pg.drawText(safe, { x:sp.origin[0], y:H-sp.origin[1], size:sp.size||11,
-                          font, color:rgb(sp.color[0],sp.color[1],sp.color[2]), lineHeight:(sp.size||11)*1.15 });
+      const baseSize = sp.size || 11;
+      const drawSize = fitFontSize(font, safe, baseSize, sp.x1 - sp.x0);   // shrink to fit width
+      pg.drawText(safe, { x:sp.origin[0], y:H-sp.origin[1], size:drawSize,
+                          font, color:rgb(sp.color[0],sp.color[1],sp.color[2]), lineHeight:drawSize*1.15 });
     }
     workingBytes = new Uint8Array(await doc.save());
     reopen();

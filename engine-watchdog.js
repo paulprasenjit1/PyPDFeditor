@@ -86,7 +86,15 @@
     globalThis.$libmupdf_wasm_Module = {
       instantiateWasm: function(imports, success){
         streamWasm(WASM_URL)
-          .then(function(buf){ return WebAssembly.instantiate(buf, imports); })
+          .then(function(buf){
+            // store the single download so offline + later loads work without a
+            // second fetch (sw.js no longer precaches the wasm). VENDOR_CACHE name
+            // must match sw.js; the fetch handler there matches by URL.
+            try { caches.open("pypdf-vendor-v1").then(function(c){
+              c.put(WASM_URL, new Response(buf.slice(0), { headers:{ "Content-Type":"application/wasm" } }));
+            }).catch(function(){}); } catch(e){}
+            return WebAssembly.instantiate(buf, imports);
+          })
           .then(function(res){ success(res.instance, res.module); })
           .catch(function(){
             // fall back to the engine's own load (no progress, but it still works)
