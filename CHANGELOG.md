@@ -4,6 +4,44 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.29] — 2026-06-20 — Reviewer fixes: reliability, scanner & polish
+
+Two passes of fixes from an external code review. No feature removed; behaviour
+only changes on previously-broken edge cases. All 105 checks pass.
+
+Phase 1:
+
+- **Compress never grows the file.** An already-optimised PDF could come back a
+  few bytes larger from the lossless structural pass; the app used to commit
+  that, growing the document, marking it dirty, adding a pointless undo step and
+  reporting a negative "% smaller". It now leaves the document untouched and
+  says it's already as small as it usefully gets.
+- **Copy-pages and Save-page-as-picture now use the iOS share sheet.** Both used
+  a synthetic `<a download>` click, which frequently does nothing in a
+  standalone Home-Screen PWA. They now go through the same Web Share path as
+  Save (with a download fallback), so the file actually reaches Files/AirDrop.
+- **Scanned-page preview no longer leaks a blob URL** when dismissed by tapping
+  the backdrop instead of Close.
+
+Phase 2:
+
+- **Engine-load watchdog.** `app.js` is a module that loads the MuPDF WASM
+  engine; if that import never resolves (partial cache, failed download) the
+  module body never runs and the UI used to sit on "Loading engine…" forever.
+  A tiny classic `engine-watchdog.js` now arms a timer before the module and,
+  if the engine hasn't signalled ready in 20 s, shows a tap-to-reload message.
+  It cancels silently on normal start. Added to the precache.
+- **Unencodable-character notice.** When replacement text contains glyphs the
+  base-14 fonts can't draw (shown as "?"), the status line now says so instead
+  of substituting silently.
+- **Signature on a rotated page now warns first**, matching the existing
+  text-edit guard (placement assumes an upright page).
+- **Removed dead code.** The unreachable `signRemoveWhite` / `knockoutWhite`
+  background-knockout branch (never wired to any control) was deleted; signatures
+  are placed as-is, exactly as before.
+- **About → engine source** opens in the real browser (`target="_blank"`)
+  instead of navigating the installed app away with no way back.
+
 ## [v10.28] — 2026-06-19 — New dark-theme app icon
 
 - **New icon.** Replaced the red square icon with a dark, OLED-black icon that

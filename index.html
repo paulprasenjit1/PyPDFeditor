@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="10.28">
+<html lang="en" data-build="10.29">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -139,6 +139,11 @@
 
 <!-- pdf-lib (vendored, offline) — used as the "pen" to draw replacement text/images -->
 <script src="./vendor/pdf-lib.min.js"></script>
+
+<!-- Classic (non-module) watchdog: shows a visible message + reload if the
+     module engine below never initialises. Must load BEFORE the module so its
+     timer is armed even when the module pipeline fails. -->
+<script src="./engine-watchdog.js"></script>
 
 <!-- MuPDF.js is the core engine; ESM module with WASM (vendored, offline) -->
 <!-- App logic lives in an external module so the CSP can forbid inline scripts -->

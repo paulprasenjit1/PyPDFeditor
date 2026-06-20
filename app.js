@@ -13,7 +13,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.28";
+const APP_BUILD = "10.29";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -69,7 +69,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "19 Jun 2026";
+const BUILD_DATETIME = "20 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -80,7 +80,6 @@ let fileName = "document.pdf";
 let zoomPct = 100;             // 50–300, 25% steps; 100% = fit to viewer width
 let mergeSources = null;       // staged docs awaiting a chosen merge order
 let signImgDataUrl = null;     // processed signature PNG dataURL
-let signRemoveWhite = false;   // place signatures as-is (background kept)
 let mode = null;               // null | "sign" | "text"
 const spanCache = new Map();   // key `${epoch}:${page}` -> spans[]
 let pageObserver = null;       // single lazy-render observer (disconnected on hide/close)
@@ -165,6 +164,9 @@ const u8 = v => new Uint8Array(v);
   $("welcomeHint").textContent = "Everything stays on your phone — nothing is uploaded.";
   $("meta").textContent = "No document open";
   setStatus("Ready. Open a PDF or scan a document.", "ok");
+  // tell the engine-load watchdog the engine is live, so it cancels its timer
+  window.__pypdfEngineReady = true;
+  try { window.dispatchEvent(new Event("pypdf-engine-ready")); } catch(e){}
 })();
 $("bigOpen").onclick = ()=> confirmDiscard("open another PDF", ()=>$("fileInput").click());
 $("bigScan").onclick = ()=> startScan();
@@ -760,9 +762,11 @@ async function applyTextEdit(pageIndex, sp, newText){
     const w = (sp.x1-sp.x0)+2, h = (sp.y1-sp.y0)+2;
     pg.drawRectangle({ x:sp.x0-1, y:H-(sp.y1+1), width:w, height:h, color:rgb(1,1,1) });
     const text = (newText||"");
+    let substituted = false;
     if (text.trim() !== ""){
       const font = await doc.embedFont(pickFont(sp.font));
       const safe = sanitizeForFont(text);
+      substituted = safe !== text;     // some glyphs fell outside the base font
       pg.drawText(safe, { x:sp.origin[0], y:H-sp.origin[1], size:sp.size||11,
                           font, color:rgb(sp.color[0],sp.color[1],sp.color[2]), lineHeight:(sp.size||11)*1.15 });
     }
@@ -770,7 +774,8 @@ async function applyTextEdit(pageIndex, sp, newText){
     reopen();
     setMode("text");
     await render();
-    setStatus("Text updated on page "+(pageIndex+1)+".","ok");
+    setStatus("Text updated on page "+(pageIndex+1)+"."
+      + (substituted ? " Note: some characters aren't available in the matched font and were shown as “?”." : ""), "ok");
   } catch(e){ setStatus("Could not change the text: "+friendly(e),"err"); }
   showSpin(false);
 }
@@ -803,7 +808,8 @@ $("sigInput").onchange = async e=>{
   showSpin(true,"Loading signature…");
   try {
     const url = await fileToDataURL(f);
-    signImgDataUrl = signRemoveWhite ? await knockoutWhite(url) : await toPng(url);
+    // signatures are placed as-is, with their own background kept
+    signImgDataUrl = await toPng(url);
     setMode("sign");
   } catch(err){ setStatus("Could not load that image: "+friendly(err),"err"); }
   showSpin(false); e.target.value="";
@@ -835,8 +841,31 @@ function attachOverlay(stage, pageIndex){
   });
 }
 
+// Signature placement assumes an upright (0°) page, exactly like text editing.
+// On a rotated page the signature can land in the wrong place or orientation,
+// so warn first and let the user proceed or back out. Resolves true = place.
+function confirmRotatedSign(){
+  return new Promise(resolve=>{
+    $("sheet").innerHTML = h`
+      <h3>This page is rotated</h3>
+      <p class="hint">Signature placement works best on upright pages — on a rotated page the signature can land in the wrong place. You can rotate the page back first (More → Pages), or place it anyway.</p>
+      <div class="row"><button class="full" id="sgGo">Place anyway</button></div>
+      <div class="row"><button class="ghost full" id="sgNo">Cancel</button></div>`;
+    let settled=false;
+    const done=v=>{ if(settled) return; settled=true; sheetOnDismiss=null; closeSheet(); resolve(v); };
+    $("sgGo").onclick = ()=> done(true);
+    $("sgNo").onclick = ()=> done(false);
+    openSheet();
+    sheetOnDismiss = ()=> done(false);   // backdrop / Esc = cancel
+  });
+}
+
 async function placeSignature(pageIndex, xPt, yTopPt, wPt, hPt){
   if (!signImgDataUrl){ setStatus("Pick a signature image first (Sign button).","err"); return; }
+  if (await pageRotation(pageIndex)){
+    const ok = await confirmRotatedSign();
+    if (!ok){ setStatus("Signature cancelled.","warn"); return; }
+  }
   showSpin(true,"Placing signature…");
   try {
     pushUndo();
@@ -900,7 +929,7 @@ function openAbout(){
       <div class="abrow"><span>Build</span><b>${BUILD_DATETIME}</b></div>
       <div class="abrow"><span>Cache</span><b>${cache}</b></div>
       <div class="abrow"><span>Engine</span><b>MuPDF.js (WASM) + pdf-lib</b></div>
-      <div class="abrow"><span>Licence</span><b>MuPDF.js is AGPL-3.0 — <a href="https://github.com/ArtifexSoftware/mupdf.js" rel="noopener">engine source</a></b></div>
+      <div class="abrow"><span>Licence</span><b>MuPDF.js is AGPL-3.0 — <a href="https://github.com/ArtifexSoftware/mupdf.js" target="_blank" rel="noopener noreferrer">engine source</a></b></div>
       ${raw(errRows)}
     </div>
     <p class="hint mt12">
@@ -1071,8 +1100,11 @@ async function doExtract(pages){
     copy.rearrangePages(pages);
     const bytes = u8(copy.saveToBuffer("garbage").asUint8Array());
     copy.destroy();
-    downloadBlob(new Blob([bytes], {type:"application/pdf"}), baseName()+"_pages.pdf");
-    setStatus(pages.length+" page(s) saved as a new PDF — pick where to keep it.","ok");
+    // share sheet first (reliable in a standalone iOS PWA, where <a download>
+    // often does nothing); download is the fallback when sharing isn't possible
+    const ok = await saveOrShare(bytes, baseName()+"_pages.pdf");
+    setStatus(ok ? pages.length+" page(s) saved as a new PDF — pick where to keep it."
+                 : "Save cancelled.","ok");
   } catch(err){ setStatus("Could not copy the pages: "+friendly(err),"err"); }
   showSpin(false);
 }
@@ -1316,6 +1348,7 @@ function openScanPageSheet(i){
   };
   $("pgClose").onclick=done;
   openSheet();
+  sheetOnDismiss = ()=>{ try{ URL.revokeObjectURL(url); }catch(e){} };  // backdrop/Esc: don't leak the blob URL
 }
 
 // ---- camera ----
@@ -1938,8 +1971,8 @@ async function exportVisiblePng(){
     if (longPt*pscale > 4096) pscale = 4096/longPt;
     const pix = page.toPixmap(mupdf.Matrix.scale(pscale,pscale), mupdf.ColorSpace.DeviceRGB, false);
     const png = u8(pix.asPNG()); pix.destroy(); page.destroy();
-    downloadBlob(new Blob([png],{type:"image/png"}), baseName()+"_p"+(target+1)+".png");
-    setStatus("Picture ready — pick where to keep it.","ok");
+    const ok = await saveOrShare(png, baseName()+"_p"+(target+1)+".png", "image/png");
+    setStatus(ok ? "Picture ready — pick where to keep it." : "Save cancelled.","ok");
   } catch(err){ setStatus("Could not save the picture: "+friendly(err),"err"); }
   showSpin(false);
 }
@@ -2068,7 +2101,16 @@ async function runCompress(level){
         await rasterAll();
       }
     }
-    // 3) commit — snapshot for Undo now (skipped on very large files, #5)
+    // 3) never grow the file. An already-optimised PDF can come back the same
+    //    size or a few bytes LARGER from the lossless structural pass; committing
+    //    that would grow the document, mark it dirty and add a pointless undo
+    //    step, and report a negative "% smaller". Leave it untouched instead.
+    if (bestLen >= before){
+      showSpin(false);
+      setStatus(`Already about as small as it usefully gets — ${fmtKB(before)} left unchanged.`, "ok");
+      return;
+    }
+    // 4) commit — snapshot for Undo now (skipped on very large files, #5)
     const undoKept = pushUndoGuarded();
     workingBytes = best instanceof Uint8Array ? best : new Uint8Array(best);
     reopen(); await render();
@@ -2172,15 +2214,6 @@ async function toPng(dataUrl){
   c.getContext("2d").drawImage(im,0,0);
   return c.toDataURL("image/png");
 }
-async function knockoutWhite(dataUrl, thresh=238){
-  const im=await loadImage(dataUrl);
-  const c=document.createElement("canvas"); c.width=im.naturalWidth; c.height=im.naturalHeight;
-  const ctx=c.getContext("2d"); ctx.drawImage(im,0,0);
-  const d=ctx.getImageData(0,0,c.width,c.height); const a=d.data;
-  for (let i=0;i<a.length;i+=4){ if (a[i]>=thresh&&a[i+1]>=thresh&&a[i+2]>=thresh) a[i+3]=0; }
-  ctx.putImageData(d,0,0);
-  return c.toDataURL("image/png");
-}
 function downloadBlob(blob, name){
   const url=URL.createObjectURL(blob); const a=document.createElement("a");
   a.href=url; a.download=safeFileName(name); a.rel="noopener"; document.body.appendChild(a); a.click();
@@ -2190,16 +2223,16 @@ function downloadBlob(blob, name){
 // Files, AirDrop, Mail…) when the browser can share files; otherwise fall back
 // to a normal download. Must be called from a user gesture for share to work.
 // Returns true if saved/shared, false if the user dismissed the share sheet.
-async function saveOrShare(bytes, name){
+async function saveOrShare(bytes, name, mime="application/pdf"){
   const nm = safeFileName(name);
   try {
-    const file = new File([bytes], nm, { type:"application/pdf" });
+    const file = new File([bytes], nm, { type:mime });
     if (navigator.canShare && navigator.canShare({ files:[file] })){
       try { await navigator.share({ files:[file] }); return true; }
       catch(e){ if (e && e.name === "AbortError") return false; /* unsupported at runtime → fall through */ }
     }
   } catch(e){ /* File ctor or canShare unavailable → fall through to download */ }
-  downloadBlob(new Blob([bytes], {type:"application/pdf"}), nm);
+  downloadBlob(new Blob([bytes], {type:mime}), nm);
   return true;
 }
 
