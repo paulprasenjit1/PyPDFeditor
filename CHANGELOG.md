@@ -4,6 +4,13 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.38] — 2026-06-20 — Simpler page pill label
+
+- **Page pill reads just "7 of 524"** now — the ↕ icon and the word "Page" were
+  dropped for a cleaner, e-reader-style label. It stays tappable (the accent
+  outline is the cue) and keeps its descriptive "Go to page, currently page X of
+  N" label for screen readers.
+
 ## [v10.37] — 2026-06-20 — Tappable page pill (shortcut to Go to page)
 
 - **The page pill is now a shortcut.** The "Page 3 of 12" indicator that appears

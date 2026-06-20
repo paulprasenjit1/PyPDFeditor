@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.37";
+const APP_BUILD = "10.38";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -2196,7 +2196,7 @@ $("viewer").addEventListener("scroll", ()=>{
         if (d < bd){ bd = d; best = +s.dataset.page; }
       });
       const p = $("pagePill");
-      p.textContent = "↕ Page "+(best+1)+" of "+n;       // ↕ hints it's tappable
+      p.textContent = (best+1)+" of "+n;                  // compact, e-reader style
       p.setAttribute("aria-label", "Go to page — currently page "+(best+1)+" of "+n);
       p.classList.add("show");
       clearTimeout(pillT);
