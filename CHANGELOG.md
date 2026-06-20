@@ -4,6 +4,23 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.31] — 2026-06-20 — Fixes: page jump, scan rotate, live rotate preview
+
+Three reported issues fixed. No other behaviour changed; all checks pass.
+
+- **Go to page no longer hides the toolbar.** Jumping to a deep page (e.g. 500
+  of 524) used `element.scrollIntoView`, which on iOS bubbled up and scrolled the
+  whole app, pushing the header + toolbar off screen — so you couldn't get back
+  to page 1. It now scrolls the viewer itself, so the toolbar always stays put.
+- **Rotate a scan before saving.** The scanner's Adjust-edges screen has a new
+  "⟳ Rotate" button that turns a sideways capture a quarter-turn (re-detecting
+  the edges), so a scan that came out on its side can be made upright before it
+  becomes a PDF page.
+- **Live rotation preview in Pages.** Rotating a page in More → Pages now turns
+  its thumbnail immediately, instead of only showing the change after Apply. The
+  list thumbnails are now a fixed square so a rotated preview stays neatly inside
+  its row.
+
 ## [v10.30] — 2026-06-20 — Phase 3: accessibility, navigation & polish
 
 Larger UX / accessibility items from the review, plus the remaining polish. No

@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.30";
+const APP_BUILD = "10.31";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -912,8 +912,17 @@ async function placeSignature(pageIndex, xPt, yTopPt, wPt, hPt){
 
 // ---------------- jump to a page (long documents) ----------------
 function scrollToPage(i){
+  const v = $("viewer");
   const stage = $("pageWrap").querySelector('.stage[data-page="'+i+'"]');
-  if (stage) stage.scrollIntoView({ behavior:"smooth", block:"start" });
+  if (!stage) return;
+  // Scroll the VIEWER itself, not the element scroll-into-view helper: on iOS
+  // that helper can bubble up and scroll the whole app, pushing the fixed header
+  // + toolbar off screen (so you couldn't get back to page 1). Moving the viewer
+  // directly keeps the toolbar put. Offsets are valid even for not-yet-rendered
+  // pages because each stage carries its intrinsic size.
+  const target = Math.max(0, v.scrollTop + (stage.getBoundingClientRect().top - v.getBoundingClientRect().top) - 8);
+  try { if (typeof v.scrollTo === "function"){ v.scrollTo({ top:target, behavior:"smooth" }); return; } } catch(e){}
+  v.scrollTop = target;
 }
 function openJumpToPage(){
   const n = (workingBytes && MDOC) ? MDOC.countPages() : 0;
@@ -1083,6 +1092,13 @@ async function openOrganise(){
     $("sheet").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{const o=+b.dataset.del; del.has(o)?del.delete(o):del.add(o); draw();});
     $("orgApply").onclick = async ()=>{ closeSheet(); await applyOrganise(order.filter(o=>!del.has(o)), rot); };
     $("orgCancel").onclick = closeSheet;
+    // live preview: rotate each thumbnail by its pending turn (on top of the
+    // page's existing orientation, which the base thumbnail already shows) so
+    // the result is visible immediately, not only after Apply.
+    $("sheet").querySelectorAll("img[data-pthumb]").forEach(im=>{
+      const deg = rot[+im.dataset.pthumb]||0;
+      im.style.transform = deg ? "rotate("+deg+"deg)" : "";
+    });
     lazyThumbs();
   }
   draw();
@@ -1598,14 +1614,16 @@ $("camInput").onchange = e=>{
 };
 
 // ---- adjust / crop screen ----
-function enterCrop(frame){
-  capFrame = frame;
-  // auto-detect edges on a downscale; fall back to a 6% inset rectangle
+// auto-detect the document edges on the current capFrame (downscaled), falling
+// back to a 6% inset rectangle. Sets cropQuad. Returns true if edges were found.
+function autoDetectCropQuad(){
+  const frame = capFrame;
   const s = 520/Math.max(frame.width, frame.height);  // v10.20: finer edges for low-contrast docs
   const sw=Math.max(2,Math.round(frame.width*s)), sh=Math.max(2,Math.round(frame.height*s));
   const ctx = scratch(sw,sh).getContext("2d",{willReadFrequently:true});
   ctx.drawImage(frame,0,0,sw,sh);
   let q = detectQuad(ctx.getImageData(0,0,sw,sh));
+  const found = !!q;
   if (q) q = q.map(p=>({x:p.x/s, y:p.y/s}));
   else {
     const mx=frame.width*0.06, my=frame.height*0.06;
@@ -1613,10 +1631,32 @@ function enterCrop(frame){
        {x:frame.width-mx,y:frame.height-my},{x:mx,y:frame.height-my}];
   }
   cropQuad = q;
+  return found;
+}
+function enterCrop(frame){
+  capFrame = frame;
+  const found = autoDetectCropQuad();
   $("scanCam").classList.remove("show");
   $("scanCrop").classList.add("show");
   layoutCrop();
-  setStatus(q ? "Edges detected — drag the corners to fine-tune." : "Drag the corners onto the document edges.","ok");
+  setStatus(found ? "Edges detected — drag the corners to fine-tune." : "Drag the corners onto the document edges.","ok");
+}
+// Rotate the captured page a quarter-turn clockwise, before it becomes a PDF
+// page — for scans that came out sideways. Re-detects edges on the rotated
+// frame and re-lays out the adjust screen.
+function rotateCropFrame(){
+  if (!capFrame) return;
+  const src = capFrame;
+  const c = document.createElement("canvas");
+  c.width = src.height; c.height = src.width;          // dimensions swap on a 90° turn
+  const ctx = c.getContext("2d");
+  ctx.translate(c.width, 0);
+  ctx.rotate(Math.PI/2);
+  ctx.drawImage(src, 0, 0);
+  capFrame = c;
+  autoDetectCropQuad();
+  layoutCrop();
+  setStatus("Rotated. Drag the corners to fine-tune.","ok");
 }
 function layoutCrop(){
   if (!capFrame) return;
@@ -1737,6 +1777,7 @@ function renderCropPreview(){
   ctx.putImageData(im,0,0);
 }
 
+$("cropRotate").onclick = ()=> rotateCropFrame();
 $("cropRetake").onclick = async ()=>{
   capFrame=null;
   $("scanCrop").classList.remove("show");

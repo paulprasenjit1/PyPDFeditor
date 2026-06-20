@@ -175,7 +175,11 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 .about a { color:var(--accent); }
 .porow { display:flex; align-items:center; gap:8px; padding:7px 9px; margin-bottom:7px;
          background:var(--panel2); border:1px solid var(--line); border-radius:11px; }
-.porow img { width:46px; height:auto; min-height:58px; background:#fff; border-radius:3px; }
+/* square, fixed footprint so a 90°/270° preview rotation stays fully inside the
+   box (the footprint is unchanged by a quarter turn) and never overlaps the row */
+.porow img { width:52px; height:52px; object-fit:contain; background:#fff; border-radius:3px;
+             transform-origin:center; transition:transform .15s ease; }
+@media (prefers-reduced-motion: reduce){ .porow img { transition:none; } }
 .porow .pn { flex:1; font-size:14px; }
 .porow.del { opacity:.4; text-decoration:line-through; }
 /* bigger touch targets for the page row controls (↑ ↓ ⟳ Delete) — was ~30px
