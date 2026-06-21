@@ -4,6 +4,21 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.49] — 2026-06-21 — New: Unlock PDF (remove password)
+
+- **More ▾ → 🔓 Unlock PDF (remove password)** — added directly under "Add my
+  signature". Pick a password-protected PDF, enter its password, and the app
+  saves an unlocked copy (`<name>_unlocked.pdf`) with the encryption removed.
+- **Lossless — original quality and size preserved.** The unlock uses mupdf's
+  `decrypt` save, which rewrites the file WITHOUT re-compressing any image or
+  content stream. Verified against a 256-bit AES-encrypted test PDF: every
+  embedded image stream is byte-identical to the source and the output is within
+  a few hundred bytes of the original size.
+- Runs as a standalone utility — it does not disturb whatever is currently open
+  in the editor, and is available even with no document open. Non-protected PDFs
+  report "nothing to remove"; a wrong password reports clearly and changes
+  nothing.
+
 ## [v10.48] — 2026-06-20 — Revert 4K capture (clean forward version) + quiet benign errors
 
 - **Reverts the 10.47 higher-resolution scan capture** (the camera is back to the

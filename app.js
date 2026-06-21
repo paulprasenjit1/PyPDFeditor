@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.48";
+const APP_BUILD = "10.49";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -486,6 +486,54 @@ function askPassword(name){
     setTimeout(()=>$("pwIn").focus(), 100);
   });
 }
+
+// ---------------- Unlock PDF (remove password, lossless) ----------------
+// Standalone utility: pick a password-protected PDF, supply its password, and
+// save a copy with the encryption removed. Uses mupdf's "decrypt" save, which
+// rewrites the file WITHOUT re-compressing any image or content stream, so the
+// output keeps the original's quality and (within a few bytes) its size. It
+// does NOT touch or replace whatever is currently open in the editor.
+async function unlockPdfFile(f){
+  try {
+    showSpin(true, "Opening "+f.name+"…");
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    // probe first: is it a PDF, and is it actually protected?
+    let doc = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
+    if (!doc.needsPassword()){
+      const isPdf = !!doc.asPDF();
+      doc.destroy();
+      showSpin(false);
+      setStatus(isPdf
+        ? "“"+f.name+"” isn’t password-protected — there’s nothing to remove."
+        : "That file isn’t a PDF, so it can’t be unlocked.", isPdf ? "warn" : "err");
+      return;
+    }
+    doc.destroy();
+    showSpin(false);
+    const pw = await askPassword(f.name);
+    if (pw === null){ setStatus("Unlock cancelled.","warn"); return; }
+    showSpin(true, "Removing password…");
+    doc = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
+    if (!doc.authenticatePassword(pw)){
+      doc.destroy(); showSpin(false);
+      setStatus("Wrong password — could not unlock that PDF.","err");
+      return;
+    }
+    // lossless decrypt — no image/stream re-compression, original quality & size
+    const out = new Uint8Array(doc.asPDF().saveToBuffer("decrypt,garbage").asUint8Array());
+    doc.destroy();
+    showSpin(false);
+    const name = baseFrom(f.name)+"_unlocked.pdf";
+    const ok = await saveOrShare(out, name);
+    setStatus(ok
+      ? "Password removed — saved “"+name+"” at the original quality. Pick where to keep it."
+      : "Password removed — save cancelled.", ok ? "ok" : "warn");
+  } catch(err){
+    showSpin(false);
+    setStatus("Could not unlock that PDF: "+friendly(err),"err");
+  }
+}
+$("unlockInput").onchange = e=>{ const f=e.target.files[0]; e.target.value=""; if(f) unlockPdfFile(f); };
 
 // ---------------- render (mupdf -> JPEG -> <img>) ----------------
 function viewerCssWidth(){
@@ -1031,6 +1079,7 @@ $("moreBtn").onclick = ()=>{
     <div class="row"><button class="full" id="mScan">📷 Scan a document</button></div>
     <div class="row"><button class="full" id="mGoto" ${multi?"":"disabled"}>🔢 Go to page…</button></div>
     <div class="row"><button class="full" id="mSign" ${d}>✍️ Add my signature</button></div>
+    <div class="row"><button class="full" id="mUnlock">🔓 Unlock PDF (remove password)</button></div>
     <div class="row"><button class="full" id="mOrg" ${d}>📑 Pages — reorder · rotate · delete</button></div>
     <div class="row"><button class="full" id="mExtract" ${d}>📄 Copy pages → new PDF</button></div>
     <div class="row"><button class="full" id="mMerge" ${d}>➕ Combine PDFs</button></div>
@@ -1041,6 +1090,7 @@ $("moreBtn").onclick = ()=>{
   $("mGoto").onclick  = ()=>{ closeSheet(); openJumpToPage(); };
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
   $("mSign").onclick  = ()=>{ closeSheet(); startSign(); };
+  $("mUnlock").onclick = ()=>{ closeSheet(); $("unlockInput").click(); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mExtract").onclick = ()=>{ closeSheet(); openExtract(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
