@@ -4,6 +4,23 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.51] — 2026-06-21 — Toolbar redesign: icon + label, grouped More menu
+
+- **Top toolbar is now icon + label.** Every action (Open, Edit, Undo, Compress,
+  More, Save, Close) shows a line glyph above its caption, making the bar quicker
+  to scan and the active Edit state clearer. Layout, button IDs, and behaviour are
+  unchanged — purely a visual treatment, styled from `styles.css` (no inline
+  styles, so `style-src 'self'` is preserved).
+- **Zoom no longer disappears on iPhone.** The − / + zoom control moved out of the
+  toolbar into a floating pill (bottom-right, above the page) that appears only
+  while a document is open. Previously `@media(max-width:599px)` hid zoom on every
+  phone, leaving pinch/double-tap as the only option.
+- **More menu redesigned as a grouped icon grid** (Pages · Content · Export)
+  instead of a flat list of full-width rows — the iLovePDF/Acrobat-style layout.
+  All actions and their IDs are unchanged. Drops to 3 columns on narrow phones.
+- Icons are inline SVG (vendored, `currentColor`), so nothing is fetched over the
+  network and the strict CSP is untouched. All 127 tests pass.
+
 ## [v10.50] — 2026-06-21 — Unlock PDF: password retry + opens in the viewer
 
 - **Wrong password no longer fails the whole flow.** The password dialog now

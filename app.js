@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.50";
+const APP_BUILD = "10.51";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -86,7 +86,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "20 Jun 2026";
+const BUILD_DATETIME = "21 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -119,6 +119,26 @@ function h(strings, ...vals){
     out += strings[i+1];
   }
   return out;
+}
+// ---------------- inline SVG icon set (CSP-safe) ----------------
+// Line glyphs used by the More-menu tiles. They are styled by `svg.ic` in
+// styles.css (stroke:currentColor), so no per-icon style attribute is needed
+// and style-src can stay 'self'. ic(name) returns a raw() so the h\`\` template
+// passes the markup through unescaped.
+const ICONS = {
+  combine: '<path d="M12 4l8 4l-8 4l-8 -4z"/><path d="M4 12l8 4l8 -4"/>',
+  grid:    '<path d="M5 5h5v5h-5z"/><path d="M14 5h5v5h-5z"/><path d="M5 14h5v5h-5z"/><path d="M14 14h5v5h-5z"/>',
+  copy:    '<path d="M9 9h10v10h-10z"/><path d="M15 9v-4h-10v10h4"/>',
+  camera:  '<path d="M5 8h3l2 -2h4l2 2h3a1 1 0 0 1 1 1v9a1 1 0 0 1 -1 1h-14a1 1 0 0 1 -1 -1v-9a1 1 0 0 1 1 -1z"/><path d="M12 17a3 3 0 1 0 0 -6a3 3 0 0 0 0 6z"/>',
+  hash:    '<path d="M5 9h14M5 15h14M10 4l-2 16M16 4l-2 16"/>',
+  sign:    '<path d="M4 18c3 0 5 -10 7 -10c1 0 1 4 2 4c1 0 2 -2 3 -2"/><path d="M4 21h16"/>',
+  photo:   '<path d="M5 5h14v14h-14z"/><path d="M9 11a1.2 1.2 0 1 0 0 -2.4a1.2 1.2 0 0 0 0 2.4z"/><path d="M5 16l4 -4l3 3l3 -3l4 4"/>',
+  unlock:  '<path d="M7 11h10v8h-10z"/><path d="M9 11v-3a3 3 0 0 1 6 0"/>',
+  download:'<path d="M12 4v10M8 11l4 4l4 -4"/><path d="M5 19h14"/>',
+  info:    '<path d="M12 21a9 9 0 1 0 0 -18a9 9 0 0 0 0 18z"/><path d="M12 11v5"/><path d="M12 8h.01"/>'
+};
+function ic(name){
+  return raw('<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[name]||"") + '</svg>');
 }
 // Strip path separators / control chars from a download file name.
 function safeFileName(n){
@@ -320,6 +340,8 @@ function refreshUndo(){ $("undoBtn").disabled = !undoStack.length; }
 function refreshZoomButtons(){
   $("zoomOut").disabled = !workingBytes || zoomPct<=50;
   $("zoomIn").disabled  = !workingBytes || zoomPct>=300;
+  // the floating zoom pill only appears while a document is open
+  const zc = $("zoomctl"); if (zc) zc.classList.toggle("show", !!workingBytes);
 }
 // set the zoom and re-render, keeping the content under the anchor point
 // (a pinch centre, a double-tap, or the viewer middle) visually in place
@@ -1096,17 +1118,26 @@ $("moreBtn").onclick = ()=>{
   const multi = has && MDOC && MDOC.countPages() > 1;
   $("sheet").innerHTML = h`
     <h3>More actions</h3>
-    <div class="row"><button class="full" id="mScan">📷 Scan a document</button></div>
-    <div class="row"><button class="full" id="mGoto" ${multi?"":"disabled"}>🔢 Go to page…</button></div>
-    <div class="row"><button class="full" id="mSign" ${d}>✍️ Add my signature</button></div>
-    <div class="row"><button class="full" id="mUnlock">🔓 Unlock PDF (remove password)</button></div>
-    <div class="row"><button class="full" id="mOrg" ${d}>📑 Pages — reorder · rotate · delete</button></div>
-    <div class="row"><button class="full" id="mExtract" ${d}>📄 Copy pages → new PDF</button></div>
-    <div class="row"><button class="full" id="mMerge" ${d}>➕ Combine PDFs</button></div>
-    <div class="row"><button class="full" id="mImg">🖼 Photos → PDF</button></div>
-    <div class="row"><button class="full" id="mPng" ${d}>⬇ Save this page as a picture</button></div>
-    <div class="row"><button class="full" id="mAbout">About</button></div>
-    <div class="row"><button class="ghost full" id="mClose">Cancel</button></div>`;
+    <div class="mgrp-l">Pages</div>
+    <div class="mgrid">
+      <button class="mtile" id="mMerge" ${d}>${ic("combine")}<span>Combine</span></button>
+      <button class="mtile" id="mOrg" ${d}>${ic("grid")}<span>Organize</span></button>
+      <button class="mtile" id="mExtract" ${d}>${ic("copy")}<span>Copy pages</span></button>
+      <button class="mtile" id="mScan">${ic("camera")}<span>Scan</span></button>
+      <button class="mtile" id="mGoto" ${multi?"":"disabled"}>${ic("hash")}<span>Go to page</span></button>
+    </div>
+    <div class="mgrp-l">Content</div>
+    <div class="mgrid">
+      <button class="mtile" id="mSign" ${d}>${ic("sign")}<span>Sign</span></button>
+      <button class="mtile" id="mImg">${ic("photo")}<span>Photos → PDF</span></button>
+      <button class="mtile" id="mUnlock">${ic("unlock")}<span>Unlock</span></button>
+    </div>
+    <div class="mgrp-l">Export</div>
+    <div class="mgrid">
+      <button class="mtile" id="mPng" ${d}>${ic("download")}<span>Save image</span></button>
+      <button class="mtile" id="mAbout">${ic("info")}<span>About</span></button>
+    </div>
+    <div class="row mt12"><button class="ghost full" id="mClose">Cancel</button></div>`;
   $("mGoto").onclick  = ()=>{ closeSheet(); openJumpToPage(); };
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
   $("mSign").onclick  = ()=>{ closeSheet(); startSign(); };

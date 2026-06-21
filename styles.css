@@ -47,15 +47,32 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
   button { transition:none; }
   button:active:not(:disabled) { transform:none; }
 }
-.zoomctl { display:flex; align-items:center; gap:2px; border:1px solid var(--line);
-           border-radius:8px; padding:2px; }
-.zoomctl button { padding:6px 8px; }
-.zlbl { font-size:12px; color:var(--txt); min-width:36px; text-align:center; }
-/* phones (incl. Pro Max at 440pt): pinch and double-tap zoom the pages, so
-   the buttons step aside and the whole toolbar fits with no scrolling.
-   Tablets/desktop (≥600px) keep the buttons. */
-@media (max-width: 599px){ .zoomctl { display:none; } }
-.toolbar button { padding:10px 14px; font-size:14px; }
+/* Floating zoom control: pinned bottom-right above the page. It is hidden by
+   default and revealed (.show, added by refreshZoomButtons) only while a
+   document is open. Moving it out of the toolbar fixed the long-standing issue
+   where zoom disappeared entirely on every iPhone (<600px). */
+.zoomctl { position:fixed; right:12px; bottom:calc(56px + env(safe-area-inset-bottom));
+           z-index:55; display:none; align-items:center; gap:2px;
+           background:var(--panel); border:1px solid var(--line); border-radius:18px;
+           padding:3px; box-shadow:0 4px 14px var(--shadow); }
+.zoomctl.show { display:flex; }
+.zoomctl button { padding:7px 9px; background:transparent; border:0; color:var(--txt); border-radius:14px; }
+.zoomctl button:active:not(:disabled){ background:var(--panel2); transform:none; filter:none; }
+.zlbl { font-size:12px; color:var(--txt); min-width:40px; text-align:center; }
+
+/* icon + label toolbar buttons: a glyph stacked over a small caption. IDs and
+   behaviour are unchanged; this is purely the visual treatment. */
+.toolbar .tbtn, .toolbar .seg .segbtn {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:3px; line-height:1; }
+.toolbar .tbtn { padding:6px 10px; }
+.toolbar .tbtn span, .toolbar .seg .segbtn span {
+  font-size:9px; font-weight:600; letter-spacing:.01em; }
+/* shared inline-SVG glyph styling so no per-icon style attribute is needed
+   (keeps style-src 'self'); colour follows the button text via currentColor. */
+svg.ic { width:19px; height:19px; display:block; fill:none; stroke:currentColor;
+         stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.zoomctl svg.ic { width:17px; height:17px; }
 /* the middle actions live in one quiet segmented group that stretches to
    absorb the leftover width — calm, even, no scattered pills */
 .seg { display:flex; flex:1 1 auto; min-width:0; align-items:center;
@@ -264,3 +281,20 @@ input[type=file] { display:none; }
 .scanfilters { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; padding:10px 16px 0; background:#000; }
 .scanfilters button { background:transparent; border:1px solid var(--line); color:#cfd6e4; }
 .scanfilters button.on { background:var(--accent2); border-color:var(--accent2); color:#fff; }
+
+/* ---------------- More menu: grouped icon grid ---------------- */
+/* Replaces the old flat list of full-width rows with a scannable grid grouped
+   under quiet section labels (Pages · Content · Export). Tiles reuse the same
+   button IDs the rest of app.js and the test harness rely on. */
+.mgrp-l { font-size:10px; color:var(--muted); text-transform:uppercase;
+          letter-spacing:.5px; margin:12px 2px 8px; }
+.mgrp-l:first-of-type { margin-top:2px; }
+.mgrid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+.mtile { display:flex; flex-direction:column; align-items:center; justify-content:center;
+         gap:6px; background:var(--panel2); border:1px solid var(--line); color:var(--txt);
+         border-radius:13px; padding:11px 4px; min-height:66px; }
+.mtile svg.ic { width:22px; height:22px; }
+.mtile span { font-size:10px; font-weight:600; text-align:center; line-height:1.15; }
+.mtile:active:not(:disabled){ background:var(--panel); }
+/* narrow phones (SE / mini): 3 across keeps labels from truncating */
+@media (max-width: 360px){ .mgrid { grid-template-columns:repeat(3,1fr); } }
