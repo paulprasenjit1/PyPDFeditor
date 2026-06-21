@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.49";
+const APP_BUILD = "10.50";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -443,14 +443,26 @@ async function openBytes(bytes, name){
   if (probe.needsPassword()){
     wasEncrypted = true;
     probe.destroy();
-    const pw = await askPassword(name);
-    if (pw === null){ showSpin(false); setStatus("Open cancelled — file is password protected.","warn"); return; }
+    // Ask for the password with inline retry (up to 3 tries). The validator
+    // authenticates a fresh document each attempt and keeps the one that works.
+    let authed = null;
+    const res = await askPassword(name, (pw)=>{
+      const d = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
+      if (d.authenticatePassword(pw)){ authed = d; return true; }
+      d.destroy(); return false;
+    });
+    if (res !== true){
+      if (authed){ try{ authed.destroy(); }catch(e){} }
+      showSpin(false);
+      setStatus(res === null
+        ? "Open cancelled — file is password protected."
+        : "Could not unlock — too many wrong passwords.","warn");
+      return;
+    }
     showSpin(true,"Unlocking…");
-    probe = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
-    if (!probe.authenticatePassword(pw)){ probe.destroy(); showSpin(false); setStatus("Wrong password — could not unlock.","err"); return; }
     // re-save WITHOUT encryption so the working copy is freely editable/saveable
-    const clean = probe.asPDF().saveToBuffer("decrypt,garbage").asUint8Array();
-    probe.destroy();
+    const clean = authed.asPDF().saveToBuffer("decrypt,garbage").asUint8Array();
+    authed.destroy();
     bytes = new Uint8Array(clean);
     name = baseFrom(name)+"_unlocked.pdf";
     setStatus("Unlocked.","ok");
@@ -469,21 +481,42 @@ async function openBytes(bytes, name){
 }
 function baseFrom(n){ return (n||"document.pdf").replace(/\.[^.]+$/,""); }
 
-function askPassword(name){
+// Password sheet with inline retry. `tryPassword(pw)` must return truthy when
+// the password is correct. On a wrong password the sheet STAYS OPEN, shows an
+// inline error, and lets the user try again — up to `maxTries` attempts, after
+// which it gives up. Resolves: true on success, false when attempts run out,
+// null when the user cancels (Cancel button / backdrop / Esc).
+function askPassword(name, tryPassword, maxTries=3){
   return new Promise(resolve=>{
     $("sheet").innerHTML = h`
       <h3>Password required</h3>
-      <p class="hint">“${name||"This PDF"}” is protected. Enter its password to unlock and edit it.</p>
+      <p class="hint" id="pwHint">“${name||"This PDF"}” is protected. Enter its password to unlock it.</p>
       <div class="row"><input type="password" id="pwIn" placeholder="Password" autocomplete="off"></div>
       <div class="row"><button class="full" id="pwOk">Unlock</button></div>
       <div class="row"><button class="ghost full" id="pwCancel">Cancel</button></div>`;
-    let settled=false;
+    let settled=false, tries=0;
     const done=v=>{ if(settled) return; settled=true; sheetOnDismiss=null; closeSheet(); resolve(v); };
-    $("pwOk").onclick = ()=> done($("pwIn").value || "");
+    const attempt=()=>{
+      if (settled) return;
+      let ok=false;
+      try { ok = !!tryPassword($("pwIn").value || ""); } catch(e){ ok=false; }
+      if (ok){ done(true); return; }
+      tries++;
+      const left = maxTries - tries;
+      if (left <= 0){ done(false); return; }     // out of attempts
+      const hint=$("pwHint");
+      if (hint){
+        hint.textContent = "Wrong password — "+left+" "+(left===1?"try":"tries")+" left. Please try again.";
+        hint.classList.add("pwerr");
+      }
+      const inp=$("pwIn"); if(inp){ inp.value=""; inp.focus(); }
+    };
+    $("pwOk").onclick = attempt;
+    $("pwIn").addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); attempt(); } });
     $("pwCancel").onclick = ()=> done(null);
     openSheet();
-    sheetOnDismiss = ()=> done(null);   // backdrop / Esc dismiss = cancel, never hang the open flow
-    setTimeout(()=>$("pwIn").focus(), 100);
+    sheetOnDismiss = ()=> done(null);   // backdrop / Esc dismiss = cancel, never hang the flow
+    setTimeout(()=>{ const i=$("pwIn"); if(i) i.focus(); }, 100);
   });
 }
 
@@ -494,44 +527,31 @@ function askPassword(name){
 // output keeps the original's quality and (within a few bytes) its size. It
 // does NOT touch or replace whatever is currently open in the editor.
 async function unlockPdfFile(f){
+  showSpin(true, "Opening "+f.name+" …");
   try {
-    showSpin(true, "Opening "+f.name+"…");
     const bytes = new Uint8Array(await f.arrayBuffer());
-    // probe first: is it a PDF, and is it actually protected?
-    let doc = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
-    if (!doc.needsPassword()){
-      const isPdf = !!doc.asPDF();
-      doc.destroy();
-      showSpin(false);
-      setStatus(isPdf
-        ? "“"+f.name+"” isn’t password-protected — there’s nothing to remove."
-        : "That file isn’t a PDF, so it can’t be unlocked.", isPdf ? "warn" : "err");
-      return;
+    // probe first: is it a PDF, and is it actually password-protected?
+    const probe = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
+    const isProtected = probe.needsPassword();
+    const isPdf = isProtected || !!probe.asPDF();
+    probe.destroy();
+    if (!isPdf){ showSpin(false); setStatus("That file isn’t a PDF, so it can’t be unlocked.","err"); return; }
+    if (!isProtected){ showSpin(false); setStatus("“"+f.name+"” isn’t password-protected — there’s nothing to remove.","warn"); return; }
+    // Protected → use the normal open path: it asks for the password (with up to
+    // 3 inline retries), decrypts LOSSLESSLY (no image re-compression, original
+    // quality & size), and renders the result into the viewer. We then mark it
+    // unsaved so Save writes the unlocked copy and any other action first warns
+    // with the usual discard prompt.
+    const prev = workingBytes;
+    await openBytes(bytes, f.name);
+    if (workingBytes && workingBytes !== prev){
+      dirty = true;
+      setStatus("Password removed — “"+fileName+"” is open at the original quality. Tap Save to keep it.","ok");
     }
-    doc.destroy();
-    showSpin(false);
-    const pw = await askPassword(f.name);
-    if (pw === null){ setStatus("Unlock cancelled.","warn"); return; }
-    showSpin(true, "Removing password…");
-    doc = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
-    if (!doc.authenticatePassword(pw)){
-      doc.destroy(); showSpin(false);
-      setStatus("Wrong password — could not unlock that PDF.","err");
-      return;
-    }
-    // lossless decrypt — no image/stream re-compression, original quality & size
-    const out = new Uint8Array(doc.asPDF().saveToBuffer("decrypt,garbage").asUint8Array());
-    doc.destroy();
-    showSpin(false);
-    const name = baseFrom(f.name)+"_unlocked.pdf";
-    const ok = await saveOrShare(out, name);
-    setStatus(ok
-      ? "Password removed — saved “"+name+"” at the original quality. Pick where to keep it."
-      : "Password removed — save cancelled.", ok ? "ok" : "warn");
   } catch(err){
-    showSpin(false);
     setStatus("Could not unlock that PDF: "+friendly(err),"err");
   }
+  showSpin(false);
 }
 $("unlockInput").onchange = e=>{ const f=e.target.files[0]; e.target.value=""; if(f) unlockPdfFile(f); };
 
@@ -1090,7 +1110,7 @@ $("moreBtn").onclick = ()=>{
   $("mGoto").onclick  = ()=>{ closeSheet(); openJumpToPage(); };
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
   $("mSign").onclick  = ()=>{ closeSheet(); startSign(); };
-  $("mUnlock").onclick = ()=>{ closeSheet(); $("unlockInput").click(); };
+  $("mUnlock").onclick = ()=>{ closeSheet(); confirmDiscard("unlock another PDF", ()=>$("unlockInput").click()); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mExtract").onclick = ()=>{ closeSheet(); openExtract(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };

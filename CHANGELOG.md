@@ -4,6 +4,20 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.50] — 2026-06-21 — Unlock PDF: password retry + opens in the viewer
+
+- **Wrong password no longer fails the whole flow.** The password dialog now
+  stays open and shows an inline "Wrong password — N tries left" message, giving
+  up to 3 attempts before it gives up. Applies to opening any protected PDF, not
+  just the Unlock action.
+- **A successful unlock now opens the PDF in the viewer** instead of going
+  straight to a share sheet. Tap **Save** to keep the unlocked copy (still
+  lossless — original quality and size). If you start another action first, the
+  usual "Unsaved changes" prompt appears so you don't lose it, exactly like every
+  other in-progress document.
+- The decrypt itself is unchanged (mupdf `decrypt`, no image re-compression);
+  this release only changes the password UX and where the result lands.
+
 ## [v10.49] — 2026-06-21 — New: Unlock PDF (remove password)
 
 - **More ▾ → 🔓 Unlock PDF (remove password)** — added directly under "Add my
