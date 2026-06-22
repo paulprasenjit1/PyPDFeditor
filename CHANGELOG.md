@@ -4,6 +4,237 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.54] — 2026-06-22 — Edge-to-edge page view
+
+- **The page now fills the width.** Viewer side gutters dropped from 12px to a
+  4px hairline, top padding trimmed, and the gap between pages reduced, so a page
+  uses essentially the full screen width for the largest readable size. Pages stay
+  top-aligned and horizontally centred. (A portrait A4 on a portrait phone is
+  width-limited, so some backdrop remains below a single short page — filling that
+  too would require horizontal scrolling, which is worse.)
+
+## [v10.53] — 2026-06-22 — Fix: editing encrypted invoices ("invalid page number")
+
+- **Encrypted-but-openable PDFs now open editable.** Many invoices (banks, telcos
+  such as amaysim) are encrypted with an *empty user password* plus an owner lock
+  that disables copy/edit. mupdf opens them with no prompt, but the document is
+  still encrypted, so the first in-place edit re-saved a broken encrypted copy —
+  its pages collapsed, producing "Async error: invalid page number" and a
+  "0 pages" header. On open the app now detects encryption
+  (`getMetaData("encryption") !== "None"`) and decrypts the working copy with the
+  same lossless transform as the Unlock action (`decrypt,garbage`). Empty-password
+  decryption asks nothing of the user; it only strips an owner lock mupdf may
+  already ignore. The decrypted copy is treated as sensitive (never auto-persisted).
+- **Editing is now crash-safe on malformed PDFs.** `buildSpanBoxes` is
+  bounds-checked against the live page count, and its (async) call from text mode
+  is `.catch()`-guarded, so a page mupdf can't read is skipped quietly instead of
+  surfacing an uncaught async-error banner.
+- Root cause was confirmed against the real engine; this was not a regression from
+  the toolbar redesign (the render/page/edit code was unchanged). Two regression
+  tests added (VR16, VR17). All 129 tests pass.
+
+## [v10.52] — 2026-06-22 — Fewer camera prompts, tighter chrome, toolbar #4
+
+- **Scanning now asks for the camera once per session, not once per page.**
+  `captureFrame()` used to fully stop the camera after every shot, so returning
+  for the next page called `getUserMedia()` again and iOS re-showed its
+  permission prompt each time. The stream is now kept alive across capture →
+  crop → next page (edge-detection is paused, not the camera) and only released
+  when you leave the scanner. Note: the prompt on each *cold launch* of the
+  installed PWA is an iOS platform limitation — standalone PWAs can't persist
+  camera permission and there's no web API to request a permanent grant (unlike
+  Android). The camera indicator stays on while you're on the crop screen, as in
+  native scanner apps.
+- **More page, less chrome.** Header and toolbar padding/sizes were trimmed for
+  roughly 18px more page-viewing height, without crowding the controls.
+- **Sign and Unlock promoted to the toolbar.** The segment group is now
+  Edit · Sign · Unlock · Compress · More (Unlock sits right before Compress).
+  Both were removed from the More menu to avoid duplication.
+- **Undo moved to a floating control.** It now appears as a pill (bottom-left)
+  only when there's something to undo, freeing a top-bar slot. It still covers
+  every undoable action (edits, signatures, compress, etc.), not just text edits.
+- **More menu regrouped** into Create (Scan, Photos → PDF) · Pages (Combine,
+  Organize, Copy pages, Go to page) · Export (Save image, About).
+- All 127 tests pass; CSP unchanged (no inline styles, no network fetches).
+
+## [v10.51] — 2026-06-21 — Toolbar redesign: icon + label, grouped More menu
+
+- **Top toolbar is now icon + label.** Every action (Open, Edit, Undo, Compress,
+  More, Save, Close) shows a line glyph above its caption, making the bar quicker
+  to scan and the active Edit state clearer. Layout, button IDs, and behaviour are
+  unchanged — purely a visual treatment, styled from `styles.css` (no inline
+  styles, so `style-src 'self'` is preserved).
+- **Zoom no longer disappears on iPhone.** The − / + zoom control moved out of the
+  toolbar into a floating pill (bottom-right, above the page) that appears only
+  while a document is open. Previously `@media(max-width:599px)` hid zoom on every
+  phone, leaving pinch/double-tap as the only option.
+- **More menu redesigned as a grouped icon grid** (Pages · Content · Export)
+  instead of a flat list of full-width rows — the iLovePDF/Acrobat-style layout.
+  All actions and their IDs are unchanged. Drops to 3 columns on narrow phones.
+- Icons are inline SVG (vendored, `currentColor`), so nothing is fetched over the
+  network and the strict CSP is untouched. All 127 tests pass.
+
+## [v10.50] — 2026-06-21 — Unlock PDF: password retry + opens in the viewer
+
+- **Wrong password no longer fails the whole flow.** The password dialog now
+  stays open and shows an inline "Wrong password — N tries left" message, giving
+  up to 3 attempts before it gives up. Applies to opening any protected PDF, not
+  just the Unlock action.
+- **A successful unlock now opens the PDF in the viewer** instead of going
+  straight to a share sheet. Tap **Save** to keep the unlocked copy (still
+  lossless — original quality and size). If you start another action first, the
+  usual "Unsaved changes" prompt appears so you don't lose it, exactly like every
+  other in-progress document.
+- The decrypt itself is unchanged (mupdf `decrypt`, no image re-compression);
+  this release only changes the password UX and where the result lands.
+
+## [v10.49] — 2026-06-21 — New: Unlock PDF (remove password)
+
+- **More ▾ → 🔓 Unlock PDF (remove password)** — added directly under "Add my
+  signature". Pick a password-protected PDF, enter its password, and the app
+  saves an unlocked copy (`<name>_unlocked.pdf`) with the encryption removed.
+- **Lossless — original quality and size preserved.** The unlock uses mupdf's
+  `decrypt` save, which rewrites the file WITHOUT re-compressing any image or
+  content stream. Verified against a 256-bit AES-encrypted test PDF: every
+  embedded image stream is byte-identical to the source and the output is within
+  a few hundred bytes of the original size.
+- Runs as a standalone utility — it does not disturb whatever is currently open
+  in the editor, and is available even with no document open. Non-protected PDFs
+  report "nothing to remove"; a wrong password reports clearly and changes
+  nothing.
+
+## [v10.48] — 2026-06-20 — Revert 4K capture (clean forward version) + quiet benign errors
+
+- **Reverts the 10.47 higher-resolution scan capture** (the camera is back to the
+  2560 request and 2560 output cap). Shipped as a version AHEAD of 10.47 rather
+  than re-deploying 10.46, so the service-worker cache updates forward cleanly
+  instead of backwards (a backwards version can leave a mix of old and new files
+  during the update — a common cause of transient load errors). Build 10.47 is
+  skipped on purpose.
+- **No more alarming "Script error." banner.** iOS reports many benign
+  cross-context errors as an opaque "Script error." with no detail while the app
+  keeps running. Those are now ignored instead of shown in the status bar; when
+  the browser does provide real detail it's still captured. A genuinely failed
+  engine load is still surfaced by the watchdog.
+
+## [v10.46] — 2026-06-20 — Fix: editing a scanned/image PDF balloons the file
+
+- **Editing text on an image-based PDF no longer bloats the file ~10x.** When a
+  page is a full-page image (a scan, or a card like the Amaron warranty), the
+  redaction that removes the old glyphs re-rasterises the whole page image to
+  UNCOMPRESSED RGB — a 2.3 MB file was ballooning to ~26 MB after one edit. The
+  redaction save now re-compresses images, bringing it back to ~2.8 MB. Verified
+  on the real Amaron PDF; harmless on ordinary text PDFs.
+
+## [v10.45] — 2026-06-20 — Colour-fill sampling verified against a real card
+
+- **Coloured-cell edits keep the panel colour — verified on the Amaron card.**
+  Tested the background sampler against the actual warranty PDF: the median was
+  always the right green, but short labels (Type, Code) fell just under the
+  confidence bar and still went white. Widened the colour-match tolerance so a
+  solid majority of the ring is recognised as the panel colour; now every field
+  (Warranty, Date, Type, Code, Customer, Mobile) samples the green and fills
+  green, while photos still keep the safe white fill.
+
+## [v10.44] — 2026-06-20 — Crop-corner box bug + stronger colour-fill sampling
+
+- **No more stray box in the corner while cropping.** The crop corner handles are
+  keyboard-focusable (arrow-key nudge), and iOS was drawing a focus rectangle in
+  the corner after a touch-drag. That outline is now suppressed; the white grip
+  still shows the active corner.
+- **Coloured-cell edits sample the colour more reliably.** The background sampler
+  now renders at a higher resolution, samples a little further from the text's
+  anti-aliased edge, and tolerates texture / a few border pixels — so editing a
+  field on a textured colour panel keeps the panel colour instead of a white box.
+  White backgrounds and photos are still handled as before.
+
+Verified (no change needed): the scan warp/colour/quality pipeline is byte-for-byte
+identical to 10.39, and PDF merge is lossless (the merged page images are identical
+to the sources). Differences in scan sharpness come from capture resolution/framing
+and the Whiten toggle, not the app.
+
+## [v10.43] — 2026-06-20 — Edit mode: pinch-zoom + scroll + colour fill
+
+- **Pinch-zoom now works in Edit mode.** You no longer have to leave Edit mode to
+  zoom in on a small field — pinch (and the − / + buttons) work while editing, so
+  you can zoom in, tap the field, and change it in place. Only Sign mode keeps
+  pinch off (its one-finger box drag would clash).
+- **Scrolling in Edit mode** works in any direction now (the text boxes were
+  limited to vertical pans); a tap with no movement still opens the editor.
+- **Coloured-cell edits keep their colour.** Editing a field on a coloured panel
+  (e.g. the green warranty table) was still leaving a white box, because the
+  background sampler distrusted the ring when it clipped a dark grid line or
+  glyph. It now accepts the sampled colour when it's the dominant colour of the
+  ring, so the fill matches the cell — while a genuine photo/mixed background
+  still falls back to white.
+
+Scanner edge detection is left as-is (it's detecting well now); the manual
+Adjust-edges crop remains the reliable path for awkward scenes.
+
+## [v10.42] — 2026-06-20 — Reliable manual crop (move the box + Reset)
+
+Auto edge-detection stays a best-effort hint; the dependable path is now the
+Adjust-edges screen, which got two big usability additions:
+
+- **Drag the whole box.** Dragging the interior of the crop box slides all four
+  corners together, so when the outline is the right shape but the wrong place
+  (e.g. it grabbed a keyboard), you can just slide it onto the document and
+  fine-tune the corners — instead of dragging each corner from scratch.
+- **Reset button.** One tap snaps the crop to a near-full-page rectangle, a clean
+  starting point when auto-detection grabbed the wrong thing or nothing. Drag the
+  box / corners onto the document from there.
+
+The corner handles keep their enlarged hit areas, magnifier loupe and arrow-key
+nudge from before.
+
+## [v10.41] — 2026-06-20 — Revert over-eager edge detection
+
+- **Reverted the 10.40 relaxed detection fallback.** On cluttered desks it
+  over-included — outlining a keyboard/laptop together with the paper. Detection
+  is back to the conservative confident passes, keeping only the safe centre-bias
+  (prefer the document aimed at the middle of frame over an off-centre rectangle).
+  When the live outline is wrong or missing, drag the corners on the Adjust screen.
+
+## [v10.40] — 2026-06-20 — Better scanner edge detection
+
+Two fixes for the live document outline, from real failure captures.
+
+- **Stops locking onto the wrong rectangle.** The detector now applies a centre
+  bias when choosing between candidates, so it prefers the document you're aiming
+  at in the middle of the frame over a strong off-centre rectangle like a
+  trackpad, keyboard or phone at the edge.
+- **Finds faint-edged paper more often.** A relaxed fallback pass runs only when
+  the confident passes find nothing, so plain paper on a pale or busy desk (where
+  the edges are low-contrast) gets an outline instead of none. It stays safe from
+  false positives: the fallback relaxes only the region pass (its fill guard plus
+  a new per-side outline check still reject L-shapes), and walls / blank frames /
+  the whole-frame case are still rejected. The detect-test fixtures (including the
+  L-shape, blank and wall rejections) all still pass, with new fixtures for the
+  centre preference and a ragged-edge document.
+
+Edge detection on arbitrary real-world scenes is inherently imperfect; when the
+live outline is wrong or missing you can still drag the corners on the Adjust
+screen.
+
+## [v10.39] — 2026-06-20 — Text edits keep background colour + fit width; scan/engine polish
+
+- **Text edits keep the background colour (item 7).** Editing text that sits on a
+  coloured cell, banner or shaded box no longer leaves a white patch. Before the
+  original glyphs are erased, the app samples the colour of a thin ring just
+  outside the text and fills with that instead of white. It only does this when
+  the surrounding colour is a trustworthy flat colour and clearly not white —
+  ordinary white-page edits are byte-for-byte unchanged.
+- **Replacement text shrinks to fit.** A single replacement line that's wider than
+  the original now shrinks just enough to fit the original width (down to half
+  size at most) instead of running off the right edge.
+- **"Whiten" guards photo-heavy pages.** Illumination flattening is skipped when
+  more than 40% of the page is genuinely dark (a photo or dark-filled page), so it
+  can't lift a big dark region into grey. Normal text scans are well under that.
+- **Engine downloads once on first load.** The ~10MB WASM engine is no longer
+  precached by the service worker AND fetched by the engine separately; the
+  progress fetch now caches it to the vendor cache, halving first-load bandwidth.
+  Offline still works (the fetch handler serves and re-caches it on later loads).
+
 ## [v10.38] — 2026-06-20 — Simpler page pill label
 
 - **Page pill reads just "7 of 524"** now — the ↕ icon and the word "Page" were

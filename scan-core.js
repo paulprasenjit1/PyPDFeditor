@@ -196,12 +196,18 @@ export function flattenIllumination(d, w, h){
   const GH = Math.max(1, Math.min(64, Math.round(GW*h/w) || 1));
   const cells = GW*GH;
   const cx = i => Math.min(GW-1, (i*GW/w)|0);
-  // pass 1: cell mean luminance
+  // pass 1: cell mean luminance (also count genuinely dark pixels)
   const sumL=new Float32Array(cells), cnt=new Float32Array(cells);
+  let dark=0;
   for (let y=0;y<h;y++){ const gy=Math.min(GH-1,(y*GH/h)|0), row=gy*GW;
     for (let x=0;x<w;x++){ const j=(y*w+x)*4;
       const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+      if (L<64) dark++;
       const gi=row+cx(x); sumL[gi]+=L; cnt[gi]++; } }
+  // photo-heavy / mostly-dark page: flattening would lift the big dark region
+  // into grey, so leave it untouched. A real text document is well under 10%
+  // dark (just the ink), so this only triggers on photos / dark-filled pages.
+  if (dark > n*0.40) return;
   const meanL=new Float32Array(cells);
   for (let i=0;i<cells;i++) meanL[i]=sumL[i]/(cnt[i]||1);
   // pass 2: paper luminance = mean of pixels brighter than the cell mean
@@ -287,13 +293,17 @@ export function detectQuad(im){
   return gradientQuad(bl,g,w,h);
 }
 
-// scan all connected components of a binary mask; return the largest one that
-// passes the document-shape tests
+// scan all connected components of a binary mask; return the best one that
+// passes the document-shape tests. "best" = largest, but with a centre bias so
+// the aimed-at document is preferred over an off-centre distractor (a trackpad,
+// a keyboard, a phone) of comparable size. `opts.fill` / `opts.outline` relax
+// the shape gates for the fallback pass (defaults are the strict values).
 function bestRegionQuad(mask,w,h){
   const n=w*h;
+  const cw=w/2, ch=h/2, diag=Math.hypot(w,h)||1;
   const seen=dqBuf("seen",n,Uint8Array,true);    // visited flags: must start zeroed
   const stack=dqBuf("stack",n,Int32Array,false); // written via top pointer before read
-  let best=null, bestArea=0, boundary=null;       // boundary stays lazy (built once per call)
+  let best=null, bestScore=0, boundary=null;      // boundary stays lazy (built once per call)
   for (let i0=0;i0<n;i0++){
     if (seen[i0] || !mask[i0]) continue;
     let top=0; stack[top++]=i0; seen[i0]=1;
@@ -310,7 +320,9 @@ function bestRegionQuad(mask,w,h){
       if (y>0   && !seen[i-w] && mask[i-w]){seen[i-w]=1; stack[top++]=i-w;}
       if (y<h-1 && !seen[i+w] && mask[i+w]){seen[i+w]=1; stack[top++]=i+w;}
     }
-    if (area < n*0.12 || area <= bestArea) continue;
+    // area is the maximum possible (centre-weighted) score, so this still skips
+    // components that can't beat the current best
+    if (area < n*0.12 || area <= bestScore) continue;
     const q=[tl,tr,br,blc];
     const qa=quadArea(q);
     if (qa > n*0.95) continue;            // whole frame is not a document (allow docs framed large)
@@ -328,7 +340,9 @@ function bestRegionQuad(mask,w,h){
       }
     }
     if (outlineCoverage(q,boundary,w,h) < 0.80) continue;
-    best=q; bestArea=area;
+    const qx=(tl.x+tr.x+br.x+blc.x)/4, qy=(tl.y+tr.y+br.y+blc.y)/4;
+    const score=area*(1 - 0.6*Math.hypot(qx-cw,qy-ch)/diag);   // centre bias
+    if (score>bestScore){ best=q; bestScore=score; }
   }
   return best;
 }
@@ -351,6 +365,7 @@ function quadIsSane(q,w,h){
 // corner extremes -> accept only if edges cover most of the quad outline
 function gradientQuad(bl,g,w,h){
   const n=w*h;
+  const cw=w/2, ch=h/2, diag=Math.hypot(w,h)||1;
   const mag=dqBuf("mag",n,Float32Array,true);   // interior only written; borders must be 0
   let sum=0, cnt=0;
   for (let y=1;y<h-1;y++) for (let x=1;x<w-1;x++){
@@ -371,7 +386,7 @@ function gradientQuad(bl,g,w,h){
   }
   // largest connected edge structure
   const seen=dqBuf("seen",n,Uint8Array,true), stack=dqBuf("stack",n,Int32Array,false);
-  let best=null, bestSpan=0;
+  let best=null, bestScore=0;
   for (let i0=0;i0<n;i0++){
     if (seen[i0] || !dil[i0]) continue;
     let top=0; stack[top++]=i0; seen[i0]=1;
@@ -391,12 +406,14 @@ function gradientQuad(bl,g,w,h){
       if (y<h-1 && !seen[i+w] && dil[i+w]){seen[i+w]=1; stack[top++]=i+w;}
     }
     const span=(maxX-minX)*(maxY-minY);
-    if (span < n*0.15 || span <= bestSpan) continue;
+    if (span < n*0.15 || span <= bestScore) continue;   // span is the max possible score
     const q=[tl,tr,br,blc];
     if (quadArea(q) > n*0.95) continue;
     if (!quadIsSane(q,w,h)) continue;
     if (outlineCoverage(q,dil,w,h) < 0.80) continue;   // outline must really exist
-    best=q; bestSpan=span;
+    const qx=(tl.x+tr.x+br.x+blc.x)/4, qy=(tl.y+tr.y+br.y+blc.y)/4;
+    const score=span*(1 - 0.6*Math.hypot(qx-cw,qy-ch)/diag);   // centre bias
+    if (score>bestScore){ best=q; bestScore=score; }
   }
   return best;
 }

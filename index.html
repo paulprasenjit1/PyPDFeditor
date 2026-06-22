@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="10.38">
+<html lang="en" data-build="10.54">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -42,21 +42,44 @@
   <div class="meta" id="meta">Loading engine…</div>
 </header>
 
+<!-- Top toolbar: icon + label. Button IDs are unchanged so all app.js wiring
+     and the test harness keep working; only the inner markup gained an SVG
+     glyph above each label. SVGs are styled from styles.css (.ic) so no inline
+     style attribute is needed (CSP style-src 'self'). -->
 <div class="toolbar" id="toolbar">
-  <button id="openBtn" disabled>Open</button>
+  <button id="openBtn" class="tbtn" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2z"/></svg>
+    <span>Open</span>
+  </button>
   <div class="seg">
-    <button class="segbtn" id="textBtn" disabled>Edit</button>
-    <button class="segbtn" id="undoBtn" disabled>Undo</button>
-    <button class="segbtn" id="compBtn" disabled>Compress</button>
-    <button class="segbtn" id="moreBtn" disabled>More</button>
+    <button class="segbtn" id="textBtn" disabled>
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10 -10a2 2 0 0 0 -4 -4l-10 10z"/><path d="M13.5 6.5l4 4"/></svg>
+      <span>Edit</span>
+    </button>
+    <button class="segbtn" id="signBtn" disabled>
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18c3 0 5 -10 7 -10c1 0 1 4 2 4c1 0 2 -2 3 -2"/><path d="M4 21h16"/></svg>
+      <span>Sign</span>
+    </button>
+    <button class="segbtn" id="unlockBtn" disabled>
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11h10v8h-10z"/><path d="M9 11v-3a3 3 0 0 1 6 0"/></svg>
+      <span>Unlock</span>
+    </button>
+    <button class="segbtn" id="compBtn" disabled>
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h4v-4"/><path d="M3 3l6 6"/><path d="M5 15h4v4"/><path d="M3 21l6 -6"/><path d="M19 9h-4v-4"/><path d="M15 9l6 -6"/><path d="M19 15h-4v4"/><path d="M15 15l6 6"/></svg>
+      <span>Compress</span>
+    </button>
+    <button class="segbtn" id="moreBtn" disabled>
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h.01M12 12h.01M18 12h.01"/></svg>
+      <span>More</span>
+    </button>
   </div>
-  <div class="zoomctl">
-    <button class="ghost" id="zoomOut" aria-label="Zoom out" disabled>−</button>
-    <span class="zlbl" id="zoomLbl">100%</span>
-    <button class="ghost" id="zoomIn" aria-label="Zoom in" disabled>+</button>
-  </div>
-  <button id="saveBtn" disabled>Save</button>
-  <button class="xbtn" id="closeBtn" aria-label="Close this PDF" disabled>✕</button>
+  <button id="saveBtn" class="tbtn" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h9l5 5v9a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2z"/><path d="M9 4v4h6"/><path d="M9 16h6"/></svg>
+    <span>Save</span>
+  </button>
+  <button class="xbtn tbtn" id="closeBtn" aria-label="Close this PDF" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6l-12 12"/></svg>
+  </button>
 </div>
 
 <div class="viewer" id="viewer">
@@ -76,6 +99,7 @@
 
 <input type="file" id="fileInput" accept="application/pdf,.pdf">
 <input type="file" id="mergeInput" accept="application/pdf,.pdf" multiple>
+<input type="file" id="unlockInput" accept="application/pdf,.pdf">
 <input type="file" id="imgInput" accept="image/*" multiple>
 <input type="file" id="sigInput" accept="image/*">
 <!-- fallback when getUserMedia is unavailable/denied: native camera capture -->
@@ -107,7 +131,10 @@
 <div class="scanui" id="scanCrop">
   <div class="scantop">
     <span class="ttl">Adjust edges</span>
-    <span class="pgct" id="cropHint">Drag the corners</span>
+    <span class="tools">
+      <span class="pgct" id="cropHint">Drag the box or its corners</span>
+      <button class="ghost mini" id="cropReset" aria-label="Reset the crop to the full page">Reset</button>
+    </span>
   </div>
   <div class="cropwrap" id="cropWrap">
     <canvas class="photo" id="cropPhoto"></canvas>
@@ -135,6 +162,29 @@
 </div>
 
 <div class="pgpill" id="pagePill" role="button" aria-label="Go to page"></div>
+
+<!-- Floating zoom control. Moved out of the toolbar so it no longer vanishes on
+     iPhone (the old `@media(max-width:599px){.zoomctl{display:none}}` hid it on
+     every phone). IDs are unchanged; visibility is toggled by refreshZoomButtons
+     via the .show class only while a document is open. -->
+<div class="zoomctl" id="zoomctl">
+  <button class="ghost" id="zoomOut" aria-label="Zoom out" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg>
+  </button>
+  <span class="zlbl" id="zoomLbl">100%</span>
+  <button class="ghost" id="zoomIn" aria-label="Zoom in" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg>
+  </button>
+</div>
+
+<!-- Floating Undo — replaces the old toolbar Undo button (freeing a top-bar
+     slot for Sign + Unlock). The ID is unchanged so all wiring and the test
+     harness keep working; refreshUndo() reveals it (.show) only when there is
+     something to undo, bottom-left so it clears the zoom pill and page pill. -->
+<button class="undofab" id="undoBtn" aria-label="Undo" disabled>
+  <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 13l-4 -4l4 -4"/><path d="M5 9h9a5 5 0 0 1 0 10h-3"/></svg>
+  <span>Undo</span>
+</button>
 
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet" role="dialog" aria-modal="true" tabindex="-1"></div></div>
 <div class="spin" id="spin">Working…</div>

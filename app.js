@@ -14,12 +14,12 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.38";
+const APP_BUILD = "10.54";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
-  const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
+  const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
-    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","cropRetake","cropUse"];
+    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","cropReset","cropRetake","cropUse"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
     try { sessionStorage.removeItem("pypdf-healed"); } catch(e){}
@@ -68,8 +68,16 @@ function reportError(kind, msg, src){
   try { setStatus(text+" — the app keeps running; if something stops working, close and reopen it.", "err"); } catch(e){}
 }
 window.addEventListener("error", (e)=>{
+  // iOS reports many benign cross-context errors as an opaque "Script error."
+  // with NO detail (no e.error, no filename) while the app keeps running — they
+  // carry zero diagnostic value and need no user action, so ignore them rather
+  // than alarming with a red banner. A genuinely failed engine load is surfaced
+  // separately by engine-watchdog.js.
+  if (!e.error && !e.filename && /^\s*script error/i.test(String(e.message||""))) return;
   const src = e.filename ? e.filename.split("/").pop()+":"+e.lineno+":"+e.colno : "";
-  reportError("Error", e.message, src);
+  // prefer the real message/stack when the browser exposes it
+  const detail = (e.error && (e.error.message || e.error.stack)) || e.message;
+  reportError("Error", detail, src);
 });
 window.addEventListener("unhandledrejection", (e)=>{
   reportError("Async error", (e.reason && e.reason.message) || String(e.reason||""), "");
@@ -78,7 +86,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "20 Jun 2026";
+const BUILD_DATETIME = "22 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -111,6 +119,26 @@ function h(strings, ...vals){
     out += strings[i+1];
   }
   return out;
+}
+// ---------------- inline SVG icon set (CSP-safe) ----------------
+// Line glyphs used by the More-menu tiles. They are styled by `svg.ic` in
+// styles.css (stroke:currentColor), so no per-icon style attribute is needed
+// and style-src can stay 'self'. ic(name) returns a raw() so the h\`\` template
+// passes the markup through unescaped.
+const ICONS = {
+  combine: '<path d="M12 4l8 4l-8 4l-8 -4z"/><path d="M4 12l8 4l8 -4"/>',
+  grid:    '<path d="M5 5h5v5h-5z"/><path d="M14 5h5v5h-5z"/><path d="M5 14h5v5h-5z"/><path d="M14 14h5v5h-5z"/>',
+  copy:    '<path d="M9 9h10v10h-10z"/><path d="M15 9v-4h-10v10h4"/>',
+  camera:  '<path d="M5 8h3l2 -2h4l2 2h3a1 1 0 0 1 1 1v9a1 1 0 0 1 -1 1h-14a1 1 0 0 1 -1 -1v-9a1 1 0 0 1 1 -1z"/><path d="M12 17a3 3 0 1 0 0 -6a3 3 0 0 0 0 6z"/>',
+  hash:    '<path d="M5 9h14M5 15h14M10 4l-2 16M16 4l-2 16"/>',
+  sign:    '<path d="M4 18c3 0 5 -10 7 -10c1 0 1 4 2 4c1 0 2 -2 3 -2"/><path d="M4 21h16"/>',
+  photo:   '<path d="M5 5h14v14h-14z"/><path d="M9 11a1.2 1.2 0 1 0 0 -2.4a1.2 1.2 0 0 0 0 2.4z"/><path d="M5 16l4 -4l3 3l3 -3l4 4"/>',
+  unlock:  '<path d="M7 11h10v8h-10z"/><path d="M9 11v-3a3 3 0 0 1 6 0"/>',
+  download:'<path d="M12 4v10M8 11l4 4l4 -4"/><path d="M5 19h14"/>',
+  info:    '<path d="M12 21a9 9 0 1 0 0 -18a9 9 0 0 0 0 18z"/><path d="M12 11v5"/><path d="M12 8h.01"/>'
+};
+function ic(name){
+  return raw('<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[name]||"") + '</svg>');
 }
 // Strip path separators / control chars from a download file name.
 function safeFileName(n){
@@ -168,6 +196,7 @@ const u8 = v => new Uint8Array(v);
   // inside mupdf.js), so by here the engine is live.
   $("openBtn").disabled = false;
   $("moreBtn").disabled = false;
+  $("unlockBtn").disabled = false;   // Unlock works without an open doc (picks a file)
   $("bigOpen").disabled = false;
   $("bigScan").disabled = false;
   $("welcomeHint").textContent = "Everything stays on your phone — nothing is uploaded.";
@@ -305,13 +334,19 @@ function reopen(){
 }
 
 function enableDocButtons(has){
-  for (const id of ["textBtn","compBtn","saveBtn","closeBtn"]) $(id).disabled = !has;
+  for (const id of ["textBtn","signBtn","compBtn","saveBtn","closeBtn"]) $(id).disabled = !has;
   refreshZoomButtons(); refreshUndo();
 }
-function refreshUndo(){ $("undoBtn").disabled = !undoStack.length; }
+function refreshUndo(){
+  const has = !!undoStack.length;
+  $("undoBtn").disabled = !has;
+  $("undoBtn").classList.toggle("show", has);   // floating pill: visible only when there's something to undo
+}
 function refreshZoomButtons(){
   $("zoomOut").disabled = !workingBytes || zoomPct<=50;
   $("zoomIn").disabled  = !workingBytes || zoomPct>=300;
+  // the floating zoom pill only appears while a document is open
+  const zc = $("zoomctl"); if (zc) zc.classList.toggle("show", !!workingBytes);
 }
 // set the zoom and re-render, keeping the content under the anchor point
 // (a pinch centre, a double-tap, or the viewer middle) visually in place
@@ -356,7 +391,10 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
   const dist = (t)=>Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY);
 
   v.addEventListener("touchstart", (e)=>{
-    if (e.touches.length===2 && workingBytes && !mode){
+    // allow pinch-zoom in Edit (text) mode too, so you can zoom in to tap a small
+    // field without leaving edit mode; only Sign mode (one-finger box drag) keeps
+    // it off to avoid a stray signature box
+    if (e.touches.length===2 && workingBytes && mode!=="sign"){
       e.preventDefault();
       const cx=(e.touches[0].clientX+e.touches[1].clientX)/2;
       const cy=(e.touches[0].clientY+e.touches[1].clientY)/2;
@@ -420,7 +458,8 @@ async function openBytes(bytes, name){
   // mupdf can open other formats (e.g. HTML) through their own handlers —
   // asPDF() returns null for those. Reject before touching the open document.
   if (!probe.needsPassword()){
-    if (!probe.asPDF()){
+    const pdfp = probe.asPDF();
+    if (!pdfp){
       probe.destroy();
       throw new Error("not a PDF file");
     }
@@ -428,18 +467,44 @@ async function openBytes(bytes, name){
       probe.destroy();
       throw new Error("no pages found in this file");
     }
+    // Some PDFs (bank/telco invoices, e.g. amaysim) are encrypted with an EMPTY
+    // user password plus owner-only permission locks (copy/edit disabled). mupdf
+    // opens them with no prompt, but the document is still encrypted: an in-place
+    // edit then re-saves a broken encrypted copy whose pages collapse, surfacing
+    // as "invalid page number" and a "0 pages" header. Decrypt the working copy
+    // up front — exactly what the Unlock action does — so editing and rendering
+    // behave normally. Empty-password decryption asks nothing of the user; it
+    // only strips an owner lock that mupdf is already permitted to ignore.
+    const enc = probe.getMetaData("encryption");
+    if (enc && enc !== "None"){
+      showSpin(true, "Preparing a secured PDF…");
+      bytes = new Uint8Array(pdfp.saveToBuffer("decrypt,garbage").asUint8Array());
+      wasEncrypted = true;
+    }
   }
   if (probe.needsPassword()){
     wasEncrypted = true;
     probe.destroy();
-    const pw = await askPassword(name);
-    if (pw === null){ showSpin(false); setStatus("Open cancelled — file is password protected.","warn"); return; }
+    // Ask for the password with inline retry (up to 3 tries). The validator
+    // authenticates a fresh document each attempt and keeps the one that works.
+    let authed = null;
+    const res = await askPassword(name, (pw)=>{
+      const d = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
+      if (d.authenticatePassword(pw)){ authed = d; return true; }
+      d.destroy(); return false;
+    });
+    if (res !== true){
+      if (authed){ try{ authed.destroy(); }catch(e){} }
+      showSpin(false);
+      setStatus(res === null
+        ? "Open cancelled — file is password protected."
+        : "Could not unlock — too many wrong passwords.","warn");
+      return;
+    }
     showSpin(true,"Unlocking…");
-    probe = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
-    if (!probe.authenticatePassword(pw)){ probe.destroy(); showSpin(false); setStatus("Wrong password — could not unlock.","err"); return; }
     // re-save WITHOUT encryption so the working copy is freely editable/saveable
-    const clean = probe.asPDF().saveToBuffer("decrypt,garbage").asUint8Array();
-    probe.destroy();
+    const clean = authed.asPDF().saveToBuffer("decrypt,garbage").asUint8Array();
+    authed.destroy();
     bytes = new Uint8Array(clean);
     name = baseFrom(name)+"_unlocked.pdf";
     setStatus("Unlocked.","ok");
@@ -458,27 +523,83 @@ async function openBytes(bytes, name){
 }
 function baseFrom(n){ return (n||"document.pdf").replace(/\.[^.]+$/,""); }
 
-function askPassword(name){
+// Password sheet with inline retry. `tryPassword(pw)` must return truthy when
+// the password is correct. On a wrong password the sheet STAYS OPEN, shows an
+// inline error, and lets the user try again — up to `maxTries` attempts, after
+// which it gives up. Resolves: true on success, false when attempts run out,
+// null when the user cancels (Cancel button / backdrop / Esc).
+function askPassword(name, tryPassword, maxTries=3){
   return new Promise(resolve=>{
     $("sheet").innerHTML = h`
       <h3>Password required</h3>
-      <p class="hint">“${name||"This PDF"}” is protected. Enter its password to unlock and edit it.</p>
+      <p class="hint" id="pwHint">“${name||"This PDF"}” is protected. Enter its password to unlock it.</p>
       <div class="row"><input type="password" id="pwIn" placeholder="Password" autocomplete="off"></div>
       <div class="row"><button class="full" id="pwOk">Unlock</button></div>
       <div class="row"><button class="ghost full" id="pwCancel">Cancel</button></div>`;
-    let settled=false;
+    let settled=false, tries=0;
     const done=v=>{ if(settled) return; settled=true; sheetOnDismiss=null; closeSheet(); resolve(v); };
-    $("pwOk").onclick = ()=> done($("pwIn").value || "");
+    const attempt=()=>{
+      if (settled) return;
+      let ok=false;
+      try { ok = !!tryPassword($("pwIn").value || ""); } catch(e){ ok=false; }
+      if (ok){ done(true); return; }
+      tries++;
+      const left = maxTries - tries;
+      if (left <= 0){ done(false); return; }     // out of attempts
+      const hint=$("pwHint");
+      if (hint){
+        hint.textContent = "Wrong password — "+left+" "+(left===1?"try":"tries")+" left. Please try again.";
+        hint.classList.add("pwerr");
+      }
+      const inp=$("pwIn"); if(inp){ inp.value=""; inp.focus(); }
+    };
+    $("pwOk").onclick = attempt;
+    $("pwIn").addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); attempt(); } });
     $("pwCancel").onclick = ()=> done(null);
     openSheet();
-    sheetOnDismiss = ()=> done(null);   // backdrop / Esc dismiss = cancel, never hang the open flow
-    setTimeout(()=>$("pwIn").focus(), 100);
+    sheetOnDismiss = ()=> done(null);   // backdrop / Esc dismiss = cancel, never hang the flow
+    setTimeout(()=>{ const i=$("pwIn"); if(i) i.focus(); }, 100);
   });
 }
 
+// ---------------- Unlock PDF (remove password, lossless) ----------------
+// Standalone utility: pick a password-protected PDF, supply its password, and
+// save a copy with the encryption removed. Uses mupdf's "decrypt" save, which
+// rewrites the file WITHOUT re-compressing any image or content stream, so the
+// output keeps the original's quality and (within a few bytes) its size. It
+// does NOT touch or replace whatever is currently open in the editor.
+async function unlockPdfFile(f){
+  showSpin(true, "Opening "+f.name+" …");
+  try {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    // probe first: is it a PDF, and is it actually password-protected?
+    const probe = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
+    const isProtected = probe.needsPassword();
+    const isPdf = isProtected || !!probe.asPDF();
+    probe.destroy();
+    if (!isPdf){ showSpin(false); setStatus("That file isn’t a PDF, so it can’t be unlocked.","err"); return; }
+    if (!isProtected){ showSpin(false); setStatus("“"+f.name+"” isn’t password-protected — there’s nothing to remove.","warn"); return; }
+    // Protected → use the normal open path: it asks for the password (with up to
+    // 3 inline retries), decrypts LOSSLESSLY (no image re-compression, original
+    // quality & size), and renders the result into the viewer. We then mark it
+    // unsaved so Save writes the unlocked copy and any other action first warns
+    // with the usual discard prompt.
+    const prev = workingBytes;
+    await openBytes(bytes, f.name);
+    if (workingBytes && workingBytes !== prev){
+      dirty = true;
+      setStatus("Password removed — “"+fileName+"” is open at the original quality. Tap Save to keep it.","ok");
+    }
+  } catch(err){
+    setStatus("Could not unlock that PDF: "+friendly(err),"err");
+  }
+  showSpin(false);
+}
+$("unlockInput").onchange = e=>{ const f=e.target.files[0]; e.target.value=""; if(f) unlockPdfFile(f); };
+
 // ---------------- render (mupdf -> JPEG -> <img>) ----------------
 function viewerCssWidth(){
-  const avail = $("viewer").clientWidth - 24;
+  const avail = $("viewer").clientWidth - 8;   // hairline gutter (4px each side) for an edge-to-edge fit
   return Math.max(280, Math.min(1100, avail)) * (zoomPct/100);
 }
 // Render at the TRUE device pixel ratio (modern iPhones are 3×). The old cap
@@ -682,6 +803,12 @@ function getSpans(pageIndex){
 }
 
 async function buildSpanBoxes(stage, pageIndex){
+  // Guard against a malformed PDF whose page tree over-reports its length: a
+  // stale/out-of-range index makes mupdf's loadPage throw "invalid page
+  // number", which (when this runs un-awaited from setMode) surfaced as an
+  // uncaught "Async error" banner. Bail quietly instead — that page just won't
+  // get editable text boxes.
+  if (!MDOC || !Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= MDOC.countPages()) return;
   stage.querySelectorAll(".span").forEach(s=>s.remove());
   const ovl = stage.querySelector(".ovl");
   const wPt = +stage.dataset.wpt;
@@ -764,10 +891,65 @@ function openTextEditorSheet(pageIndex, sp){
   openSheet();  setTimeout(()=>$("teIn").focus(), 100);
 }
 
+// Estimate the background colour immediately AROUND a text span by rendering the
+// page and sampling a thin ring just outside the span (top/bottom/left/right),
+// where there are no glyphs from this span. Returns { r,g,b, uniform } in 0–255,
+// or null. `uniform` is false when the ring is mixed (text-dense / an image edge)
+// — in that case the caller keeps the safe white fill. Used so a text edit on a
+// coloured cell or banner reconstructs that colour instead of leaving a white
+// patch. White pages sample near-white, so they're unaffected.
+function sampleSpanBg(pageIndex, sp){
+  let page=null, pix=null;
+  try {
+    page = MDOC.loadPage(pageIndex);
+    const s = 2.0;                                   // ~144 dpi: more pixels for small fields
+    pix = page.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false);
+    const W=pix.getWidth(), Hh=pix.getHeight(), stride=pix.getStride(), n=pix.getNumberOfComponents();
+    const ox=pix.getX(), oy=pix.getY();
+    const data = pix.getPixels();                    // heap VIEW — read into rs[] before any wasm alloc
+    const rs=[], pad=3;                              // sample just clear of the text's anti-aliased edge
+    const at=(X,Y)=>{ const x=Math.round(X*s)-ox, y=Math.round(Y*s)-oy;
+      if (x<0||y<0||x>=W||y>=Hh) return; const i=y*stride+x*n; rs.push([data[i],data[i+1],data[i+2]]); };
+    const line=(x0,y0,x1,y1)=>{ for(let k=0;k<=12;k++) at(x0+(x1-x0)*k/12, y0+(y1-y0)*k/12); };
+    line(sp.x0, sp.y0-pad, sp.x1, sp.y0-pad);        // above
+    line(sp.x0, sp.y1+pad, sp.x1, sp.y1+pad);        // below
+    line(sp.x0-pad, sp.y0, sp.x0-pad, sp.y1);        // left
+    line(sp.x1+pad, sp.y0, sp.x1+pad, sp.y1);        // right
+    if (rs.length < 8) return null;
+    const med = ch => { const a=rs.map(c=>c[ch]).sort((u,v)=>u-v); return a[a.length>>1]|0; };
+    const r=med(0), g=med(1), b=med(2);
+    // Trust the sampled colour when it is the DOMINANT colour of the ring (a
+    // majority of pixels are close to the median). This holds for a flat coloured
+    // cell even when the ring clips a few dark grid lines or glyphs — the median
+    // stays the cell colour and most pixels match it — but fails on a photo /
+    // mixed background, where we keep the safe white fill.
+    let close=0;
+    for (const c of rs){ if (Math.abs(c[0]-r)<85 && Math.abs(c[1]-g)<85 && Math.abs(c[2]-b)<85) close++; }
+    // accept the median when it's clearly the panel colour (a solid majority of
+    // the ring is near it). The wide tolerance lets in the panel's own texture and
+    // anti-aliased edges around short labels; a real photo still has no such
+    // majority, so it keeps the safe white fill.
+    return { r, g, b, uniform: close/rs.length >= 0.6 };
+  } catch(e){ return null; }
+  finally { try{ if(pix) pix.destroy(); }catch(e){} try{ if(page) page.destroy(); }catch(e){} }
+}
+// Shrink the draw size so a one-line replacement fits the original span width
+// (pdf-lib doesn't wrap). Never shrink below half — better a slight overflow
+// than illegible text. Only shrinks; never enlarges.
+function fitFontSize(font, text, size, avail){
+  if (!(avail>1) || !text) return size;
+  try { const wAt = font.widthOfTextAtSize(text, size);
+    if (wAt>avail) return Math.max(size*0.5, size*avail/wAt);
+  } catch(e){}
+  return size;
+}
+
 async function applyTextEdit(pageIndex, sp, newText){
   showSpin(true,"Editing text…");
   try {
     pushUndo();
+    // sample the original background colour BEFORE redaction erases the area
+    const bg = sampleSpanBg(pageIndex, sp);
     // 1) remove the original glyphs with a MuPDF redaction (no black box)
     const page = MDOC.loadPage(pageIndex);
     const an = page.createAnnotation("Redact");
@@ -775,14 +957,24 @@ async function applyTextEdit(pageIndex, sp, newText){
     an.update();
     page.applyRedactions(false);          // false => erase content, don't paint a box
     page.destroy();
-    workingBytes = u8(MDOC.saveToBuffer("garbage").asUint8Array());
+    // compress-images: on an image-based / scanned PDF the redaction re-rasterises
+    // the whole page image to UNCOMPRESSED RGB (a 2MB file balloons to ~26MB).
+    // Re-compressing it brings the file back to normal size; harmless on text PDFs.
+    workingBytes = u8(MDOC.saveToBuffer("compress-images,garbage").asUint8Array());
 
     // 2) reinsert real, selectable text with pdf-lib at the same place/size/colour
     const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
     const pg = doc.getPage(pageIndex);
     const H = pg.getHeight();
     const w = (sp.x1-sp.x0)+2, h = (sp.y1-sp.y0)+2;
-    pg.drawRectangle({ x:sp.x0-1, y:H-(sp.y1+1), width:w, height:h, color:rgb(1,1,1) });
+    // fill the erased area with the original background colour so an edit on a
+    // coloured cell/banner doesn't leave a white patch. Keep pure white when the
+    // background is (near-)white or not a trustworthy flat colour — so ordinary
+    // white-page edits are byte-for-byte unchanged.
+    const nearWhite = bg && bg.r>=245 && bg.g>=245 && bg.b>=245;
+    const fillCol = (bg && bg.uniform && !nearWhite)
+                  ? rgb(bg.r/255, bg.g/255, bg.b/255) : rgb(1,1,1);
+    pg.drawRectangle({ x:sp.x0-1, y:H-(sp.y1+1), width:w, height:h, color:fillCol });
     // a text span is a single line; collapse any newlines the user typed so the
     // replacement stays on that line and can't flow downward past where the
     // original sat (and over the content below it)
@@ -792,8 +984,10 @@ async function applyTextEdit(pageIndex, sp, newText){
       const font = await doc.embedFont(pickFont(sp.font));
       const safe = sanitizeForFont(text);
       substituted = safe !== text;     // some glyphs fell outside the base font
-      pg.drawText(safe, { x:sp.origin[0], y:H-sp.origin[1], size:sp.size||11,
-                          font, color:rgb(sp.color[0],sp.color[1],sp.color[2]), lineHeight:(sp.size||11)*1.15 });
+      const baseSize = sp.size || 11;
+      const drawSize = fitFontSize(font, safe, baseSize, sp.x1 - sp.x0);   // shrink to fit width
+      pg.drawText(safe, { x:sp.origin[0], y:H-sp.origin[1], size:drawSize,
+                          font, color:rgb(sp.color[0],sp.color[1],sp.color[2]), lineHeight:drawSize*1.15 });
     }
     workingBytes = new Uint8Array(await doc.save());
     reopen();
@@ -812,16 +1006,26 @@ function sanitizeForFont(t){ return t.replace(/[^\x09\x0A\x0D\x20-\xFF]/g, "?");
 function setMode(m){
   mode = m;
   $("textBtn").classList.toggle("on", m==="text");
+  $("signBtn").classList.toggle("on", m==="sign");
   $("viewer").classList.toggle("textmode", m==="text");
   document.querySelectorAll(".stage").forEach(s=>s.classList.toggle("placing", m==="sign"));
   if (m==="text"){
-    document.querySelectorAll(".stage").forEach(s=>{ if(s.dataset.rendered) buildSpanBoxes(s, +s.dataset.page); });
+    // buildSpanBoxes is async; contain any rejection (e.g. a page that mupdf
+    // can't read in a malformed PDF) so it never escapes as an uncaught
+    // "Async error" — text editing simply skips that page.
+    document.querySelectorAll(".stage").forEach(s=>{
+      if (s.dataset.rendered) buildSpanBoxes(s, +s.dataset.page).catch(()=>{});
+    });
     setStatus("Tap any highlighted text to change it.","ok");
   } else if (m==="sign"){ setStatus("Drag a box where the signature should go.","ok"); }
   else setStatus("Ready.");
 }
 
 $("textBtn").onclick = ()=> setMode(mode==="text" ? null : "text");
+// Sign and Unlock were promoted from the More menu to the toolbar (v10.52).
+// Handlers are identical to the old menu items so behaviour is unchanged.
+$("signBtn").onclick = ()=> startSign();
+$("unlockBtn").onclick = ()=> confirmDiscard("unlock another PDF", ()=>$("unlockInput").click());
 
 // ---------------- sign (entered from the More sheet) ----------------
 function startSign(){
@@ -950,19 +1154,26 @@ $("moreBtn").onclick = ()=>{
   const multi = has && MDOC && MDOC.countPages() > 1;
   $("sheet").innerHTML = h`
     <h3>More actions</h3>
-    <div class="row"><button class="full" id="mScan">📷 Scan a document</button></div>
-    <div class="row"><button class="full" id="mGoto" ${multi?"":"disabled"}>🔢 Go to page…</button></div>
-    <div class="row"><button class="full" id="mSign" ${d}>✍️ Add my signature</button></div>
-    <div class="row"><button class="full" id="mOrg" ${d}>📑 Pages — reorder · rotate · delete</button></div>
-    <div class="row"><button class="full" id="mExtract" ${d}>📄 Copy pages → new PDF</button></div>
-    <div class="row"><button class="full" id="mMerge" ${d}>➕ Combine PDFs</button></div>
-    <div class="row"><button class="full" id="mImg">🖼 Photos → PDF</button></div>
-    <div class="row"><button class="full" id="mPng" ${d}>⬇ Save this page as a picture</button></div>
-    <div class="row"><button class="full" id="mAbout">About</button></div>
-    <div class="row"><button class="ghost full" id="mClose">Cancel</button></div>`;
+    <div class="mgrp-l">Create</div>
+    <div class="mgrid">
+      <button class="mtile" id="mScan">${ic("camera")}<span>Scan</span></button>
+      <button class="mtile" id="mImg">${ic("photo")}<span>Photos → PDF</span></button>
+    </div>
+    <div class="mgrp-l">Pages</div>
+    <div class="mgrid">
+      <button class="mtile" id="mMerge" ${d}>${ic("combine")}<span>Combine</span></button>
+      <button class="mtile" id="mOrg" ${d}>${ic("grid")}<span>Organize</span></button>
+      <button class="mtile" id="mExtract" ${d}>${ic("copy")}<span>Copy pages</span></button>
+      <button class="mtile" id="mGoto" ${multi?"":"disabled"}>${ic("hash")}<span>Go to page</span></button>
+    </div>
+    <div class="mgrp-l">Export</div>
+    <div class="mgrid">
+      <button class="mtile" id="mPng" ${d}>${ic("download")}<span>Save image</span></button>
+      <button class="mtile" id="mAbout">${ic("info")}<span>About</span></button>
+    </div>
+    <div class="row mt12"><button class="ghost full" id="mClose">Cancel</button></div>`;
   $("mGoto").onclick  = ()=>{ closeSheet(); openJumpToPage(); };
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
-  $("mSign").onclick  = ()=>{ closeSheet(); startSign(); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mExtract").onclick = ()=>{ closeSheet(); openExtract(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
@@ -1461,6 +1672,30 @@ function stopCamera(){
   const q = $("scanQuad");
   if (q.width) q.getContext("2d").clearRect(0,0,q.width,q.height);
 }
+// Pause WITHOUT releasing the camera: stop the live edge-detect loop but keep
+// the MediaStream (and its permission grant) alive. iOS shows the camera
+// permission prompt on every fresh getUserMedia call, so by reusing one stream
+// across capture → crop → next page we prompt once per scan session instead of
+// once per page. The stream is only fully released by stopCamera() when the
+// scanner is closed (Create PDF / Cancel-discard / leaving the scanner).
+// NB: the cross-launch prompt (each cold start of the installed PWA) is an iOS
+// platform limitation — standalone PWAs cannot persist camera permission, and
+// there is no web API to request a one-time/permanent grant.
+function pauseCamera(){
+  if (scanLive){ clearInterval(scanLive); scanLive = 0; }
+}
+async function resumeCamera(){
+  const track = (scanStream && scanStream.getVideoTracks) ? scanStream.getVideoTracks()[0] : null;
+  if (track && track.readyState === "live"){
+    const v = $("scanVideo");
+    if (v.srcObject !== scanStream) v.srcObject = scanStream;
+    try { await v.play(); } catch(e){}
+    sizeQuadCanvas();
+    startLiveDetect();
+    return;
+  }
+  await startCamera();   // stream was released (or never started) — request once
+}
 function enterFallback(){
   scanFallback = true;
   setStatus("Live camera unavailable — using the native camera instead.","warn");
@@ -1558,7 +1793,7 @@ function captureFrame(){
   const c=document.createElement("canvas");
   c.width=v.videoWidth; c.height=v.videoHeight;
   c.getContext("2d").drawImage(v,0,0);
-  stopCamera();
+  pauseCamera();   // keep the stream alive (no re-prompt when we return)
   enterCrop(c);
 }
 $("scanShot").onclick = ()=>{
@@ -1725,6 +1960,51 @@ function hideLoupe(){ $("loupe").hidden=true; }
   }
 })();
 
+// Reset the crop to a near-full-page rectangle — a clean starting point for the
+// reliable manual path when auto-detection grabbed the wrong thing (a keyboard,
+// the desk) or nothing at all.
+function resetCropQuad(){
+  if (!capFrame || !cropFit) return;
+  const mx=capFrame.width*0.04, my=capFrame.height*0.04;
+  cropQuad=[{x:mx,y:my},{x:capFrame.width-mx,y:my},
+            {x:capFrame.width-mx,y:capFrame.height-my},{x:mx,y:capFrame.height-my}];
+  updateCropOverlay();
+  setStatus("Reset to the full page — drag the box or its corners onto the document.","ok");
+}
+$("cropReset").onclick = ()=> resetCropQuad();
+
+// Drag the WHOLE crop box (move all 4 corners together) by dragging its interior,
+// so a correctly-shaped box can be slid onto the document and then fine-tuned at
+// the corners. The corner hit-circles sit on top, so grabbing near a corner still
+// drags just that corner.
+(function wireCropBody(){
+  const poly=$("cropPoly");
+  let start=null, base=null;
+  poly.addEventListener("pointerdown", e=>{
+    if (!cropFit || !capFrame) return;
+    try{ poly.setPointerCapture(e.pointerId); }catch(_){}
+    e.preventDefault();
+    const r=$("cropSvg").getBoundingClientRect();
+    start={ x:(e.clientX-r.left)/cropFit.scale, y:(e.clientY-r.top)/cropFit.scale };
+    base=cropQuad.map(p=>({x:p.x,y:p.y}));
+  });
+  poly.addEventListener("pointermove", e=>{
+    if (!start || !base) return;
+    const r=$("cropSvg").getBoundingClientRect();
+    let dx=(e.clientX-r.left)/cropFit.scale - start.x;
+    let dy=(e.clientY-r.top)/cropFit.scale - start.y;
+    const xs=base.map(p=>p.x), ys=base.map(p=>p.y);
+    const minX=Math.min(...xs), maxX=Math.max(...xs), minY=Math.min(...ys), maxY=Math.max(...ys);
+    dx=Math.max(-minX, Math.min(capFrame.width -maxX, dx));   // keep the box inside the image
+    dy=Math.max(-minY, Math.min(capFrame.height-maxY, dy));
+    cropQuad=base.map(p=>({x:p.x+dx, y:p.y+dy}));
+    updateCropOverlay();
+  });
+  const end=()=>{ start=null; base=null; };
+  poly.addEventListener("pointerup",end);
+  poly.addEventListener("pointercancel",end);
+})();
+
 // output size: Standard (sharp) or Small file (lighter PDFs)
 try { if (scanQuality==="small"){ $("qStd").classList.remove("on"); $("qSmall").classList.add("on"); } } catch(e){}
 $("qStd").onclick   = ()=> setScanQuality("std");
@@ -1768,7 +2048,7 @@ $("cropRetake").onclick = async ()=>{
   capFrame=null;
   $("scanCrop").classList.remove("show");
   $("scanCam").classList.add("show");
-  if (scanFallback) $("camInput").click(); else await startCamera();
+  if (scanFallback) $("camInput").click(); else await resumeCamera();
 };
 $("scanCancel").onclick = ()=>{
   if (!scanPages.length){ endScan(); setStatus("Scan cancelled.","warn"); return; }
@@ -1816,7 +2096,7 @@ $("cropUse").onclick = async ()=>{
     $("scanCrop").classList.remove("show");
     $("scanCam").classList.add("show");
     setStatus("Page "+scanPages.length+" added — scan the next page or tap Create PDF.","ok");
-    if (!scanFallback) await startCamera();
+    if (!scanFallback) await resumeCamera();
   } catch(err){ setStatus("Could not finish this page: "+friendly(err),"err"); }
   showSpin(false);
   cropBusy = false;
