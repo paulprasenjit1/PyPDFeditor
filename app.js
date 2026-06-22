@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.53";
+const APP_BUILD = "10.54";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -599,7 +599,7 @@ $("unlockInput").onchange = e=>{ const f=e.target.files[0]; e.target.value=""; i
 
 // ---------------- render (mupdf -> JPEG -> <img>) ----------------
 function viewerCssWidth(){
-  const avail = $("viewer").clientWidth - 24;
+  const avail = $("viewer").clientWidth - 8;   // hairline gutter (4px each side) for an edge-to-edge fit
   return Math.max(280, Math.min(1100, avail)) * (zoomPct/100);
 }
 // Render at the TRUE device pixel ratio (modern iPhones are 3×). The old cap

@@ -4,6 +4,15 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.54] — 2026-06-22 — Edge-to-edge page view
+
+- **The page now fills the width.** Viewer side gutters dropped from 12px to a
+  4px hairline, top padding trimmed, and the gap between pages reduced, so a page
+  uses essentially the full screen width for the largest readable size. Pages stay
+  top-aligned and horizontally centred. (A portrait A4 on a portrait phone is
+  width-limited, so some backdrop remains below a single short page — filling that
+  too would require horizontal scrolling, which is worse.)
+
 ## [v10.53] — 2026-06-22 — Fix: editing encrypted invoices ("invalid page number")
 
 - **Encrypted-but-openable PDFs now open editable.** Many invoices (banks, telcos

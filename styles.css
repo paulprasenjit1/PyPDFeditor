@@ -106,10 +106,13 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
        font-size:16px; line-height:1; padding:8px 6px; }
 /* touch-action pan-x pan-y: one/two-finger panning stays native, but the
    browser's own pinch-zoom is suppressed so the app can pinch-zoom the PAGES */
-.viewer { flex:1; overflow:auto; padding:18px 12px calc(18px + env(safe-area-inset-bottom));
-          display:flex; flex-direction:column; gap:18px; -webkit-overflow-scrolling:touch;
+/* Edge-to-edge: only a hairline gutter so the page fills as much width as
+   possible. Pages stay top-aligned (column flex, default justify-content) and
+   horizontally centred (align-items). */
+.viewer { flex:1; overflow:auto; padding:8px 4px calc(10px + env(safe-area-inset-bottom));
+          display:flex; flex-direction:column; gap:10px; -webkit-overflow-scrolling:touch;
           align-items:safe center; touch-action:pan-x pan-y; }
-.pagewrap { display:flex; flex-direction:column; gap:18px; align-items:safe center; }
+.pagewrap { display:flex; flex-direction:column; gap:10px; align-items:safe center; }
 /* GPU promotion ONLY during an active pinch — a permanently promoted wrapper
    the height of a 500-page book exhausts compositor memory (black screen) */
 .pagewrap.pinching { will-change:transform; }
