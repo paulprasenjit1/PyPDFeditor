@@ -19,12 +19,14 @@ html,body { margin:0; height:100%; }
 body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
        background:var(--bg); color:var(--txt); display:flex; flex-direction:column;
        height:100dvh; overflow:hidden; }
-header { display:flex; align-items:center; gap:10px; padding:max(8px,env(safe-area-inset-top)) 14px 8px;
+/* header + toolbar are kept deliberately tight so the page viewer gets the most
+   height; the safe-area inset still guarantees the status bar never overlaps. */
+header { display:flex; align-items:center; gap:10px; padding:max(5px,env(safe-area-inset-top)) 14px 5px;
          background:var(--panel); border-bottom:1px solid var(--line); }
-header h1 { font-size:15px; margin:0; font-weight:600; }
-header .meta { color:var(--muted); font-size:11px; margin-left:auto; text-align:right; max-width:55%;
+header h1 { font-size:14px; margin:0; font-weight:600; }
+header .meta { color:var(--muted); font-size:10px; margin-left:auto; text-align:right; max-width:55%;
                overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.toolbar { display:flex; flex-wrap:nowrap; gap:8px; padding:7px 8px; background:var(--panel);
+.toolbar { display:flex; flex-wrap:nowrap; gap:6px; padding:4px 8px; background:var(--panel);
            border-bottom:1px solid var(--line); align-items:center; overflow-x:auto; }
 .toolbar > * { flex:0 0 auto; white-space:nowrap; }
 .toolbar::-webkit-scrollbar { height:6px; }
@@ -64,15 +66,26 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
    behaviour are unchanged; this is purely the visual treatment. */
 .toolbar .tbtn, .toolbar .seg .segbtn {
   display:flex; flex-direction:column; align-items:center; justify-content:center;
-  gap:3px; line-height:1; }
-.toolbar .tbtn { padding:6px 10px; }
+  gap:2px; line-height:1; }
+.toolbar .tbtn { padding:4px 7px; }
 .toolbar .tbtn span, .toolbar .seg .segbtn span {
   font-size:9px; font-weight:600; letter-spacing:.01em; }
 /* shared inline-SVG glyph styling so no per-icon style attribute is needed
    (keeps style-src 'self'); colour follows the button text via currentColor. */
-svg.ic { width:19px; height:19px; display:block; fill:none; stroke:currentColor;
+svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
          stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .zoomctl svg.ic { width:17px; height:17px; }
+
+/* Floating Undo pill (bottom-left). Mirrors the zoom pill on the right; shown
+   by refreshUndo() only while the undo stack is non-empty. */
+.undofab { position:fixed; left:12px; bottom:calc(56px + env(safe-area-inset-bottom));
+           z-index:55; display:none; flex-direction:row; align-items:center; gap:6px;
+           background:var(--panel); border:1px solid var(--line); border-radius:18px;
+           padding:7px 13px 7px 11px; color:var(--txt); box-shadow:0 4px 14px var(--shadow); }
+.undofab.show { display:inline-flex; }
+.undofab span { font-size:12px; font-weight:600; }
+.undofab svg.ic { width:17px; height:17px; }
+.undofab:active:not(:disabled){ background:var(--panel2); }
 /* the middle actions live in one quiet segmented group that stretches to
    absorb the leftover width — calm, even, no scattered pills */
 .seg { display:flex; flex:1 1 auto; min-width:0; align-items:center;
@@ -81,7 +94,7 @@ svg.ic { width:19px; height:19px; display:block; fill:none; stroke:currentColor;
    width, so "Compress" never truncates while "Edit" floats in slack */
 .toolbar .seg .segbtn { flex:1 1 auto; min-width:0; white-space:nowrap;
        background:transparent; border:0; color:var(--txt);
-       padding:8px 5px; font-size:14px; border-radius:8px; }
+       padding:4px 3px; font-size:14px; border-radius:8px; }
 .seg .segbtn:not(:first-child) { border-left:1px solid var(--line); border-radius:0; }
 .seg .segbtn:first-child { border-radius:7px 0 0 7px; }
 .seg .segbtn:last-child { border-radius:0 7px 7px 0; }

@@ -4,6 +4,30 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.52] — 2026-06-22 — Fewer camera prompts, tighter chrome, toolbar #4
+
+- **Scanning now asks for the camera once per session, not once per page.**
+  `captureFrame()` used to fully stop the camera after every shot, so returning
+  for the next page called `getUserMedia()` again and iOS re-showed its
+  permission prompt each time. The stream is now kept alive across capture →
+  crop → next page (edge-detection is paused, not the camera) and only released
+  when you leave the scanner. Note: the prompt on each *cold launch* of the
+  installed PWA is an iOS platform limitation — standalone PWAs can't persist
+  camera permission and there's no web API to request a permanent grant (unlike
+  Android). The camera indicator stays on while you're on the crop screen, as in
+  native scanner apps.
+- **More page, less chrome.** Header and toolbar padding/sizes were trimmed for
+  roughly 18px more page-viewing height, without crowding the controls.
+- **Sign and Unlock promoted to the toolbar.** The segment group is now
+  Edit · Sign · Unlock · Compress · More (Unlock sits right before Compress).
+  Both were removed from the More menu to avoid duplication.
+- **Undo moved to a floating control.** It now appears as a pill (bottom-left)
+  only when there's something to undo, freeing a top-bar slot. It still covers
+  every undoable action (edits, signatures, compress, etc.), not just text edits.
+- **More menu regrouped** into Create (Scan, Photos → PDF) · Pages (Combine,
+  Organize, Copy pages, Go to page) · Export (Save image, About).
+- All 127 tests pass; CSP unchanged (no inline styles, no network fetches).
+
 ## [v10.51] — 2026-06-21 — Toolbar redesign: icon + label, grouped More menu
 
 - **Top toolbar is now icon + label.** Every action (Open, Edit, Undo, Compress,

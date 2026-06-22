@@ -14,10 +14,10 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.51";
+const APP_BUILD = "10.52";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
-  const need = ["openBtn","moreBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
+  const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","cropReset","cropRetake","cropUse"];
   const missing = need.filter(id=>!document.getElementById(id));
@@ -86,7 +86,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "21 Jun 2026";
+const BUILD_DATETIME = "22 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -196,6 +196,7 @@ const u8 = v => new Uint8Array(v);
   // inside mupdf.js), so by here the engine is live.
   $("openBtn").disabled = false;
   $("moreBtn").disabled = false;
+  $("unlockBtn").disabled = false;   // Unlock works without an open doc (picks a file)
   $("bigOpen").disabled = false;
   $("bigScan").disabled = false;
   $("welcomeHint").textContent = "Everything stays on your phone — nothing is uploaded.";
@@ -333,10 +334,14 @@ function reopen(){
 }
 
 function enableDocButtons(has){
-  for (const id of ["textBtn","compBtn","saveBtn","closeBtn"]) $(id).disabled = !has;
+  for (const id of ["textBtn","signBtn","compBtn","saveBtn","closeBtn"]) $(id).disabled = !has;
   refreshZoomButtons(); refreshUndo();
 }
-function refreshUndo(){ $("undoBtn").disabled = !undoStack.length; }
+function refreshUndo(){
+  const has = !!undoStack.length;
+  $("undoBtn").disabled = !has;
+  $("undoBtn").classList.toggle("show", has);   // floating pill: visible only when there's something to undo
+}
 function refreshZoomButtons(){
   $("zoomOut").disabled = !workingBytes || zoomPct<=50;
   $("zoomIn").disabled  = !workingBytes || zoomPct>=300;
@@ -980,6 +985,7 @@ function sanitizeForFont(t){ return t.replace(/[^\x09\x0A\x0D\x20-\xFF]/g, "?");
 function setMode(m){
   mode = m;
   $("textBtn").classList.toggle("on", m==="text");
+  $("signBtn").classList.toggle("on", m==="sign");
   $("viewer").classList.toggle("textmode", m==="text");
   document.querySelectorAll(".stage").forEach(s=>s.classList.toggle("placing", m==="sign"));
   if (m==="text"){
@@ -990,6 +996,10 @@ function setMode(m){
 }
 
 $("textBtn").onclick = ()=> setMode(mode==="text" ? null : "text");
+// Sign and Unlock were promoted from the More menu to the toolbar (v10.52).
+// Handlers are identical to the old menu items so behaviour is unchanged.
+$("signBtn").onclick = ()=> startSign();
+$("unlockBtn").onclick = ()=> confirmDiscard("unlock another PDF", ()=>$("unlockInput").click());
 
 // ---------------- sign (entered from the More sheet) ----------------
 function startSign(){
@@ -1118,19 +1128,17 @@ $("moreBtn").onclick = ()=>{
   const multi = has && MDOC && MDOC.countPages() > 1;
   $("sheet").innerHTML = h`
     <h3>More actions</h3>
+    <div class="mgrp-l">Create</div>
+    <div class="mgrid">
+      <button class="mtile" id="mScan">${ic("camera")}<span>Scan</span></button>
+      <button class="mtile" id="mImg">${ic("photo")}<span>Photos → PDF</span></button>
+    </div>
     <div class="mgrp-l">Pages</div>
     <div class="mgrid">
       <button class="mtile" id="mMerge" ${d}>${ic("combine")}<span>Combine</span></button>
       <button class="mtile" id="mOrg" ${d}>${ic("grid")}<span>Organize</span></button>
       <button class="mtile" id="mExtract" ${d}>${ic("copy")}<span>Copy pages</span></button>
-      <button class="mtile" id="mScan">${ic("camera")}<span>Scan</span></button>
       <button class="mtile" id="mGoto" ${multi?"":"disabled"}>${ic("hash")}<span>Go to page</span></button>
-    </div>
-    <div class="mgrp-l">Content</div>
-    <div class="mgrid">
-      <button class="mtile" id="mSign" ${d}>${ic("sign")}<span>Sign</span></button>
-      <button class="mtile" id="mImg">${ic("photo")}<span>Photos → PDF</span></button>
-      <button class="mtile" id="mUnlock">${ic("unlock")}<span>Unlock</span></button>
     </div>
     <div class="mgrp-l">Export</div>
     <div class="mgrid">
@@ -1140,8 +1148,6 @@ $("moreBtn").onclick = ()=>{
     <div class="row mt12"><button class="ghost full" id="mClose">Cancel</button></div>`;
   $("mGoto").onclick  = ()=>{ closeSheet(); openJumpToPage(); };
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
-  $("mSign").onclick  = ()=>{ closeSheet(); startSign(); };
-  $("mUnlock").onclick = ()=>{ closeSheet(); confirmDiscard("unlock another PDF", ()=>$("unlockInput").click()); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mExtract").onclick = ()=>{ closeSheet(); openExtract(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
@@ -1640,6 +1646,30 @@ function stopCamera(){
   const q = $("scanQuad");
   if (q.width) q.getContext("2d").clearRect(0,0,q.width,q.height);
 }
+// Pause WITHOUT releasing the camera: stop the live edge-detect loop but keep
+// the MediaStream (and its permission grant) alive. iOS shows the camera
+// permission prompt on every fresh getUserMedia call, so by reusing one stream
+// across capture → crop → next page we prompt once per scan session instead of
+// once per page. The stream is only fully released by stopCamera() when the
+// scanner is closed (Create PDF / Cancel-discard / leaving the scanner).
+// NB: the cross-launch prompt (each cold start of the installed PWA) is an iOS
+// platform limitation — standalone PWAs cannot persist camera permission, and
+// there is no web API to request a one-time/permanent grant.
+function pauseCamera(){
+  if (scanLive){ clearInterval(scanLive); scanLive = 0; }
+}
+async function resumeCamera(){
+  const track = (scanStream && scanStream.getVideoTracks) ? scanStream.getVideoTracks()[0] : null;
+  if (track && track.readyState === "live"){
+    const v = $("scanVideo");
+    if (v.srcObject !== scanStream) v.srcObject = scanStream;
+    try { await v.play(); } catch(e){}
+    sizeQuadCanvas();
+    startLiveDetect();
+    return;
+  }
+  await startCamera();   // stream was released (or never started) — request once
+}
 function enterFallback(){
   scanFallback = true;
   setStatus("Live camera unavailable — using the native camera instead.","warn");
@@ -1737,7 +1767,7 @@ function captureFrame(){
   const c=document.createElement("canvas");
   c.width=v.videoWidth; c.height=v.videoHeight;
   c.getContext("2d").drawImage(v,0,0);
-  stopCamera();
+  pauseCamera();   // keep the stream alive (no re-prompt when we return)
   enterCrop(c);
 }
 $("scanShot").onclick = ()=>{
@@ -1992,7 +2022,7 @@ $("cropRetake").onclick = async ()=>{
   capFrame=null;
   $("scanCrop").classList.remove("show");
   $("scanCam").classList.add("show");
-  if (scanFallback) $("camInput").click(); else await startCamera();
+  if (scanFallback) $("camInput").click(); else await resumeCamera();
 };
 $("scanCancel").onclick = ()=>{
   if (!scanPages.length){ endScan(); setStatus("Scan cancelled.","warn"); return; }
@@ -2040,7 +2070,7 @@ $("cropUse").onclick = async ()=>{
     $("scanCrop").classList.remove("show");
     $("scanCam").classList.add("show");
     setStatus("Page "+scanPages.length+" added — scan the next page or tap Create PDF.","ok");
-    if (!scanFallback) await startCamera();
+    if (!scanFallback) await resumeCamera();
   } catch(err){ setStatus("Could not finish this page: "+friendly(err),"err"); }
   showSpin(false);
   cropBusy = false;
