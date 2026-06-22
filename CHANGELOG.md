@@ -4,6 +4,17 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.57] — 2026-06-22 — Tighter, more precise text selection
+
+- **Selection now hugs the glyphs.** v10.56 sized each line's highlight to the
+  full text em-box (ascender to descender), so selecting a line of caps or digits
+  — invoice number, dates, names — drew a box noticeably taller than the text.
+  Each line is now clamped to its real visible band: from the cap/ascender top
+  down to just below the baseline (a small descender allowance keeps letters like
+  g, p and y covered). The result lines up with what is printed.
+- Uses the per-line baseline and font size already returned by the on-device text
+  engine, so there is no extra work and behaviour outside Select mode is unchanged.
+
 ## [v10.56] — 2026-06-22 — Select & copy text from a PDF
 
 - **New "Select" tool in the toolbar.** Tap it to turn the open page into

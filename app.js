@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.56";
+const APP_BUILD = "10.57";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -867,10 +867,22 @@ function buildTextLayer(stage, pageIndex){
     const el = document.createElement("span");
     el.className = "tline";
     el.textContent = sp.text;
-    const h = (sp.y1 - sp.y0) * s;
-    el.style.left = (sp.x0 * s) + "px";
-    el.style.top  = (sp.y0 * s) + "px";
-    el.style.fontSize = Math.max(4, h) + "px";
+    // Precise vertical fit. The text quad spans the full em (ascender→descender),
+    // so sizing the highlight to the quad makes a line of caps/digits — invoice
+    // number, dates, names — look ~40% too tall. Instead clamp each box to the
+    // visible band: from the quad top (≈ cap/ascender top) down to a little below
+    // the baseline, so the highlight hugs the glyphs. fontSize stays the real
+    // glyph size; the box height drives the selection rectangle.
+    const fs   = Math.max(4, (sp.size || (sp.y1 - sp.y0)) * s);
+    const topPx  = sp.y0 * s;                       // quad top (just above caps)
+    const basePx = (sp.origin ? sp.origin[1] : sp.y1) * s;  // text baseline
+    // band: cap-top → baseline + small descender allowance (~14% of the glyph)
+    const bandH = Math.max(fs * 0.5, (basePx - topPx) + fs * 0.16);
+    el.style.left   = (sp.x0 * s) + "px";
+    el.style.top    = topPx + "px";
+    el.style.fontSize  = fs + "px";
+    el.style.height    = bandH + "px";
+    el.style.lineHeight = bandH + "px";
     txt.appendChild(el);
     els.push({ el, w: (sp.x1 - sp.x0) * s });
   }

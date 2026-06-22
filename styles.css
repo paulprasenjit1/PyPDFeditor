@@ -149,8 +149,9 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .stage .txt { position:absolute; inset:0; overflow:hidden; z-index:1;
         line-height:1; pointer-events:none;
         -webkit-user-select:none; user-select:none; }
-.stage .txt .tline { position:absolute; white-space:pre; color:transparent;
-        transform-origin:0 0; cursor:text; }
+.stage .txt .tline { position:absolute; display:inline-block; white-space:pre;
+        color:transparent; transform-origin:0 0; cursor:text; overflow:hidden;
+        font-family:Arial, Helvetica, sans-serif; }
 .viewer.selmode .stage .txt { pointer-events:auto; touch-action:pan-x pan-y;
         -webkit-user-select:text; user-select:text; }
 /* the highlight is what the user sees over the real glyphs underneath */
