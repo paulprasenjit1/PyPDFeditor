@@ -142,6 +142,20 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .viewer.textmode .span { display:block; pointer-events:auto; touch-action:pan-x pan-y;
         border-color:rgba(79,140,255,.45); background:rgba(79,140,255,.10); }
 .viewer.textmode .span:active { background:rgba(79,140,255,.30); }
+/* Selectable text layer (Select mode): an invisible, real-text overlay sitting
+   over the page image so native selection + Copy works. Inert by default
+   (pointer-events:none, not selectable) so view / edit / sign and scrolling are
+   completely unaffected; it only wakes up when the viewer is in .selmode. */
+.stage .txt { position:absolute; inset:0; overflow:hidden; z-index:1;
+        line-height:1; pointer-events:none;
+        -webkit-user-select:none; user-select:none; }
+.stage .txt .tline { position:absolute; white-space:pre; color:transparent;
+        transform-origin:0 0; cursor:text; }
+.viewer.selmode .stage .txt { pointer-events:auto; touch-action:pan-x pan-y;
+        -webkit-user-select:text; user-select:text; }
+/* the highlight is what the user sees over the real glyphs underneath */
+.stage .txt .tline::selection { background:rgba(79,140,255,.40); }
+.stage .txt .tline::-moz-selection { background:rgba(79,140,255,.40); }
 .empty { color:var(--muted); text-align:center; margin:auto; font-size:14px; line-height:1.7; padding:24px; }
 /* welcome screen: the empty state is two big friendly buttons */
 .welcome { display:flex; flex-direction:column; gap:14px; align-items:center; }

@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.55";
+const APP_BUILD = "10.56";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,7 +97,7 @@ let fileName = "document.pdf";
 let zoomPct = 100;             // 50–300, 25% steps; 100% = fit to viewer width
 let mergeSources = null;       // staged docs awaiting a chosen merge order
 let signImgDataUrl = null;     // processed signature PNG dataURL
-let mode = null;               // null | "sign" | "text"
+let mode = null;               // null | "sign" | "text" | "select"
 const spanCache = new Map();   // key `${epoch}:${page}` -> spans[]
 let pageObserver = null;       // single lazy-render observer (disconnected on hide/close)
 const liveURLs = new Set();    // outstanding object URLs, revoked on teardown
@@ -334,7 +334,7 @@ function reopen(){
 }
 
 function enableDocButtons(has){
-  for (const id of ["textBtn","signBtn","compBtn","saveBtn","closeBtn"]) $(id).disabled = !has;
+  for (const id of ["textBtn","selectBtn","signBtn","compBtn","saveBtn","closeBtn"]) $(id).disabled = !has;
   refreshZoomButtons(); refreshUndo();
 }
 function refreshUndo(){
@@ -689,6 +689,7 @@ async function render(){
       if (cur) cur.replaceWith(holder);
       delete stage.dataset.rendered;
       stage.querySelectorAll(".span").forEach(s=>s.remove());
+      const tx = stage.querySelector(".txt"); if (tx) tx.textContent = "";
     });
     lastViewerW = v.clientWidth;
     observeStages();
@@ -730,7 +731,7 @@ async function render(){
       // can skip painting offscreen pages without the layout jumping
       stage.style.containIntrinsicSize = dispW+"px "+dispH+"px";
       // built via DOM + CSSOM (no style attributes) so style-src can be 'self'
-      stage.innerHTML = h`<span class="plabel">Page ${i+1}</span><div class="holder"></div><div class="ovl"></div>`;
+      stage.innerHTML = h`<span class="plabel">Page ${i+1}</span><div class="holder"></div><div class="ovl"></div><div class="txt"></div>`;
       const holder = stage.querySelector(".holder");
       holder.style.width = dispW+"px"; holder.style.height = dispH+"px";
       attachOverlay(stage, i);
@@ -776,6 +777,7 @@ async function renderStage(stage, i){
     img.src = url;
     holder.replaceWith(img);
     if (mode === "text") await buildSpanBoxes(stage, i);
+    else if (mode === "select") buildTextLayer(stage, i);
   } catch(e){ /* leave placeholder */ }
 }
 
@@ -839,6 +841,47 @@ async function buildSpanBoxes(stage, pageIndex){
     b.onkeydown = (ev)=>{ if (ev.key==="Enter" || ev.key===" "){ ev.preventDefault(); ev.stopPropagation(); openTextEditor(pageIndex, idx); } };
     ovl.appendChild(b);
   });
+}
+
+// ---------------- selectable text layer (for copying text out of the PDF) ----------------
+// Lays an invisible, real-text overlay over the rendered page image so the
+// native browser/iOS selection + Copy works — exactly the PDF.js text-layer
+// technique. Reuses the same structured-text spans the editor uses, so no new
+// engine work. Only built while the viewer is in "select" mode; in every other
+// mode the layer is empty and pointer-events:none, so scrolling, editing and
+// signing are untouched.
+function buildTextLayer(stage, pageIndex){
+  if (!MDOC || !Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= MDOC.countPages()) return;
+  const txt = stage.querySelector(".txt");
+  if (!txt) return;
+  txt.textContent = "";
+  let spans;
+  try { spans = getSpans(pageIndex); } catch(e){ return; }
+  const wPt = +stage.dataset.wpt;
+  const dispW = parseFloat(stage.style.width);
+  if (!wPt || !dispW) return;
+  const s = dispW / wPt;                          // points -> css px
+  const els = [];
+  for (const sp of spans){
+    if (!sp.text) continue;
+    const el = document.createElement("span");
+    el.className = "tline";
+    el.textContent = sp.text;
+    const h = (sp.y1 - sp.y0) * s;
+    el.style.left = (sp.x0 * s) + "px";
+    el.style.top  = (sp.y0 * s) + "px";
+    el.style.fontSize = Math.max(4, h) + "px";
+    txt.appendChild(el);
+    els.push({ el, w: (sp.x1 - sp.x0) * s });
+  }
+  // second pass: scale each line horizontally so the invisible glyphs line up
+  // with the rasterised ones (measure-then-transform, batched to limit reflow)
+  for (const it of els){
+    const natural = it.el.offsetWidth;
+    if (natural > 0 && it.w > 0){
+      it.el.style.transform = "scaleX(" + (it.w / natural) + ")";
+    }
+  }
 }
 
 // ---------------- font matching (mirrors the macOS pick_font) ----------------
@@ -1013,8 +1056,10 @@ function sanitizeForFont(t){ return t.replace(/[^\x09\x0A\x0D\x20-\xFF]/g, "?");
 function setMode(m){
   mode = m;
   $("textBtn").classList.toggle("on", m==="text");
+  $("selectBtn").classList.toggle("on", m==="select");
   $("signBtn").classList.toggle("on", m==="sign");
   $("viewer").classList.toggle("textmode", m==="text");
+  $("viewer").classList.toggle("selmode", m==="select");
   document.querySelectorAll(".stage").forEach(s=>s.classList.toggle("placing", m==="sign"));
   if (m==="text"){
     // buildSpanBoxes is async; contain any rejection (e.g. a page that mupdf
@@ -1024,11 +1069,19 @@ function setMode(m){
       if (s.dataset.rendered) buildSpanBoxes(s, +s.dataset.page).catch(()=>{});
     });
     setStatus("Tap any highlighted text to change it.","ok");
+  } else if (m==="select"){
+    // build the invisible selectable text layer over every already-rendered
+    // page; pages scrolled into view later get theirs in renderStage
+    document.querySelectorAll(".stage").forEach(s=>{
+      if (s.dataset.rendered) try { buildTextLayer(s, +s.dataset.page); } catch(e){}
+    });
+    setStatus("Select any text, then copy it.","ok");
   } else if (m==="sign"){ setStatus("Drag a box where the signature should go.","ok"); }
   else setStatus("Ready.");
 }
 
 $("textBtn").onclick = ()=> setMode(mode==="text" ? null : "text");
+$("selectBtn").onclick = ()=> setMode(mode==="select" ? null : "select");
 // Sign and Unlock were promoted from the More menu to the toolbar (v10.52).
 // Handlers are identical to the old menu items so behaviour is unchanged.
 $("signBtn").onclick = ()=> startSign();

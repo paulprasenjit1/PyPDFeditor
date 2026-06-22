@@ -4,6 +4,23 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.56] — 2026-06-22 — Select & copy text from a PDF
+
+- **New "Select" tool in the toolbar.** Tap it to turn the open page into
+  selectable text, then drag (or long-press on iPhone) over an invoice number,
+  date, name or any other text and use the native Copy. Tap the button again to
+  return to normal viewing.
+- **How it works.** Pages are rasterised to images for crisp display, so there is
+  no text to grab by default. Select mode lays an invisible, correctly positioned
+  text layer over the page image (the standard PDF.js technique), reusing the same
+  on-device structured text the editor already extracts — no extra engine work and
+  nothing leaves the phone. The highlight you see sits over the real glyphs
+  underneath, so selection lines up with what is printed.
+- **Nothing else changed.** The layer is completely inert outside Select mode
+  (not selectable, ignores pointer events), so scrolling, pinch-zoom, Edit, Sign,
+  Unlock, Compress and Save behave exactly as before. Only text-based PDFs expose
+  selectable text; a page that is purely a scanned image has no text to select.
+
 ## [v10.55] — 2026-06-22 — Sharper rendering (lossless PNG for normal docs)
 
 - **Crisper text, closer to Preview/Acrobat.** The display bitmap for normal
