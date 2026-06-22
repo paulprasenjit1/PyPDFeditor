@@ -4,6 +4,20 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.55] — 2026-06-22 — Sharper rendering (lossless PNG for normal docs)
+
+- **Crisper text, closer to Preview/Acrobat.** The display bitmap for normal
+  documents is now lossless PNG instead of JPEG, removing the faint compression
+  ringing around thin glyphs and hairlines. At deep zoom (raster over ~2800px)
+  and for very long documents (150+ pages) the renderer still uses fast JPEG q94
+  to keep zooming and scrolling responsive and memory in check.
+- **Sharper deep zoom.** The per-page pixel cap was raised from 3500 to 5000, so
+  zoomed-in pages re-rasterise with more detail. (The page already rendered at the
+  device pixel ratio, up to 3x, so fit-width viewing was retina-sharp; this mainly
+  helps when you zoom in.)
+- No quality was lost in the earlier edge-to-edge change — that slightly increased
+  the render width, if anything.
+
 ## [v10.54] — 2026-06-22 — Edge-to-edge page view
 
 - **The page now fills the width.** Viewer side gutters dropped from 12px to a

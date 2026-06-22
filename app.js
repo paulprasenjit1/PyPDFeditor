@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.54";
+const APP_BUILD = "10.55";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -609,8 +609,9 @@ function viewerCssWidth(){
 // ever rasterised.
 const DPR = Math.min(window.devicePixelRatio || 1, 3);
 // Cap a rendered page bitmap so high zoom on a large page can't allocate a
-// huge canvas. Raised with the DPR so zoomed-in text stays sharp.
-const MAX_RENDER_PX = 3500;
+// huge canvas. Raised with the DPR so zoomed-in text stays sharp. 5000 gives
+// noticeably crisper deep zoom than the old 3500 while staying within memory.
+const MAX_RENDER_PX = 5000;
 
 // Build (or rebuild) the single lazy-render observer and watch every page that
 // hasn't been rasterised yet. Reusing one observer avoids leaking observers on
@@ -758,9 +759,15 @@ async function renderStage(stage, i){
     const cap = maxPx / Math.max(wPt*scale, hPt*scale);
     if (cap < 1) scale *= cap;
     const pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false);
-    const jpg = u8(pix.asJPEG(94));   // display only; sharper text edges than 92
+    // Quality: lossless PNG for normal docs gives Preview/Acrobat-like text edges
+    // with no JPEG ringing on thin glyphs and hairlines. At deep zoom the bitmap
+    // gets large, where PNG encode time and size balloon, so past ~2800px (and
+    // for very long documents) fall back to fast JPEG q94 to keep zoom snappy.
+    const rasterMax = Math.max(wPt*scale, hPt*scale);
+    const usePng = !bigDoc && rasterMax <= 2800;
+    const bin = usePng ? u8(pix.asPNG()) : u8(pix.asJPEG(94));
     pix.destroy(); page.destroy();
-    const url = URL.createObjectURL(new Blob([jpg], {type:"image/jpeg"}));
+    const url = URL.createObjectURL(new Blob([bin], {type: usePng ? "image/png" : "image/jpeg"}));
     liveURLs.add(url);
     const holder = stage.querySelector(".holder");
     const img = document.createElement("img");
