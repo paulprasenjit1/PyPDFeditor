@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.52";
+const APP_BUILD = "10.53";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -458,13 +458,28 @@ async function openBytes(bytes, name){
   // mupdf can open other formats (e.g. HTML) through their own handlers —
   // asPDF() returns null for those. Reject before touching the open document.
   if (!probe.needsPassword()){
-    if (!probe.asPDF()){
+    const pdfp = probe.asPDF();
+    if (!pdfp){
       probe.destroy();
       throw new Error("not a PDF file");
     }
     if (probe.countPages() === 0){
       probe.destroy();
       throw new Error("no pages found in this file");
+    }
+    // Some PDFs (bank/telco invoices, e.g. amaysim) are encrypted with an EMPTY
+    // user password plus owner-only permission locks (copy/edit disabled). mupdf
+    // opens them with no prompt, but the document is still encrypted: an in-place
+    // edit then re-saves a broken encrypted copy whose pages collapse, surfacing
+    // as "invalid page number" and a "0 pages" header. Decrypt the working copy
+    // up front — exactly what the Unlock action does — so editing and rendering
+    // behave normally. Empty-password decryption asks nothing of the user; it
+    // only strips an owner lock that mupdf is already permitted to ignore.
+    const enc = probe.getMetaData("encryption");
+    if (enc && enc !== "None"){
+      showSpin(true, "Preparing a secured PDF…");
+      bytes = new Uint8Array(pdfp.saveToBuffer("decrypt,garbage").asUint8Array());
+      wasEncrypted = true;
     }
   }
   if (probe.needsPassword()){
@@ -788,6 +803,12 @@ function getSpans(pageIndex){
 }
 
 async function buildSpanBoxes(stage, pageIndex){
+  // Guard against a malformed PDF whose page tree over-reports its length: a
+  // stale/out-of-range index makes mupdf's loadPage throw "invalid page
+  // number", which (when this runs un-awaited from setMode) surfaced as an
+  // uncaught "Async error" banner. Bail quietly instead — that page just won't
+  // get editable text boxes.
+  if (!MDOC || !Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= MDOC.countPages()) return;
   stage.querySelectorAll(".span").forEach(s=>s.remove());
   const ovl = stage.querySelector(".ovl");
   const wPt = +stage.dataset.wpt;
@@ -989,7 +1010,12 @@ function setMode(m){
   $("viewer").classList.toggle("textmode", m==="text");
   document.querySelectorAll(".stage").forEach(s=>s.classList.toggle("placing", m==="sign"));
   if (m==="text"){
-    document.querySelectorAll(".stage").forEach(s=>{ if(s.dataset.rendered) buildSpanBoxes(s, +s.dataset.page); });
+    // buildSpanBoxes is async; contain any rejection (e.g. a page that mupdf
+    // can't read in a malformed PDF) so it never escapes as an uncaught
+    // "Async error" — text editing simply skips that page.
+    document.querySelectorAll(".stage").forEach(s=>{
+      if (s.dataset.rendered) buildSpanBoxes(s, +s.dataset.page).catch(()=>{});
+    });
     setStatus("Tap any highlighted text to change it.","ok");
   } else if (m==="sign"){ setStatus("Drag a box where the signature should go.","ok"); }
   else setStatus("Ready.");

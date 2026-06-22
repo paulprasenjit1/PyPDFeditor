@@ -4,6 +4,26 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.53] — 2026-06-22 — Fix: editing encrypted invoices ("invalid page number")
+
+- **Encrypted-but-openable PDFs now open editable.** Many invoices (banks, telcos
+  such as amaysim) are encrypted with an *empty user password* plus an owner lock
+  that disables copy/edit. mupdf opens them with no prompt, but the document is
+  still encrypted, so the first in-place edit re-saved a broken encrypted copy —
+  its pages collapsed, producing "Async error: invalid page number" and a
+  "0 pages" header. On open the app now detects encryption
+  (`getMetaData("encryption") !== "None"`) and decrypts the working copy with the
+  same lossless transform as the Unlock action (`decrypt,garbage`). Empty-password
+  decryption asks nothing of the user; it only strips an owner lock mupdf may
+  already ignore. The decrypted copy is treated as sensitive (never auto-persisted).
+- **Editing is now crash-safe on malformed PDFs.** `buildSpanBoxes` is
+  bounds-checked against the live page count, and its (async) call from text mode
+  is `.catch()`-guarded, so a page mupdf can't read is skipped quietly instead of
+  surfacing an uncaught async-error banner.
+- Root cause was confirmed against the real engine; this was not a regression from
+  the toolbar redesign (the render/page/edit code was unchanged). Two regression
+  tests added (VR16, VR17). All 129 tests pass.
+
 ## [v10.52] — 2026-06-22 — Fewer camera prompts, tighter chrome, toolbar #4
 
 - **Scanning now asks for the camera once per session, not once per page.**
