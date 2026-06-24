@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.57";
+const APP_BUILD = "10.58";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -86,7 +86,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "22 Jun 2026";
+const BUILD_DATETIME = "24 Jun 2026";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -135,7 +135,8 @@ const ICONS = {
   photo:   '<path d="M5 5h14v14h-14z"/><path d="M9 11a1.2 1.2 0 1 0 0 -2.4a1.2 1.2 0 0 0 0 2.4z"/><path d="M5 16l4 -4l3 3l3 -3l4 4"/>',
   unlock:  '<path d="M7 11h10v8h-10z"/><path d="M9 11v-3a3 3 0 0 1 6 0"/>',
   download:'<path d="M12 4v10M8 11l4 4l4 -4"/><path d="M5 19h14"/>',
-  info:    '<path d="M12 21a9 9 0 1 0 0 -18a9 9 0 0 0 0 18z"/><path d="M12 11v5"/><path d="M12 8h.01"/>'
+  info:    '<path d="M12 21a9 9 0 1 0 0 -18a9 9 0 0 0 0 18z"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
+  search:  '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4 -4"/>'
 };
 function ic(name){
   return raw('<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[name]||"") + '</svg>');
@@ -331,6 +332,9 @@ function reopen(){
   epoch++;
   spanCache.clear();
   schedulePersistDoc();        // every byte change flows through here
+  // an edit changes the bytes → previously found matches are stale. Re-run the
+  // search against the new document so highlights and the count stay correct.
+  if (SEARCH.open && SEARCH.needle) runFind(SEARCH.needle);
 }
 
 function enableDocButtons(has){
@@ -690,6 +694,7 @@ async function render(){
       delete stage.dataset.rendered;
       stage.querySelectorAll(".span").forEach(s=>s.remove());
       const tx = stage.querySelector(".txt"); if (tx) tx.textContent = "";
+      const hl = stage.querySelector(".hl"); if (hl) hl.textContent = "";
     });
     lastViewerW = v.clientWidth;
     observeStages();
@@ -731,7 +736,7 @@ async function render(){
       // can skip painting offscreen pages without the layout jumping
       stage.style.containIntrinsicSize = dispW+"px "+dispH+"px";
       // built via DOM + CSSOM (no style attributes) so style-src can be 'self'
-      stage.innerHTML = h`<span class="plabel">Page ${i+1}</span><div class="holder"></div><div class="ovl"></div><div class="txt"></div>`;
+      stage.innerHTML = h`<span class="plabel">Page ${i+1}</span><div class="holder"></div><div class="hl"></div><div class="ovl"></div><div class="txt"></div>`;
       const holder = stage.querySelector(".holder");
       holder.style.width = dispW+"px"; holder.style.height = dispH+"px";
       attachOverlay(stage, i);
@@ -778,6 +783,7 @@ async function renderStage(stage, i){
     holder.replaceWith(img);
     if (mode === "text") await buildSpanBoxes(stage, i);
     else if (mode === "select") buildTextLayer(stage, i);
+    if (SEARCH.open) paintPageHighlights(stage, i);
   } catch(e){ /* leave placeholder */ }
 }
 
@@ -895,6 +901,240 @@ function buildTextLayer(stage, pageIndex){
     }
   }
 }
+
+// ---------------- find in document (MuPDF page.search) ----------------
+// Acrobat/iLovePDF-style find: case-insensitive substring, every match
+// highlighted, a live count, and prev/next that selects the current match.
+// Per the agreed design, visible pages are searched first (instant feedback)
+// and the remaining pages are scanned lazily in the background, so the count
+// climbs in while you keep reading. All matches are stored as point-space
+// quads; the per-page .hl layer draws them scaled to the current zoom, so they
+// stay aligned through pinch-zoom and width changes (renderStage re-paints).
+const SEARCH = {
+  open: false,
+  needle: "",
+  pages: new Map(),     // pageIndex -> [ { boxes:[[x0,y0,x1,y1],…] }, … ]
+  order: [],            // flat nav list: [ {page, mi}, … ] sorted by page then mi
+  activeKey: null,      // { page, mi } of the current match
+  scanned: new Set(),   // pages already searched for the current needle
+  token: 0,             // bumps on every new query → cancels stale background scans
+  debounce: 0
+};
+
+function openFind(){
+  if (!workingBytes || !MDOC){ setStatus("Open a PDF first, then search it.","warn"); return; }
+  SEARCH.open = true;
+  const bar = $("findbar"); bar.hidden = false;
+  const inp = $("findInput");
+  inp.focus(); inp.select();
+  if (inp.value.trim()) runFind(inp.value);
+  else updateFindCount();
+}
+
+function closeFind(){
+  SEARCH.open = false;
+  SEARCH.token++;                     // cancel any in-flight background scan
+  SEARCH.needle = "";
+  SEARCH.pages.clear(); SEARCH.order = []; SEARCH.activeKey = null; SEARCH.scanned.clear();
+  $("findbar").hidden = true;
+  document.querySelectorAll(".stage .hl").forEach(hl=>{ hl.textContent = ""; });
+  setStatus("Ready.");
+}
+
+// quads → point-space bounding boxes, grouped one entry per match (a match can
+// wrap onto several lines, hence several boxes that navigate/scroll as a unit)
+function searchPage(i, needle){
+  const out = [];
+  let page = null;
+  try {
+    page = MDOC.loadPage(i);
+    const matches = page.search(needle) || [];
+    for (const quads of matches){
+      const boxes = [];
+      for (const q of quads){
+        const xs = [q[0],q[2],q[4],q[6]], ys = [q[1],q[3],q[5],q[7]];
+        boxes.push([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+      }
+      if (boxes.length) out.push({ boxes });
+    }
+  } catch(e){ /* unreadable page → no matches */ }
+  finally { if (page) try{ page.destroy(); }catch(e){} }
+  return out;
+}
+
+// rebuild the flat, page-ordered navigation list from whatever's scanned so far
+function rebuildOrder(){
+  const order = [];
+  const pages = [...SEARCH.pages.keys()].sort((a,b)=>a-b);
+  for (const p of pages){
+    const arr = SEARCH.pages.get(p);
+    for (let mi=0; mi<arr.length; mi++) order.push({ page:p, mi });
+  }
+  SEARCH.order = order;
+}
+
+function visiblePageIndexes(){
+  const out = [];
+  document.querySelectorAll(".stage").forEach(s=>{
+    if (s.dataset.rendered) out.push(+s.dataset.page);
+  });
+  return out;
+}
+
+// debounced entry point from the input box
+function scheduleFind(){
+  clearTimeout(SEARCH.debounce);
+  const v = $("findInput").value;
+  SEARCH.debounce = setTimeout(()=>runFind(v), 160);
+}
+
+async function runFind(rawNeedle){
+  const needle = (rawNeedle||"").trim();
+  const tok = ++SEARCH.token;          // invalidate previous query's background scan
+  SEARCH.needle = needle;
+  SEARCH.pages.clear(); SEARCH.order = []; SEARCH.activeKey = null; SEARCH.scanned.clear();
+  document.querySelectorAll(".stage .hl").forEach(hl=>{ hl.textContent = ""; });
+  if (!needle || !MDOC){ updateFindCount(); return; }
+
+  const n = MDOC.countPages();
+  // 1) visible pages first — instant feedback
+  const vis = visiblePageIndexes();
+  for (const i of vis){
+    if (tok !== SEARCH.token) return;
+    if (SEARCH.scanned.has(i)) continue;
+    SEARCH.scanned.add(i);
+    const res = searchPage(i, needle);
+    if (res.length) SEARCH.pages.set(i, res);
+  }
+  rebuildOrder();
+  // select the first match found so far and reveal it
+  if (SEARCH.order.length){ SEARCH.activeKey = { ...SEARCH.order[0] }; }
+  paintAllHighlights();
+  updateFindCount();
+  if (SEARCH.activeKey) revealActive();
+
+  // 2) lazily scan the rest, in chunks, so the count climbs without freezing UI
+  for (let i=0; i<n; i++){
+    if (SEARCH.scanned.has(i)) continue;
+    if (i % 12 === 0){
+      await new Promise(r=>setTimeout(r,0));
+      if (tok !== SEARCH.token) return;     // a newer query superseded this one
+    }
+    SEARCH.scanned.add(i);
+    const res = searchPage(i, needle);
+    if (res.length){
+      SEARCH.pages.set(i, res);
+      rebuildOrder();
+      // if nothing was selected yet (no hits on visible pages), select the first
+      if (!SEARCH.activeKey && SEARCH.order.length){ SEARCH.activeKey = { ...SEARCH.order[0] }; revealActive(); }
+      paintPageByIndex(i);
+      updateFindCount();
+    }
+  }
+  if (tok === SEARCH.token) updateFindCount();
+}
+
+function findActiveIndex(){
+  if (!SEARCH.activeKey) return -1;
+  return SEARCH.order.findIndex(o=>o.page===SEARCH.activeKey.page && o.mi===SEARCH.activeKey.mi);
+}
+
+function updateFindCount(){
+  const el = $("findCount");
+  const total = SEARCH.order.length;
+  const has = !!SEARCH.needle;
+  if (!has){ el.textContent = ""; }
+  else if (!total){ el.textContent = "0/0"; }
+  else { const cur = findActiveIndex(); el.textContent = (cur<0?0:cur+1) + "/" + total; }
+  const none = total===0;
+  $("findPrev").disabled = none;
+  $("findNext").disabled = none;
+}
+
+function gotoFind(delta){
+  const total = SEARCH.order.length;
+  if (!total) return;
+  let cur = findActiveIndex();
+  if (cur < 0) cur = 0;
+  else cur = (cur + delta + total) % total;
+  SEARCH.activeKey = { ...SEARCH.order[cur] };
+  paintAllHighlights();
+  updateFindCount();
+  revealActive();
+}
+
+// Scroll the current match into view by moving the VIEWER directly (never
+// Element.scrollIntoView — on iOS that bubbles up and hides the toolbar, the
+// same reason scrollToPage exists). We centre the active match's box when its
+// page is laid out, falling back to scrolling to the page top otherwise.
+function revealActive(){
+  if (!SEARCH.activeKey) return;
+  const p = SEARCH.activeKey.page;
+  const v = $("viewer");
+  const centre = ()=>{
+    const stage = $("pageWrap").querySelector('.stage[data-page="'+p+'"]');
+    if (!stage){ scrollToPage(p); return; }
+    const box = stage.querySelector(".hl .hlbox.on");
+    const ref = box || stage;
+    const refTop = ref.getBoundingClientRect().top;
+    const vRect = v.getBoundingClientRect();
+    // place the match roughly a third of the way down the viewer
+    const target = Math.max(0, v.scrollTop + (refTop - vRect.top) - vRect.height/3);
+    try { if (typeof v.scrollTo === "function"){ v.scrollTo({ top:target, behavior:"smooth" }); return; } } catch(e){}
+    v.scrollTop = target;
+  };
+  // ensure the page is rendered first; getBoundingClientRect is valid for
+  // not-yet-rasterised stages too (they carry their intrinsic size)
+  scrollToPage(p);
+  const raf = (typeof window!=="undefined" && window.requestAnimationFrame)
+    ? window.requestAnimationFrame.bind(window) : (fn)=>setTimeout(fn,16);
+  raf(()=>raf(centre));
+}
+
+function paintAllHighlights(){
+  document.querySelectorAll(".stage").forEach(stage=>{
+    if (stage.dataset.rendered) paintPageHighlights(stage, +stage.dataset.page);
+  });
+}
+function paintPageByIndex(i){
+  const stage = $("pageWrap").querySelector('.stage[data-page="'+i+'"]');
+  if (stage && stage.dataset.rendered) paintPageHighlights(stage, i);
+}
+
+function paintPageHighlights(stage, i){
+  const hl = stage.querySelector(".hl");
+  if (!hl) return;
+  hl.textContent = "";
+  if (!SEARCH.open) return;
+  const matches = SEARCH.pages.get(i);
+  if (!matches || !matches.length) return;
+  const wPt = +stage.dataset.wpt, dispW = parseFloat(stage.style.width);
+  if (!wPt || !dispW) return;
+  const s = dispW / wPt;
+  const ak = SEARCH.activeKey;
+  matches.forEach((m, mi)=>{
+    const on = !!(ak && ak.page===i && ak.mi===mi);
+    for (const b of m.boxes){
+      const d = document.createElement("div");
+      d.className = on ? "hlbox on" : "hlbox";
+      d.style.left   = (b[0]*s)+"px";
+      d.style.top    = (b[1]*s)+"px";
+      d.style.width  = ((b[2]-b[0])*s)+"px";
+      d.style.height = ((b[3]-b[1])*s)+"px";
+      hl.appendChild(d);
+    }
+  });
+}
+
+// wire the find bar
+$("findInput").addEventListener("input", scheduleFind);
+$("findInput").addEventListener("keydown", (e)=>{
+  if (e.key==="Enter"){ e.preventDefault(); gotoFind(e.shiftKey ? -1 : 1); }
+  else if (e.key==="Escape"){ e.preventDefault(); closeFind(); }
+});
+$("findPrev").onclick  = ()=> gotoFind(-1);
+$("findNext").onclick  = ()=> gotoFind(1);
+$("findClose").onclick = ()=> closeFind();
 
 // ---------------- font matching (mirrors the macOS pick_font) ----------------
 function pickFont(name){
@@ -1226,6 +1466,10 @@ $("moreBtn").onclick = ()=>{
   const multi = has && MDOC && MDOC.countPages() > 1;
   $("sheet").innerHTML = h`
     <h3>More actions</h3>
+    <div class="mgrp-l">Find</div>
+    <div class="mgrid">
+      <button class="mtile" id="mFind" ${d}>${ic("search")}<span>Find in document</span></button>
+    </div>
     <div class="mgrp-l">Create</div>
     <div class="mgrid">
       <button class="mtile" id="mScan">${ic("camera")}<span>Scan</span></button>
@@ -1244,6 +1488,7 @@ $("moreBtn").onclick = ()=>{
       <button class="mtile" id="mAbout">${ic("info")}<span>About</span></button>
     </div>
     <div class="row mt12"><button class="ghost full" id="mClose">Cancel</button></div>`;
+  $("mFind").onclick  = ()=>{ closeSheet(); openFind(); };
   $("mGoto").onclick  = ()=>{ closeSheet(); openJumpToPage(); };
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
@@ -1288,6 +1533,7 @@ function openAbout(){
 
 // Close the open document and return to the empty state, releasing all memory.
 function closeFile(){
+  if (SEARCH.open) closeFind();
   if (pageObserver) pageObserver.disconnect();
   $("viewer").querySelectorAll(".stage").forEach(s=>s.remove());
   revokeURLs();

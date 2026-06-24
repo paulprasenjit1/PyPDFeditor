@@ -157,6 +157,33 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 /* the highlight is what the user sees over the real glyphs underneath */
 .stage .txt .tline::selection { background:rgba(79,140,255,.40); }
 .stage .txt .tline::-moz-selection { background:rgba(79,140,255,.40); }
+
+/* ---------------- Find in document ---------------- */
+/* A slim bar between the toolbar and the viewer. Hidden via the [hidden]
+   attribute until opened; when shown it participates in normal flow so the
+   viewer simply gets a little shorter (no overlap, no fixed positioning). */
+.findbar { display:flex; align-items:center; gap:6px; padding:5px 8px;
+           background:var(--panel); border-bottom:1px solid var(--line); }
+.findbar[hidden] { display:none; }
+.findbar .fic { width:17px; height:17px; color:var(--muted); flex:0 0 auto; }
+.findbar input { flex:1 1 auto; min-width:0; background:var(--panel2); color:var(--txt);
+           border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:15px; }
+.findbar .fcount { flex:0 0 auto; font-size:12px; color:var(--muted); min-width:42px;
+           text-align:center; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.findbar .fnav { flex:0 0 auto; background:var(--panel2); border:1px solid var(--line);
+           color:var(--txt); padding:6px 8px; border-radius:8px; }
+.findbar .fnav:active:not(:disabled){ background:var(--panel); transform:none; filter:none; }
+.findbar .fnav:disabled { opacity:.4; }
+.findbar .fnav svg.ic { width:16px; height:16px; }
+
+/* Highlight layer: sits above the page image but below the text/edit overlays.
+   Inert (pointer-events:none) so it never blocks scrolling, selecting or
+   editing. Each .hlbox is one match quad; .on is the current match. */
+.stage .hl { position:absolute; inset:0; pointer-events:none; z-index:1; }
+.stage .hl .hlbox { position:absolute; background:rgba(250,199,117,.45);
+           border-radius:1px; }
+.stage .hl .hlbox.on { background:rgba(239,159,39,.55);
+           outline:2px solid rgba(186,117,23,.95); outline-offset:0; }
 .empty { color:var(--muted); text-align:center; margin:auto; font-size:14px; line-height:1.7; padding:24px; }
 /* welcome screen: the empty state is two big friendly buttons */
 .welcome { display:flex; flex-direction:column; gap:14px; align-items:center; }

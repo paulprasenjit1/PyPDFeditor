@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="10.57">
+<html lang="en" data-build="10.58">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -82,6 +82,26 @@
     <span>Save</span>
   </button>
   <button class="xbtn tbtn" id="closeBtn" aria-label="Close this PDF" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6l-12 12"/></svg>
+  </button>
+</div>
+
+<!-- Find-in-PDF bar. Hidden until opened from More → Find. Lives between the
+     toolbar and the viewer so it never overlaps the pages. All wiring is in
+     app.js; styling in styles.css (CSP style-src 'self'). -->
+<div class="findbar" id="findbar" hidden>
+  <svg class="ic fic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4 -4"/></svg>
+  <input type="text" id="findInput" inputmode="search" enterkeyhint="search"
+         autocomplete="off" autocapitalize="off" spellcheck="false"
+         placeholder="Find in document" aria-label="Find in document">
+  <span class="fcount" id="findCount" aria-live="polite"></span>
+  <button class="fnav" id="findPrev" aria-label="Previous match" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6 -6l6 6"/></svg>
+  </button>
+  <button class="fnav" id="findNext" aria-label="Next match" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6l6 -6"/></svg>
+  </button>
+  <button class="fnav" id="findClose" aria-label="Close find">
     <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6l-12 12"/></svg>
   </button>
 </div>

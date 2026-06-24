@@ -4,6 +4,25 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.58] — 2026-06-24 — Find in document
+
+- **New "Find in document" (More → Find).** Search the open PDF the way Acrobat
+  or iLovePDF does: a slim search bar appears below the toolbar with a live count,
+  prev/next arrows, and a close button. Type and every match is highlighted in
+  amber across all pages; the current match is shown in a stronger amber with an
+  outline and scrolled into view (centred by moving the viewer, never
+  `scrollIntoView`, so the toolbar never gets pushed off screen on iPhone).
+- **Matching** is case-insensitive substring (so "voic" finds "invoice"), powered
+  by the on-device MuPDF engine — no regex, no whole-word mode, nothing leaves the
+  device.
+- **Visible pages are searched first** for instant feedback; the remaining pages
+  are scanned in the background, so the count climbs in while you keep reading. The
+  first match is selected automatically.
+- Highlights stay aligned through pinch-zoom and width changes (they re-paint with
+  the page), edits re-run the search so the count stays correct, and closing the
+  bar or the document clears everything. 11 new automated checks cover count,
+  navigation, substring matching, no-match, and teardown.
+
 ## [v10.57] — 2026-06-22 — Tighter, more precise text selection
 
 - **Selection now hugs the glyphs.** v10.56 sized each line's highlight to the
