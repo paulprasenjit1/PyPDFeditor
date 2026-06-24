@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.58";
+const APP_BUILD = "10.59";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -936,7 +936,11 @@ function closeFind(){
   SEARCH.token++;                     // cancel any in-flight background scan
   SEARCH.needle = "";
   SEARCH.pages.clear(); SEARCH.order = []; SEARCH.activeKey = null; SEARCH.scanned.clear();
+  clearTimeout(SEARCH.debounce);
   $("findbar").hidden = true;
+  // clear the box so reopening Find starts blank (same as iLovePDF / Acrobat)
+  const inp = $("findInput"); if (inp) inp.value = "";
+  $("findCount").textContent = "";
   document.querySelectorAll(".stage .hl").forEach(hl=>{ hl.textContent = ""; });
   setStatus("Ready.");
 }
@@ -959,6 +963,16 @@ function searchPage(i, needle){
     }
   } catch(e){ /* unreadable page → no matches */ }
   finally { if (page) try{ page.destroy(); }catch(e){} }
+  // MuPDF returns hits in its internal structured-text order, which isn't always
+  // strictly top-to-bottom (a name block and an email field can come back out of
+  // visual order). Sort by reading position — top edge, then left edge — so
+  // "next/previous" follows the page and the FIRST match selected is the topmost
+  // one, matching Acrobat / iLovePDF.
+  out.sort((a,b)=>{
+    const ay=a.boxes[0][1], by=b.boxes[0][1];
+    if (Math.abs(ay-by) > 2) return ay-by;        // different lines → top first
+    return a.boxes[0][0]-b.boxes[0][0];           // same line → left first
+  });
   return out;
 }
 

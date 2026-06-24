@@ -26,7 +26,7 @@ header { display:flex; align-items:center; gap:10px; padding:max(5px,env(safe-ar
 header h1 { font-size:14px; margin:0; font-weight:600; }
 header .meta { color:var(--muted); font-size:10px; margin-left:auto; text-align:right; max-width:55%;
                overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.toolbar { display:flex; flex-wrap:nowrap; gap:6px; padding:4px 8px; background:var(--panel);
+.toolbar { display:flex; flex-wrap:nowrap; gap:4px; padding:4px 6px; background:var(--panel);
            border-bottom:1px solid var(--line); align-items:center; overflow-x:auto; }
 .toolbar > * { flex:0 0 auto; white-space:nowrap; }
 .toolbar::-webkit-scrollbar { height:6px; }
@@ -67,7 +67,7 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 .toolbar .tbtn, .toolbar .seg .segbtn {
   display:flex; flex-direction:column; align-items:center; justify-content:center;
   gap:2px; line-height:1; }
-.toolbar .tbtn { padding:4px 7px; }
+.toolbar .tbtn { padding:4px 5px; }
 .toolbar .tbtn span, .toolbar .seg .segbtn span {
   font-size:9px; font-weight:600; letter-spacing:.01em; }
 /* shared inline-SVG glyph styling so no per-icon style attribute is needed
@@ -162,16 +162,21 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 /* A slim bar between the toolbar and the viewer. Hidden via the [hidden]
    attribute until opened; when shown it participates in normal flow so the
    viewer simply gets a little shorter (no overlap, no fixed positioning). */
-.findbar { display:flex; align-items:center; gap:6px; padding:5px 8px;
-           background:var(--panel); border-bottom:1px solid var(--line); }
+/* Compact so the whole row — magnifier, input, count, ↑ ↓ ✕ — fits within an
+   iPhone's width with no horizontal scroll (the close ✕ was being clipped).
+   nowrap + overflow:hidden guarantees nothing spills past the screen edge;
+   the input is the only flexible element so it absorbs whatever width is left. */
+.findbar { display:flex; flex-wrap:nowrap; align-items:center; gap:4px; padding:5px 6px;
+           overflow:hidden; background:var(--panel); border-bottom:1px solid var(--line); }
 .findbar[hidden] { display:none; }
-.findbar .fic { width:17px; height:17px; color:var(--muted); flex:0 0 auto; }
-.findbar input { flex:1 1 auto; min-width:0; background:var(--panel2); color:var(--txt);
-           border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:15px; }
-.findbar .fcount { flex:0 0 auto; font-size:12px; color:var(--muted); min-width:42px;
+.findbar .fic { width:16px; height:16px; color:var(--muted); flex:0 0 auto; }
+/* font-size:16px keeps iOS from zooming the page (and hiding the toolbar) on focus */
+.findbar input { flex:1 1 auto; min-width:0; width:0; background:var(--panel2); color:var(--txt);
+           border:1px solid var(--line); border-radius:8px; padding:6px 9px; font-size:16px; }
+.findbar .fcount { flex:0 0 auto; font-size:11px; color:var(--muted); min-width:30px;
            text-align:center; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .findbar .fnav { flex:0 0 auto; background:var(--panel2); border:1px solid var(--line);
-           color:var(--txt); padding:6px 8px; border-radius:8px; }
+           color:var(--txt); padding:6px 6px; border-radius:8px; }
 .findbar .fnav:active:not(:disabled){ background:var(--panel); transform:none; filter:none; }
 .findbar .fnav:disabled { opacity:.4; }
 .findbar .fnav svg.ic { width:16px; height:16px; }

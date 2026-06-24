@@ -4,6 +4,19 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.59] — 2026-06-24 — Find: fit, first-match, fresh box
+
+- **The find bar now fits the screen.** The close ✕ was being clipped off the
+  right edge on iPhone; the bar (and the main toolbar) are tightened so the whole
+  row fits with no horizontal scroll.
+- **The first match selected is now the topmost one.** Matches are sorted by
+  reading position (top, then left) before navigation is built, so searching e.g.
+  a name that appears above an email selects the name first instead of the second
+  hit.
+- **Reopening Find starts blank.** Closing with ✕ now clears the search box and
+  count, so the next time you open Find it doesn't carry the previous term —
+  matching iLovePDF / Acrobat behaviour.
+
 ## [v10.58] — 2026-06-24 — Find in document
 
 - **New "Find in document" (More → Find).** Search the open PDF the way Acrobat
