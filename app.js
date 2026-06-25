@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.59";
+const APP_BUILD = "10.61";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -202,6 +202,10 @@ const u8 = v => new Uint8Array(v);
   $("bigScan").disabled = false;
   $("welcomeHint").textContent = "Everything stays on your phone — nothing is uploaded.";
   $("meta").textContent = "No document open";
+  // fade out the first-paint launch splash now the engine is live, then remove
+  // it from the layer so it never intercepts taps
+  const lh = document.getElementById("launch");
+  if (lh){ lh.classList.add("gone"); setTimeout(()=>{ try{ lh.remove(); }catch(e){} }, 450); }
   setStatus("Ready. Open a PDF or scan a document.", "ok");
   // tell the engine-load watchdog the engine is live, so it cancels its timer
   window.__pypdfEngineReady = true;
@@ -2739,6 +2743,8 @@ async function doUndo(){
 // ---------------- sheet + utilities ----------------
 function closeSheet(){
   $("sheetBg").classList.remove("show");
+  const sh = $("sheet");                         // clear any drag-leftover state
+  sh.removeAttribute("data-drag"); sh.style.transform = "";
   if (sheetThumbObs){ sheetThumbObs.disconnect(); sheetThumbObs=null; }
   // resolve any awaited sheet (e.g. password) as "cancelled" so it never hangs
   const cb = sheetOnDismiss; sheetOnDismiss = null;
@@ -2749,6 +2755,43 @@ function closeSheet(){
 $("sheetBg").addEventListener("click", e=>{ if(e.target===$("sheetBg")) closeSheet(); });
 // Esc closes the open sheet (keyboard users / iPad with a keyboard)
 document.addEventListener("keydown", e=>{ if(e.key==="Escape" && $("sheetBg").classList.contains("show")) closeSheet(); });
+
+// ---- native-style drag-to-dismiss on the sheet grabber ----------------------
+// A downward drag that starts in the top grabber zone (and only when the sheet
+// is scrolled to the top, so it never fights content scrolling) tracks the
+// finger 1:1; releasing past a distance/velocity threshold closes the sheet,
+// otherwise it springs back. Pointer events cover touch + mouse + pen.
+(function sheetDrag(){
+  const sheet = $("sheet");
+  let dragging=false, startY=0, lastY=0, lastT=0, vy=0;
+  const GRAB_ZONE = 44;          // px from the sheet top that initiates a drag
+  sheet.addEventListener("pointerdown", e=>{
+    if (e.pointerType==="mouse" && e.button!==0) return;
+    if (sheet.scrollTop > 0) return;                       // let content scroll
+    if (e.clientY - sheet.getBoundingClientRect().top > GRAB_ZONE) return;
+    dragging=true; startY=lastY=e.clientY; lastT=performance.now(); vy=0;
+    sheet.setAttribute("data-drag","");
+    try{ sheet.setPointerCapture(e.pointerId); }catch(_){}
+  });
+  sheet.addEventListener("pointermove", e=>{
+    if (!dragging) return;
+    const dy = Math.max(0, e.clientY - startY);            // downward only
+    const now = performance.now();
+    if (now>lastT){ vy = (e.clientY-lastY)/(now-lastT); lastT=now; lastY=e.clientY; }
+    sheet.style.transform = "translateY("+dy+"px)";
+    if (dy>0) e.preventDefault();
+  });
+  function end(e){
+    if (!dragging) return; dragging=false;
+    try{ sheet.releasePointerCapture(e.pointerId); }catch(_){}
+    sheet.removeAttribute("data-drag");
+    const dy = Math.max(0, (e.clientY||lastY) - startY);
+    sheet.style.transform = "";                            // CSS resumes control
+    if (dy > 110 || vy > 0.55) closeSheet();               // dismiss vs spring back
+  }
+  sheet.addEventListener("pointerup", end);
+  sheet.addEventListener("pointercancel", end);
+})();
 
 function fileToDataURL(file){ return new Promise((res,rej)=>{ const r=new FileReader();
   r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }

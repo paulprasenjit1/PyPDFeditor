@@ -15,10 +15,26 @@
 }
 * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html { background:var(--panel); }
-html,body { margin:0; height:100%; }
+html,body { margin:0; height:100%; overscroll-behavior:none; }
 body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
        background:var(--bg); color:var(--txt); display:flex; flex-direction:column;
-       height:100dvh; overflow:hidden; }
+       height:100dvh; overflow:hidden; overscroll-behavior:none; }
+/* Stop iOS long-press copy/share callouts on app chrome so buttons feel native
+   (text inside the PDF / inputs keep normal selection — see selmode below). */
+header, .toolbar, .findbar, .zoomctl, .undofab, .pgpill, .scanui, .sheet h3,
+.sheet .row, button, .ic { -webkit-touch-callout:none; }
+/* ---------------- launch splash (first paint, no white flash) ---------------- */
+.launch { position:fixed; inset:0; z-index:200; display:flex; flex-direction:column;
+          align-items:center; justify-content:center; gap:22px; background:var(--bg);
+          transition:opacity .4s ease; }
+.launch-logo { width:96px; height:96px; border-radius:22px;
+               box-shadow:0 10px 30px var(--shadow); }
+.launch-spin { width:26px; height:26px; border-radius:50%;
+               border:3px solid var(--line); border-top-color:var(--accent);
+               animation:launchspin .8s linear infinite; }
+@keyframes launchspin { to { transform:rotate(360deg); } }
+.launch.gone { opacity:0; pointer-events:none; }
+@media (prefers-reduced-motion: reduce){ .launch-spin { animation:none; } }
 /* header + toolbar are kept deliberately tight so the page viewer gets the most
    height; the safe-area inset still guarantees the status bar never overlaps. */
 header { display:flex; align-items:center; gap:10px; padding:max(5px,env(safe-area-inset-top)) 14px 5px;
@@ -26,11 +42,13 @@ header { display:flex; align-items:center; gap:10px; padding:max(5px,env(safe-ar
 header h1 { font-size:14px; margin:0; font-weight:600; }
 header .meta { color:var(--muted); font-size:10px; margin-left:auto; text-align:right; max-width:55%;
                overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* The whole toolbar always fits the viewport — never scrolls horizontally. The
+   segmented group absorbs spare width and every control may shrink (min-width:0)
+   so the row fits any iPhone; on a very narrow device a seg label ellipsises as
+   the last-resort safety valve instead of pushing the row into a scroll. */
 .toolbar { display:flex; flex-wrap:nowrap; gap:4px; padding:4px 6px; background:var(--panel);
-           border-bottom:1px solid var(--line); align-items:center; overflow-x:auto; }
-.toolbar > * { flex:0 0 auto; white-space:nowrap; }
-.toolbar::-webkit-scrollbar { height:6px; }
-.toolbar::-webkit-scrollbar-thumb { background:var(--line); border-radius:3px; }
+           border-bottom:1px solid var(--line); align-items:stretch; overflow:hidden; }
+.toolbar > * { flex:0 1 auto; min-width:0; white-space:nowrap; }
 button { background:linear-gradient(180deg, var(--grad-a), var(--grad-b)); color:#fff; border:0;
          border-radius:9px; padding:9px 10px; font-size:13px; cursor:pointer;
          transition:transform .08s ease, filter .12s ease; }
@@ -66,10 +84,12 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
    behaviour are unchanged; this is purely the visual treatment. */
 .toolbar .tbtn, .toolbar .seg .segbtn {
   display:flex; flex-direction:column; align-items:center; justify-content:center;
-  gap:2px; line-height:1; }
+  gap:2px; line-height:1; min-height:44px; }    /* 44pt vertical hit area (Apple HIG) */
 .toolbar .tbtn { padding:4px 5px; }
+/* labels can ellipsise so a tight row never forces a horizontal scroll */
 .toolbar .tbtn span, .toolbar .seg .segbtn span {
-  font-size:9px; font-weight:600; letter-spacing:.01em; }
+  font-size:9px; font-weight:600; letter-spacing:.01em;
+  max-width:100%; overflow:hidden; text-overflow:ellipsis; }
 /* shared inline-SVG glyph styling so no per-icon style attribute is needed
    (keeps style-src 'self'); colour follows the button text via currentColor. */
 svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
@@ -88,8 +108,8 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .undofab:active:not(:disabled){ background:var(--panel2); }
 /* the middle actions live in one quiet segmented group that stretches to
    absorb the leftover width — calm, even, no scattered pills */
-.seg { display:flex; flex:1 1 auto; min-width:0; align-items:center;
-       background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:2px; }
+.seg { display:flex; flex:1 1 auto; min-width:0; align-items:stretch;
+       background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:0 2px; }
 /* flex-basis auto: spare width is shared on TOP of each label's natural
    width, so "Compress" never truncates while "Edit" floats in slack */
 .toolbar .seg .segbtn { flex:1 1 auto; min-width:0; white-space:nowrap;
@@ -224,13 +244,27 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 @media (prefers-reduced-motion: reduce){ .pgpill { transition:none; } }
 /* Layering: scanner (90) < sheets (110) < spinner (120), so dialogs and the
    working spinner are always visible, including on top of the scanner. */
-.sheet-bg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:flex-end; z-index:110; }
-.sheet-bg.show { display:flex; }
+/* Backdrop fades; sheet slides up with an iOS-style spring easing. The sheet is
+   always in the DOM (display:flex) but hidden via visibility+transform so the
+   slide can animate both ways. .show is toggled by app.js. */
+.sheet-bg { position:fixed; inset:0; background:rgba(0,0,0,0); display:flex; align-items:flex-end;
+         z-index:110; visibility:hidden;
+         transition:background .3s ease, visibility .3s ease; }
+.sheet-bg.show { background:rgba(0,0,0,.55); visibility:visible; }
 .sheet { background:var(--panel); width:100%; border-top-left-radius:20px; border-top-right-radius:20px;
          border-top:1px solid var(--line); padding:12px 16px calc(20px + env(safe-area-inset-bottom));
-         max-height:82dvh; overflow:auto; box-shadow:0 -10px 36px rgba(0,0,0,.35); }
-.sheet::before { content:""; display:block; width:38px; height:4px; border-radius:2px;
-         background:var(--line); margin:0 auto 12px; }
+         max-height:82dvh; overflow:auto; box-shadow:0 -10px 36px rgba(0,0,0,.35);
+         transform:translateY(100%); will-change:transform;
+         transition:transform .42s cubic-bezier(.32,.72,0,1); }
+.sheet-bg.show .sheet { transform:translateY(0); }
+/* While the grabber is being dragged, app.js sets data-drag and an inline
+   transform; suppress the transition so it tracks the finger 1:1. */
+.sheet[data-drag] { transition:none; }
+.sheet::before { content:""; display:block; width:38px; height:5px; border-radius:3px;
+         background:var(--line); margin:0 auto 12px; cursor:grab; touch-action:none; }
+@media (prefers-reduced-motion: reduce){
+  .sheet-bg, .sheet { transition:none; }
+}
 .sheet h3 { margin:0 0 10px; font-size:15px; }
 .sheet .row { display:flex; gap:8px; align-items:center; margin:10px 0; flex-wrap:wrap; }
 .sheet label.ck { display:flex; gap:8px; align-items:center; font-size:14px; }
