@@ -47,7 +47,7 @@ header .meta { color:var(--muted); font-size:10px; margin-left:auto; text-align:
    so the row fits any iPhone; on a very narrow device a seg label ellipsises as
    the last-resort safety valve instead of pushing the row into a scroll. */
 .toolbar { order:4; display:flex; flex-wrap:nowrap; gap:4px;
-           padding:3px 6px calc(3px + env(safe-area-inset-bottom)); background:var(--panel);
+           padding:3px 6px 3px; background:var(--panel);
            border-top:1px solid var(--line); align-items:stretch; overflow:hidden; }
 /* Toolbar relocated to the BOTTOM (native iOS bottom-toolbar pattern). flex
    order restacks header → find → viewer → toast → toolbar without touching the
