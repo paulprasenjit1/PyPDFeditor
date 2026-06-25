@@ -4,14 +4,16 @@
 :root { --bg:#0b0d12; --panel:#141823; --panel2:#1a1f2d; --line:#272e3d; --txt:#e8ebf2;
         --muted:#8d95a8; --accent:#5b95ff; --accent2:#1f6feb; --grad-a:#3b82f6; --grad-b:#1d5fd6;
         --ok:#3fb950; --warn:#d29922; --err:#f85149;
-        --scrolltrack:#0b0d12; --scrollthumb:#3d6fd6; --shadow:rgba(0,0,0,.55); }
+        --scrolltrack:#0b0d12; --scrollthumb:#3d6fd6; --shadow:rgba(0,0,0,.55);
+        --pill-bg:rgba(48,54,72,.85); --pill-fg:#f3f5fa; }
 /* automatic light theme — follows the iPhone's system setting; the scanner
    screens stay dark by design (they are hard-coded camera-black) */
 @media (prefers-color-scheme: light){
   :root { --bg:#eef0f5; --panel:#ffffff; --panel2:#f6f7fa; --line:#d9dde6; --txt:#1b1e27;
           --muted:#68707f; --accent:#2563eb; --accent2:#1f6feb; --grad-a:#4f8cff; --grad-b:#2563eb;
           --ok:#1a7f37; --warn:#9a6700; --err:#cf222e;
-          --scrolltrack:#e3e6ee; --scrollthumb:#9db8ec; --shadow:rgba(30,40,70,.25); }
+          --scrolltrack:#e3e6ee; --scrollthumb:#9db8ec; --shadow:rgba(30,40,70,.25);
+          --pill-bg:rgba(45,52,68,.70); --pill-fg:#ffffff; }
 }
 * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html { background:var(--panel); }
@@ -251,28 +253,34 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    indicator actually needs (~the inset minus 18px), so "Ready." sits low in the
    bar instead of leaving a tall empty strip beneath it. max() keeps a safe floor
    on devices with no inset. */
-.status { font-size:11px; display:flex; align-items:center;
-          padding:4px 14px;
-          border-top:1px solid var(--line); background:var(--panel); color:var(--muted);
-          min-height:0; line-height:1.3; }
-/* When the toast has faded (textContent cleared) the bar collapses completely —
-   no border, padding or background ribbon — so the viewer runs to the edge for
-   an immersive view. The viewer keeps its own safe-area-bottom padding, so page
-   content still clears the home indicator. */
-.status:empty { padding:0; border-top:0; min-height:0; }
-.status.ok { color:var(--ok); font-weight:600; background:rgba(63,185,80,.07); }
-.status.err { color:var(--err); font-weight:600; background:rgba(248,81,73,.08); }
-.status.warn { color:var(--warn); font-weight:600; background:rgba(210,153,34,.08); }
+/* Status is a floating iOS-style toast capsule under the header: it OVERLAYS the
+   page (position:fixed, so it never occupies layout or pushes the toolbar),
+   fades in, then setStatus() clears the text after a few seconds and it fades
+   out. Translucent neutral pill (--pill-bg) reads on both light and dark pages;
+   errors/warnings tint the pill and persist until the next action. */
+.status { position:fixed; top:calc(env(safe-area-inset-top) + 34px); left:50%;
+          transform:translateX(-50%); max-width:min(90%, 460px); z-index:60;
+          font-size:12px; font-weight:600; line-height:1.3; text-align:center;
+          padding:8px 16px; border-radius:16px; background:var(--pill-bg); color:var(--pill-fg);
+          box-shadow:0 6px 20px var(--shadow); -webkit-backdrop-filter:blur(8px);
+          backdrop-filter:blur(8px); pointer-events:none; transition:opacity .3s ease; }
+/* faded out (text cleared) — invisible and inert, no ribbon left behind */
+.status:empty { opacity:0; }
+.status.ok { color:var(--pill-fg); }
+.status.err { background:rgba(207,34,46,.92); color:#fff; }
+.status.warn { background:rgba(154,103,0,.92); color:#fff; }
+@media (prefers-reduced-motion: reduce){ .status { transition:none; } }
 /* "Page 3 of 12" pill: fades in while scrolling, out when you stop. It is also a
    shortcut — tap it to open Go to page — so it gets an accent outline and is
    only tappable while visible (pointer-events:auto on .show). */
 .pgpill { position:fixed; left:50%; transform:translateX(-50%);
           bottom:calc(64px + env(safe-area-inset-bottom)); z-index:50;
-          background:rgba(13,15,20,.92); color:#fff; font-size:12px; font-weight:600;
-          padding:6px 13px; border-radius:15px; border:1.5px solid var(--accent);
+          background:var(--pill-bg); color:var(--pill-fg); font-size:12px; font-weight:600;
+          padding:6px 13px; border-radius:15px; border:1px solid var(--accent);
+          -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
           opacity:0; pointer-events:none; cursor:pointer; transition:opacity .25s ease; }
 .pgpill.show { opacity:1; pointer-events:auto; }
-.pgpill:active { background:rgba(13,15,20,1); }
+.pgpill:active { filter:brightness(1.15); }
 @media (prefers-reduced-motion: reduce){ .pgpill { transition:none; } }
 /* Layering: scanner (90) < sheets (110) < spinner (120), so dialogs and the
    working spinner are always visible, including on top of the scanner. */
