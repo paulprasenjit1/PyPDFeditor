@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.63";
+const APP_BUILD = "10.64";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -146,7 +146,18 @@ function safeFileName(n){
   return String(n||"document.pdf").replace(/[\/\\\x00-\x1f]/g,"_").slice(0,128) || "document.pdf";
 }
 
-function setStatus(msg, cls=""){ const s=$("status"); s.textContent=msg; s.className="status "+cls; }
+let statusTimer = null;
+// Transient confirmations behave like an iOS toast: they appear, then fade after
+// a few seconds so the bar collapses and returns the space to the viewer. Errors
+// and warnings persist until the next action, since the user may need to read
+// them. aria-live still announces every message because the text is set first.
+function setStatus(msg, cls=""){
+  const s=$("status"); s.textContent=msg; s.className="status "+cls;
+  clearTimeout(statusTimer);
+  if (msg && cls!=="err" && cls!=="warn"){
+    statusTimer = setTimeout(()=>{ s.textContent=""; s.className="status"; }, 3600);
+  }
+}
 // Translate raw engine errors into plain language. The raw message is kept in
 // the on-device error log (More → About) for diagnosis.
 function friendly(err){
@@ -944,6 +955,7 @@ function closeFind(){
   $("findbar").hidden = true;
   // clear the box so reopening Find starts blank (same as iLovePDF / Acrobat)
   const inp = $("findInput"); if (inp) inp.value = "";
+  const fc = $("findClear"); if (fc) fc.hidden = true;
   $("findCount").textContent = "";
   document.querySelectorAll(".stage .hl").forEach(hl=>{ hl.textContent = ""; });
   setStatus("Ready.");
@@ -1145,7 +1157,9 @@ function paintPageHighlights(stage, i){
 }
 
 // wire the find bar
-$("findInput").addEventListener("input", scheduleFind);
+// show the inline clear (✕) only while the field has text
+function refreshFindClear(){ const inp=$("findInput"); $("findClear").hidden = !inp.value.length; }
+$("findInput").addEventListener("input", ()=>{ refreshFindClear(); scheduleFind(); });
 $("findInput").addEventListener("keydown", (e)=>{
   if (e.key==="Enter"){ e.preventDefault(); gotoFind(e.shiftKey ? -1 : 1); }
   else if (e.key==="Escape"){ e.preventDefault(); closeFind(); }
@@ -1153,6 +1167,11 @@ $("findInput").addEventListener("keydown", (e)=>{
 $("findPrev").onclick  = ()=> gotoFind(-1);
 $("findNext").onclick  = ()=> gotoFind(1);
 $("findClose").onclick = ()=> closeFind();
+// clear the query but stay in Find, refocus the field, and reset results
+$("findClear").onclick = ()=>{
+  const inp=$("findInput"); inp.value=""; refreshFindClear();
+  scheduleFind(); inp.focus();
+};
 
 // ---------------- font matching (mirrors the macOS pick_font) ----------------
 function pickFont(name){

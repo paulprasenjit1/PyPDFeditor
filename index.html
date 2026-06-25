@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="10.63">
+<html lang="en" data-build="10.64">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -125,6 +125,9 @@
   <input type="text" id="findInput" inputmode="search" enterkeyhint="search"
          autocomplete="off" autocapitalize="off" spellcheck="false"
          placeholder="Find in document" aria-label="Find in document">
+  <button class="fclear" id="findClear" aria-label="Clear search" hidden>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg>
+  </button>
   <span class="fcount" id="findCount" aria-live="polite"></span>
   <button class="fnav" id="findPrev" aria-label="Previous match" disabled>
     <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6 -6l6 6"/></svg>

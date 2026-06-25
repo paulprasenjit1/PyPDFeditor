@@ -119,10 +119,11 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .seg .segbtn:first-child { border-radius:7px 0 0 7px; }
 .seg .segbtn:last-child { border-radius:0 7px 7px 0; }
 .toolbar .seg .segbtn:active:not(:disabled) { background:var(--panel); transform:none; filter:none; }
-.toolbar .seg .segbtn.on { background:var(--ok); color:#fff; }
+.toolbar .seg .segbtn.on { background:linear-gradient(180deg,var(--grad-a),var(--grad-b)); color:#fff; }
 .toolbar .seg .segbtn:disabled { opacity:.35; }
-/* borderless close (✕) beside Save — red so its meaning is unmistakable */
-.toolbar .xbtn { background:transparent; border:0; color:var(--err);
+/* borderless close (✕) beside Save — neutral, not red: red is reserved for
+   destructive actions (delete), and close is not destructive. */
+.toolbar .xbtn { background:transparent; border:0; color:var(--muted);
        font-size:16px; line-height:1; padding:8px 6px; }
 /* touch-action pan-x pan-y: one/two-finger panning stays native, but the
    browser's own pinch-zoom is suppressed so the app can pinch-zoom the PAGES */
@@ -144,7 +145,10 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    is set per-stage in JS so scrollbar/layout stay stable. */
 .stage { position:relative; box-shadow:0 6px 24px var(--shadow); background:#fff; border-radius:2px;
          content-visibility:auto; }
-.stage .plabel { position:absolute; top:4px; left:4px; font-size:10px; color:#fff;
+/* Page badge sits top-RIGHT so it never covers the document's own heading
+   (which is almost always top-left). Pairs with the floating "Page x of n"
+   pill that appears while scrolling. */
+.stage .plabel { position:absolute; top:4px; right:4px; font-size:10px; color:#fff;
          background:rgba(0,0,0,.45); padding:1px 6px; border-radius:5px; z-index:2; }
 .stage img { display:block; width:100%; height:auto; }
 .stage .holder { background:#fff; }
@@ -200,6 +204,13 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .findbar .fnav:active:not(:disabled){ background:var(--panel); transform:none; filter:none; }
 .findbar .fnav:disabled { opacity:.4; }
 .findbar .fnav svg.ic { width:16px; height:16px; }
+/* inline clear (✕) — wipes the query without closing Find; shown only while the
+   field has text. Borderless + muted so it reads as a field affordance, not a
+   nav button. */
+.findbar .fclear { flex:0 0 auto; background:transparent; border:0; color:var(--muted);
+           padding:6px 4px; border-radius:8px; }
+.findbar .fclear[hidden] { display:none; }
+.findbar .fclear svg.ic { width:15px; height:15px; }
 
 /* Highlight layer: sits above the page image but below the text/edit overlays.
    Inert (pointer-events:none) so it never blocks scrolling, selecting or
