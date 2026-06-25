@@ -225,7 +225,12 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .welcome .engbar-fill { height:100%; width:0%; border-radius:3px;
         background:linear-gradient(90deg, var(--grad-a), var(--grad-b)); transition:width .2s ease; }
 @media (prefers-reduced-motion: reduce){ .welcome .engbar-fill { transition:none; } }
-.status { font-size:11px; padding:3px 14px calc(2px + env(safe-area-inset-bottom));
+/* The bar centres its text vertically and reserves only the clearance the home
+   indicator actually needs (~the inset minus 18px), so "Ready." sits low in the
+   bar instead of leaving a tall empty strip beneath it. max() keeps a safe floor
+   on devices with no inset. */
+.status { font-size:11px; display:flex; align-items:center;
+          padding:4px 14px max(4px, calc(env(safe-area-inset-bottom) - 18px));
           border-top:1px solid var(--line); background:var(--panel); color:var(--muted);
           min-height:0; line-height:1.3; }
 .status.ok { color:var(--ok); font-weight:600; background:rgba(63,185,80,.07); }
