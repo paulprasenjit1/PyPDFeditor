@@ -46,8 +46,16 @@ header .meta { color:var(--muted); font-size:10px; margin-left:auto; text-align:
    segmented group absorbs spare width and every control may shrink (min-width:0)
    so the row fits any iPhone; on a very narrow device a seg label ellipsises as
    the last-resort safety valve instead of pushing the row into a scroll. */
-.toolbar { display:flex; flex-wrap:nowrap; gap:4px; padding:2px 6px; background:var(--panel);
-           border-bottom:1px solid var(--line); align-items:stretch; overflow:hidden; }
+.toolbar { order:4; display:flex; flex-wrap:nowrap; gap:4px;
+           padding:3px 6px calc(3px + env(safe-area-inset-bottom)); background:var(--panel);
+           border-top:1px solid var(--line); align-items:stretch; overflow:hidden; }
+/* Toolbar relocated to the BOTTOM (native iOS bottom-toolbar pattern). flex
+   order restacks header → find → viewer → toast → toolbar without touching the
+   DOM, so every ID, handler and test keeps working. */
+header { order:0; }
+.findbar { order:1; }
+.viewer { order:2; }
+.status { order:3; }
 .toolbar > * { flex:0 1 auto; min-width:0; white-space:nowrap; }
 button { background:linear-gradient(180deg, var(--grad-a), var(--grad-b)); color:#fff; border:0;
          border-radius:9px; padding:9px 10px; font-size:13px; cursor:pointer;
@@ -71,7 +79,7 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
    default and revealed (.show, added by refreshZoomButtons) only while a
    document is open. Moving it out of the toolbar fixed the long-standing issue
    where zoom disappeared entirely on every iPhone (<600px). */
-.zoomctl { position:fixed; right:12px; bottom:calc(56px + env(safe-area-inset-bottom));
+.zoomctl { position:fixed; right:12px; bottom:calc(64px + env(safe-area-inset-bottom));
            z-index:55; display:none; align-items:center; gap:2px;
            background:var(--panel); border:1px solid var(--line); border-radius:18px;
            padding:3px; box-shadow:0 4px 14px var(--shadow); }
@@ -98,7 +106,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 
 /* Floating Undo pill (bottom-left). Mirrors the zoom pill on the right; shown
    by refreshUndo() only while the undo stack is non-empty. */
-.undofab { position:fixed; left:12px; bottom:calc(56px + env(safe-area-inset-bottom));
+.undofab { position:fixed; left:12px; bottom:calc(64px + env(safe-area-inset-bottom));
            z-index:55; display:none; flex-direction:row; align-items:center; gap:6px;
            background:var(--panel); border:1px solid var(--line); border-radius:18px;
            padding:7px 13px 7px 11px; color:var(--txt); box-shadow:0 4px 14px var(--shadow); }
@@ -130,7 +138,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 /* Edge-to-edge: only a hairline gutter so the page fills as much width as
    possible. Pages stay top-aligned (column flex, default justify-content) and
    horizontally centred (align-items). */
-.viewer { flex:1; overflow:auto; padding:8px 4px calc(10px + env(safe-area-inset-bottom));
+.viewer { flex:1; overflow:auto; padding:8px 4px 10px;
           display:flex; flex-direction:column; gap:10px; -webkit-overflow-scrolling:touch;
           align-items:safe center; touch-action:pan-x pan-y; }
 .pagewrap { display:flex; flex-direction:column; gap:10px; align-items:safe center; }
@@ -244,7 +252,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    bar instead of leaving a tall empty strip beneath it. max() keeps a safe floor
    on devices with no inset. */
 .status { font-size:11px; display:flex; align-items:center;
-          padding:4px 14px max(2px, calc(env(safe-area-inset-bottom) - 24px));
+          padding:4px 14px;
           border-top:1px solid var(--line); background:var(--panel); color:var(--muted);
           min-height:0; line-height:1.3; }
 /* When the toast has faded (textContent cleared) the bar collapses completely —
@@ -259,7 +267,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    shortcut — tap it to open Go to page — so it gets an accent outline and is
    only tappable while visible (pointer-events:auto on .show). */
 .pgpill { position:fixed; left:50%; transform:translateX(-50%);
-          bottom:calc(56px + env(safe-area-inset-bottom)); z-index:50;
+          bottom:calc(64px + env(safe-area-inset-bottom)); z-index:50;
           background:rgba(13,15,20,.92); color:#fff; font-size:12px; font-weight:600;
           padding:6px 13px; border-radius:15px; border:1.5px solid var(--accent);
           opacity:0; pointer-events:none; cursor:pointer; transition:opacity .25s ease; }
