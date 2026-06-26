@@ -1,22 +1,19 @@
 /* PyPDF Editor — all styles live in this external sheet so the CSP can be
    `style-src 'self'` (no inline styles, no style attributes anywhere). */
 
-:root { --bg:#0b0d12; --panel:#141823; --panel2:#1a1f2d; --line:#272e3d; --txt:#e8ebf2;
-        --muted:#8d95a8; --accent:#5b95ff; --accent2:#1f6feb; --grad-a:#3b82f6; --grad-b:#1d5fd6;
-        --ok:#3fb950; --warn:#d29922; --err:#f85149;
-        --scrolltrack:#0b0d12; --scrollthumb:#3d6fd6; --shadow:rgba(0,0,0,.55);
-        --pill-bg:rgba(48,54,72,.85); --pill-fg:#f3f5fa; }
-/* automatic light theme — follows the iPhone's system setting; the scanner
-   screens stay dark by design (they are hard-coded camera-black) */
-@media (prefers-color-scheme: light){
-  :root { --bg:#eef0f5; --panel:#ffffff; --panel2:#f6f7fa; --line:#d9dde6; --txt:#1b1e27;
-          --muted:#68707f; --accent:#2563eb; --accent2:#1f6feb; --grad-a:#4f8cff; --grad-b:#2563eb;
-          --ok:#1a7f37; --warn:#9a6700; --err:#cf222e;
-          --scrolltrack:#e3e6ee; --scrollthumb:#9db8ec; --shadow:rgba(30,40,70,.25);
-          --pill-bg:rgba(45,52,68,.70); --pill-fg:#ffffff; }
-}
+/* OLED dark — the only theme. Pure-black base (#000) lets OLED pixels switch
+   off; chrome and cards step up through iOS-style elevated greys. The light
+   theme was removed intentionally so the app is dark everywhere, regardless of
+   the iPhone's system setting. color-scheme:dark below tells iOS form controls,
+   scrollbars and the keyboard to render dark to match. */
+:root { color-scheme:dark;
+        --bg:#000000; --panel:#1c1c1e; --panel2:#2c2c2e; --line:#3a3a3c; --txt:#f5f5f7;
+        --muted:#9a9aa0; --accent:#0a84ff; --accent2:#0060df; --grad-a:#0a84ff; --grad-b:#0060df;
+        --ok:#30d158; --warn:#ffd60a; --err:#ff453a;
+        --scrolltrack:#000000; --scrollthumb:#48484a; --shadow:rgba(0,0,0,.7);
+        --pill-bg:rgba(44,44,46,.92); --pill-fg:#f5f5f7; }
 * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-html { background:var(--panel); }
+html { background:var(--bg); }
 html,body { margin:0; height:100%; overscroll-behavior:none; }
 body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
        background:var(--bg); color:var(--txt); display:flex; flex-direction:column;
