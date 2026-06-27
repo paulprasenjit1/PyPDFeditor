@@ -1386,8 +1386,9 @@ $("sigInput").onchange = async e=>{
   showSpin(true,"Loading signature…");
   try {
     const url = await fileToDataURL(f);
-    // signatures are placed as-is, with their own background kept
-    signImgDataUrl = await toPng(url);
+    // Remove the white paper background so the signature blends onto the PDF
+    // page colour (like Adobe Sign), instead of sitting in a visible white box.
+    signImgDataUrl = await signatureToTransparentPng(url);
     setMode("sign");
   } catch(err){ setStatus("Could not load that image: "+friendly(err),"err"); }
   showSpin(false); e.target.value="";
@@ -2826,6 +2827,45 @@ async function toPng(dataUrl){
   const im=await loadImage(dataUrl);
   const c=document.createElement("canvas"); c.width=im.naturalWidth; c.height=im.naturalHeight;
   c.getContext("2d").drawImage(im,0,0);
+  return c.toDataURL("image/png");
+}
+// Knock out a signature photo's paper background so only the ink shows, the way
+// Adobe Sign does — the result blends onto any PDF page colour instead of sitting
+// in a visible box. This is colour-aware, not a flat white threshold: real
+// signatures are often photographed on off-white, grey, or shadowed paper (corner
+// luminance well below pure white and uneven across the image). A flat threshold
+// would leave a grey rectangle or shadow. Instead each pixel is kept by the
+// stronger of two ink cues:
+//   • darkness  — ink strokes are much darker than paper (covers black ink too)
+//   • colour    — ink is saturated (blue/black pen) while paper/shadow is neutral
+// Neutral, light pixels (paper + soft shadows) score low on both → transparent.
+// Both cues ramp smoothly so stroke edges stay anti-aliased. Already-transparent
+// PNGs are preserved (we only ever lower alpha, never raise it).
+async function signatureToTransparentPng(dataUrl){
+  const im = await loadImage(dataUrl);
+  const w = im.naturalWidth, hh = im.naturalHeight;
+  const c = document.createElement("canvas"); c.width=w; c.height=hh;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(im,0,0);
+  let id;
+  try { id = ctx.getImageData(0,0,w,hh); }
+  catch(e){ return c.toDataURL("image/png"); }   // tainted canvas → leave as-is
+  const d = id.data;
+  // Darkness cue: fully opaque at/below DARK_LO, transparent above DARK_HI.
+  const DARK_LO = 110, DARK_HI = 175;
+  // Colour cue: neutral below SAT_LO, fully "ink" at/above SAT_HI.
+  const SAT_LO = 25,  SAT_HI = 60;
+  const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+  for (let i=0;i<d.length;i+=4){
+    const r=d[i], g=d[i+1], b=d[i+2];
+    const lum = 0.299*r + 0.587*g + 0.114*b;
+    const sat = Math.max(r,g,b) - Math.min(r,g,b);
+    const darkScore  = clamp01((DARK_HI - lum) / (DARK_HI - DARK_LO));
+    const colorScore = clamp01((sat - SAT_LO) / (SAT_HI - SAT_LO));
+    const keep = Math.max(darkScore, colorScore);   // 1 = full ink, 0 = paper
+    d[i+3] = Math.round(d[i+3] * keep);
+  }
+  ctx.putImageData(id,0,0);
   return c.toDataURL("image/png");
 }
 function downloadBlob(blob, name){
