@@ -237,7 +237,12 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
         background:linear-gradient(120deg, var(--txt) 30%, var(--accent));
         -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
 .welcome .big { width:min(280px,80vw); padding:16px 18px; font-size:17px; border-radius:15px;
+        display:inline-flex; align-items:center; justify-content:center; gap:10px;
         box-shadow:0 8px 24px rgba(43,99,235,.30); }
+/* welcome buttons use the same line-glyph SVG set as the toolbar (no emoji), so
+   the empty state matches the rest of the app; sized a touch larger to suit the
+   big buttons. */
+.welcome .big svg.ic { width:21px; height:21px; flex:0 0 auto; }
 .welcome .big.ghost { border-width:1.5px; box-shadow:none; }
 /* engine download progress bar — inserted by engine-watchdog.js on first launch
    only (the ~10MB WASM engine). Fill width is set via the CSSOM (CSP-safe). */

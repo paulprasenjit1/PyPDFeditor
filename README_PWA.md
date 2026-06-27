@@ -78,8 +78,11 @@ Compress · Save** — with the rest under **More ▾**.
   base-14 approach. Exotic embedded fonts are approximated, not reproduced.
 - **Characters:** replacement text uses the WinAnsi character set; very unusual
   glyphs are substituted with `?` so an edit never fails outright.
-- **Rotated pages:** text-edit and signature placement assume an upright
-  (0°) page, which covers almost all documents.
+- **Rotated pages:** text-edit and signature placement work best on an upright
+  (0°) page, which covers almost all documents. When a page carries a rotation,
+  the app now detects it and warns before you edit text or place a signature, so
+  you can rotate the page back first (More → Pages) or continue knowingly rather
+  than have the change land silently in the wrong place.
 
 ## Licensing note (important if you share it publicly)
 

@@ -4,6 +4,24 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.73] — 2026-06-27 — Consistent empty-state icons; review pass
+
+- **The welcome screen now uses the app's own line-glyph icons** instead of the
+  📄 / 📷 emoji. The two big buttons (Open a PDF, Scan a document) carry the same
+  stroked SVG set as the toolbar and More menu, so the first thing you see on
+  launch matches the rest of the app rather than rendering platform emoji.
+- **Review confirmation (no behaviour change):** verified that destructive actions
+  are recoverable — Undo keeps up to 10 steps (memory-capped), and delete-pages
+  (Organize), Combine and Compress all push an Undo step; on very large files where
+  a snapshot would risk the iOS per-tab memory limit the action still proceeds and
+  says so. Rasterising a text PDF during Compress already asks first
+  (Keep text / Make smallest). Rotated-page text edits and signature placement
+  already warn before they run. The README "Known limits" note was updated to
+  describe that warning rather than imply a silent limitation.
+- Every long-running action shows specific spinner text (e.g. "Combining 3 PDFs…",
+  "Compressing… page 4 of 12"); confirmed no action falls back to a bare
+  "Working…".
+
 ## [v10.59] — 2026-06-24 — Find: fit, first-match, fresh box
 
 - **The find bar now fits the screen.** The close ✕ was being clipped off the
