@@ -4,6 +4,19 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.80] — 2026-06-28 — Restore document colour depth
+
+- **Document scans regain the v10.76 / v3 punch.** v10.77 had made the document
+  auto-contrast hue-preserving and softened it (percentiles 2/98 → 1/99) — needed
+  then because ID cards ran through this same path, but it left text pages
+  brighter and washed (blue ink and red letterhead noticeably duller). Now that
+  Photo ID has its own `idCardEnhance` path, `applyAutoContrast` is restored to
+  the original PER-CHANNEL 2/98 stretch, which deepens coloured ink and gives
+  documents their vivid scanned look. The document colour pipeline is now
+  identical to the v10.76 build the scans were tuned to.
+- Photo ID mode is unaffected (it does not use this path), so the ID-card colour
+  fix stays.
+
 ## [v10.79] — 2026-06-28 — Photo ID mode (card on a white A4 page)
 
 - **New "Photo ID" mode** on the adjust screen, beside Standard / Small / Whiten.

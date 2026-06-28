@@ -65,38 +65,26 @@ export function homographyTo(q,W,H){
 }
 
 // ---- output filters (raw RGBA array versions) ----
-// Colour: gentle auto-contrast (stretch the 1st–99th luminance percentiles).
-// v10.77 — HUE-PRESERVING. The old version applied the stretch LUT to each RGB
-// channel independently, which on bright COLOURED content (a cream laminated ID
-// card, a photo) pulled the channels apart and forced the region toward a
-// vivid, unnatural yellow while crushing dark photo/QR detail to black. Now the
-// stretch is computed on LUMINANCE only and each pixel's R/G/B are scaled by the
-// SAME factor (newLuma/oldLuma), so the hue and saturation ratio are preserved —
-// the page still gains contrast, but colours keep the natural tone seen at
-// capture. For a neutral page (R=G=B) this is identical to the old behaviour, so
-// text-on-white scans are unchanged. Percentiles eased 2/98 → 1/99 to reduce
-// dark crush, and the scale is clamped so nothing blows out or vanishes.
+// Colour: gentle auto-contrast (stretch the 2nd–98th luminance percentiles).
+// PER-CHANNEL by design: applying the stretch LUT to each R/G/B channel deepens
+// dark coloured ink (blue pen, red letterhead) and gives documents their punchy,
+// vivid "scanned" look — the v10.76 behaviour the document scans are tuned for.
+// (It was briefly made hue-preserving in v10.77 to protect ID cards, which
+// dulled documents; ID cards now have their own idCardEnhance path, so this is
+// per-channel again for documents only — colourBalanceCore is NOT used by Photo
+// ID mode, so the card colour fix is unaffected.)
 export function applyAutoContrast(d,w,h){
   const n=w*h;
   const hist=new Uint32Array(256);
   for (let i=0;i<n;i++){ const j=i*4; hist[(d[j]*77+d[j+1]*151+d[j+2]*28)>>8]++; }
   let lo=0,hi=255,acc=0;
-  for (let t=0;t<256;t++){ acc+=hist[t]; if(acc>=n*0.01){ lo=t; break; } }
+  for (let t=0;t<256;t++){ acc+=hist[t]; if(acc>=n*0.02){ lo=t; break; } }
   acc=0;
-  for (let t=255;t>=0;t--){ acc+=hist[t]; if(acc>=n*0.01){ hi=t; break; } }
+  for (let t=255;t>=0;t--){ acc+=hist[t]; if(acc>=n*0.02){ hi=t; break; } }
   if (hi-lo<30) return;
   const lut=new Uint8Array(256);
   for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round((t-lo)*255/(hi-lo))));
-  for (let i=0;i<n;i++){
-    const j=i*4;
-    const oldL=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
-    const newL=lut[oldL];
-    const s=newL/Math.max(1,oldL);           // single hue-preserving gain
-    const g=s<0 ? 0 : (s>4 ? 4 : s);
-    d[j]  =Math.min(255, d[j]  *g);
-    d[j+1]=Math.min(255, d[j+1]*g);
-    d[j+2]=Math.min(255, d[j+2]*g);
-  }
+  for (let i=0;i<n;i++){ const j=i*4; d[j]=lut[d[j]]; d[j+1]=lut[d[j+1]]; d[j+2]=lut[d[j+2]]; }
 }
 // Colour "clean scan" pipeline (v10.17). Two safe, GLOBAL steps — deliberately
 // NOT the v10.14 "magic scan" (that used a per-tile illumination map + unsharp
