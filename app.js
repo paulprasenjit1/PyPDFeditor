@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.73";
+const APP_BUILD = "10.74";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -86,7 +86,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jun 2026";   // v10.73
+const BUILD_DATETIME = "28 Jun 2026";   // v10.74
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -1865,7 +1865,28 @@ let scanQuality = "std";      // "std" | "small" — JPEG quality + output size
 try { if (localStorage.getItem("scanQuality")==="small") scanQuality="small"; } catch(e){}
 let scanEnhance = true;       // "Whiten": flatten illumination so paper reads white
 try { if (localStorage.getItem("scanEnhance")==="0") scanEnhance=false; } catch(e){}
-const SCAN_Q = { std:{ jpeg:0.95, maxDim:2560 }, small:{ jpeg:0.62, maxDim:1400 } };
+// v10.74: std now warps to a larger long side (was 2560) so the higher-res 4K
+// capture keeps its detail instead of being shrunk away. File size is held in
+// check by encodeUnderBudget() (size-budgeted adaptive JPEG) rather than a
+// fixed quality, so sparse document pages stay well under ~1.45 MB while dense
+// pages settle to a slightly lower quality automatically. "small" is unchanged.
+const SCAN_Q = { std:{ jpeg:0.92, maxDim:3200, budget:1450000, qFloor:0.80 },
+                 small:{ jpeg:0.62, maxDim:1400 } };
+// Encode a canvas to JPEG, stepping quality down only if the blob exceeds the
+// byte budget (document scans are mostly white and compress well, so a sparse
+// page keeps the top quality; a dense page eases down to fit). No budget → a
+// single encode at the given quality (preserves "small" mode behaviour).
+async function encodeUnderBudget(canvas, q0, budget, qFloor){
+  const enc = q => new Promise(res=>canvas.toBlob(res,"image/jpeg",q));
+  let blob = await enc(q0);
+  if (!budget) return blob;
+  let q = q0;
+  while (blob && blob.size > budget && q > (qFloor||0.80) + 0.001){
+    q = Math.max(qFloor||0.80, q - 0.04);
+    blob = await enc(q);
+  }
+  return blob;
+}
 let dragIdx = -1;             // corner handle being dragged
 let torchOn = false;          // rear-camera torch state
 
@@ -1990,12 +2011,23 @@ function openScanPageSheet(i){
 async function startCamera(){
   stopCamera();
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ enterFallback(); return; }
-  try {
-    scanStream = await navigator.mediaDevices.getUserMedia({
-      audio:false,
-      video:{ facingMode:{ideal:"environment"}, width:{ideal:2560}, height:{ideal:1440} }
-    });
-  } catch(e){ enterFallback(); return; }
+  // v10.74: request the full sensor resolution the device can give. iPhone Pro
+  // models stream up to 4K (3840×2160) — ~2.25× the pixels of the old 1440p
+  // request — which is the single biggest driver of scan sharpness (the warp +
+  // filters were never the bottleneck; capture resolution was). We try 4K first
+  // and walk down a fallback chain so older/locked-down devices still get a
+  // stream. `continuous` focus keeps handheld captures crisp.
+  const camTries = [
+    { facingMode:{ideal:"environment"}, width:{ideal:3840}, height:{ideal:2160}, focusMode:"continuous" },
+    { facingMode:{ideal:"environment"}, width:{ideal:2560}, height:{ideal:1440} },
+    { facingMode:{ideal:"environment"} }
+  ];
+  scanStream = null;
+  for (const v of camTries){
+    try { scanStream = await navigator.mediaDevices.getUserMedia({ audio:false, video:v }); break; }
+    catch(e){ /* try the next, less-demanding constraint set */ }
+  }
+  if (!scanStream){ enterFallback(); return; }
   const v = $("scanVideo");
   v.srcObject = scanStream;
   try { await v.play(); } catch(e){ /* autoplay is allowed: muted+playsinline */ }
@@ -2440,7 +2472,8 @@ $("cropUse").onclick = async ()=>{
     }
     const c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
     c.getContext("2d").putImageData(out,0,0);
-    const blob = await new Promise(res=>c.toBlob(res,"image/jpeg",(SCAN_Q[scanQuality]||SCAN_Q.std).jpeg));
+    const QQ = SCAN_Q[scanQuality] || SCAN_Q.std;
+    const blob = await encodeUnderBudget(c, QQ.jpeg, QQ.budget, QQ.qFloor);
     // small thumbnail (112px tall ≈ 56 css px at 2×) for the review strip
     const tc=document.createElement("canvas");
     tc.height=112; tc.width=Math.max(8,Math.round(out.width*112/out.height));
