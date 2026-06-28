@@ -2,7 +2,7 @@
 import * as mupdf from "./vendor/mupdf/mupdf.js";
 // shared scanner pixel math + edge detection (also imported by the scan worker
 // — one source of truth for the warp, filters and document edge detection)
-import { warpCore, colourBalanceCore, detectQuad, flattenIllumination, documentEnhance } from "./scan-core.js";
+import { warpCore, colourBalanceCore, detectQuad, flattenIllumination, documentEnhance, idCardEnhance } from "./scan-core.js";
 
 const $ = id => document.getElementById(id);
 const PDFLib = window.PDFLib;
@@ -14,12 +14,12 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.78";
+const APP_BUILD = "10.79";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
-    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","cropReset","cropRetake","cropUse"];
+    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","idToggle","cropReset","cropRetake","cropUse"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
     try { sessionStorage.removeItem("pypdf-healed"); } catch(e){}
@@ -86,7 +86,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "28 Jun 2026";   // v10.78
+const BUILD_DATETIME = "28 Jun 2026";   // v10.79
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -1869,6 +1869,8 @@ let scanQuality = "std";      // "std" | "small" — JPEG quality + output size
 try { if (localStorage.getItem("scanQuality")==="small") scanQuality="small"; } catch(e){}
 let scanEnhance = true;       // "Whiten": flatten illumination so paper reads white
 try { if (localStorage.getItem("scanEnhance")==="0") scanEnhance=false; } catch(e){}
+let scanIdMode = false;       // v10.79 "Photo ID": light, colour-true card placed on a white A4 page
+try { if (localStorage.getItem("scanIdMode")==="1") scanIdMode=true; } catch(e){}
 // v10.74: std now warps to a larger long side (was 2560) so the higher-res 4K
 // capture keeps its detail instead of being shrunk away. File size is held in
 // check by encodeUnderBudget() (size-budgeted adaptive JPEG) rather than a
@@ -2425,6 +2427,44 @@ function setScanEnhance(on){
   $("enhToggle").setAttribute("aria-pressed", String(scanEnhance));
   renderCropPreview();
 }
+// "Photo ID": treat the selected region as an ID/photo card — process it light and
+// colour-true (no ink-deepen/whiten) and drop it onto a clean white A4 page, like
+// a flatbed ID scan. Mutually exclusive with Whiten (the document polish).
+try { $("idToggle").classList.toggle("on", scanIdMode); $("idToggle").setAttribute("aria-pressed", String(scanIdMode)); } catch(e){}
+$("idToggle").onclick = ()=> setScanIdMode(!scanIdMode);
+function setScanIdMode(on){
+  scanIdMode = !!on;
+  try { localStorage.setItem("scanIdMode", scanIdMode ? "1" : "0"); } catch(e){}
+  $("idToggle").classList.toggle("on", scanIdMode);
+  $("idToggle").setAttribute("aria-pressed", String(scanIdMode));
+  if (scanIdMode){            // Whiten/document polish would fight the ID look
+    scanEnhance = false;
+    try { localStorage.setItem("scanEnhance","0"); } catch(e){}
+    $("enhToggle").classList.toggle("on", false);
+    $("enhToggle").setAttribute("aria-pressed","false");
+    setStatus("Photo ID mode: the card will be placed on a white A4 page. Frame just the card.","ok");
+  }
+  renderCropPreview();
+}
+// Place an enhanced card canvas centred in the upper third of a clean white A4
+// page (portrait), at near-real scale — the Epson-style ID scan look. Returns a
+// canvas. A4 is rendered at ~300 dpi; the white field compresses to almost
+// nothing, so the file stays well under the size budget.
+function compositeCardOnA4(cardCanvas){
+  const PAGE_W = 2480, PAGE_H = 3508;          // A4 @ 300 dpi, portrait
+  const TARGET_W = Math.round(PAGE_W*0.46);     // card width ≈ 46% of the page
+  const cw = cardCanvas.width, ch = cardCanvas.height;
+  let dw = TARGET_W, dh = Math.round(TARGET_W*ch/cw);
+  const maxH = Math.round(PAGE_H*0.42);         // don't let a tall card run long
+  if (dh > maxH){ dh = maxH; dw = Math.round(maxH*cw/ch); }
+  const x = Math.round((PAGE_W-dw)/2), y = Math.round(PAGE_H*0.17);
+  const c = document.createElement("canvas"); c.width=PAGE_W; c.height=PAGE_H;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,PAGE_W,PAGE_H);
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(cardCanvas, x, y, dw, dh);
+  return c;
+}
 // draw the captured photo onto the crop canvas with the active filter applied,
 // so Colour / B&W switch what you see instantly (preview runs at display
 // resolution — the final page is processed at full resolution on "Use page")
@@ -2435,6 +2475,7 @@ function renderCropPreview(){
   const ctx=ph.getContext("2d",{willReadFrequently:true});
   ctx.drawImage(capFrame,0,0,ph.width,ph.height);
   const im=ctx.getImageData(0,0,ph.width,ph.height);
+  if (scanIdMode){ idCardEnhance(im.data, im.width, im.height); ctx.putImageData(im,0,0); return; }
   colourBalanceCore(im.data, im.width, im.height);
   if (scanEnhance){ flattenIllumination(im.data, im.width, im.height);
     documentEnhance(im.data, im.width, im.height); }   // natural Lens polish (v10.75)
@@ -2475,19 +2516,32 @@ $("cropUse").onclick = async ()=>{
     const q = cropUserAdjusted
       ? orderQuad(cropQuad)
       : insetQuad(orderQuad(cropQuad), 0.008);
-    // preferred path: warp + filter in the worker (UI stays responsive)
-    const sctx = capFrame.getContext("2d",{willReadFrequently:true});
     const Q = SCAN_Q[scanQuality] || SCAN_Q.std;
-    let out = await processPageOffThread(
-      sctx.getImageData(0,0,capFrame.width,capFrame.height), q, cropFilter, Q.maxDim, scanEnhance);
-    if (!out){                                 // fallback: same math, main thread
-      out = warpPerspective(capFrame, q, Q.maxDim);
-      colourBalanceCore(out.data, out.width, out.height);
-      if (scanEnhance){ flattenIllumination(out.data, out.width, out.height);
-        documentEnhance(out.data, out.width, out.height); }   // natural Lens polish (v10.75)
+    let out, c;
+    if (scanIdMode){
+      // Photo ID: warp just the card, enhance it light + colour-true, then
+      // composite it onto a clean white A4 page (Epson-style ID scan).
+      showSpin(true,"Placing ID on a white page…");
+      out = warpPerspective(capFrame, q, 1800);          // card long side ≤1800
+      idCardEnhance(out.data, out.width, out.height);
+      const card=document.createElement("canvas"); card.width=out.width; card.height=out.height;
+      card.getContext("2d").putImageData(out,0,0);
+      c = compositeCardOnA4(card);
+      out = { width:c.width, height:c.height };           // page dims for the record
+    } else {
+      // preferred path: warp + filter in the worker (UI stays responsive)
+      const sctx = capFrame.getContext("2d",{willReadFrequently:true});
+      out = await processPageOffThread(
+        sctx.getImageData(0,0,capFrame.width,capFrame.height), q, cropFilter, Q.maxDim, scanEnhance);
+      if (!out){                                 // fallback: same math, main thread
+        out = warpPerspective(capFrame, q, Q.maxDim);
+        colourBalanceCore(out.data, out.width, out.height);
+        if (scanEnhance){ flattenIllumination(out.data, out.width, out.height);
+          documentEnhance(out.data, out.width, out.height); }   // natural Lens polish (v10.75)
+      }
+      c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
+      c.getContext("2d").putImageData(out,0,0);
     }
-    const c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
-    c.getContext("2d").putImageData(out,0,0);
     const QQ = SCAN_Q[scanQuality] || SCAN_Q.std;
     const blob = await encodeUnderBudget(c, QQ.jpeg, QQ.budget, QQ.qFloor);
     // small thumbnail (112px tall ≈ 56 css px at 2×) for the review strip

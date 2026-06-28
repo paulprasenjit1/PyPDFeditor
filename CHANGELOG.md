@@ -4,6 +4,18 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.79] — 2026-06-28 — Photo ID mode (card on a white A4 page)
+
+- **New "Photo ID" mode** on the adjust screen, beside Standard / Small / Whiten.
+  Frame just the ID/photo card and tap Use page: the card is perspective-warped,
+  processed light and colour-true — a partial (55%) white balance for accurate
+  colour, a gentle midtone gamma lift so the FACE stays bright, a light unsharp,
+  and crucially NO ink-deepen / no whiten — then composited centred in the upper
+  third of a clean white A4 page, the way a flatbed (Epson) ID scan looks.
+- Turning Photo ID on switches Whiten off (the document polish would fight the
+  card look). The white A4 field compresses to almost nothing, so these pages are
+  small despite the full-resolution card.
+
 ## [v10.78] — 2026-06-28 — Restore ink depth for handwriting (colour pen)
 
 - **Handwriting and coloured pen are crisp and dark again.** v10.77's colour-safe

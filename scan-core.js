@@ -249,6 +249,69 @@ export function documentEnhance(d, w, h){
     d[j+2]=Math.max(0,Math.min(255, d[j+2]+add)); }
 }
 
+// ---- Photo-ID enhance (v10.79) ----
+// For "Photo ID" mode the goal is the OPPOSITE of the document pipeline: keep the
+// portrait LIGHT and the colours TRUE to what the camera saw (no ink-deepen, no
+// contrast crush, no paper-flatten). Three gentle, colour-faithful steps:
+//   1) Partial grey-world white balance (blended at 55%, low gain cap) — removes a
+//      room/light cast for accuracy WITHOUT forcing the card fully neutral, so the
+//      real card tint is preserved.
+//   2) Midtone LIFT via a gentle gamma (0.85) applied as a hue-preserving
+//      luminance gain — brightens the face and mid-tones while leaving bright
+//      laminate/highlights alone, so the portrait no longer reads dark.
+//   3) A light 1px unsharp for crisp card text. No darkening anywhere.
+export function idCardEnhance(d, w, h){
+  const n = w*h;
+  // 1) partial white balance for colour accuracy
+  const hl=new Uint32Array(256);
+  for (let i=0;i<n;i++){ const j=i*4; hl[(d[j]*77+d[j+1]*151+d[j+2]*28)>>8]++; }
+  let acc=0, thr=0;
+  for (let t=0;t<256;t++){ acc+=hl[t]; if (acc>=n*0.60){ thr=t; break; } }
+  if (thr<110) thr=110;
+  let sR=0,sG=0,sB=0,c=0;
+  for (let i=0;i<n;i++){ const j=i*4; const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+    if (L>=thr){ sR+=d[j]; sG+=d[j+1]; sB+=d[j+2]; c++; } }
+  if (c>0){
+    const mR=sR/c, mG=sG/c, mB=sB/c, mean=(mR+mG+mB)/3;
+    const offAxis = Math.abs(mG-(mR+mB)/2)/Math.max(1,mean);
+    if (offAxis < 0.12){
+      const TGT=248, GMAX=1.6, BLEND=0.55;
+      const mk=(m)=>{ let g=Math.min(GMAX, Math.max(1, TGT/Math.max(1,m))); return 1+(g-1)*BLEND; };
+      const gr=mk(mR), gg=mk(mG), gb=mk(mB);
+      const lr=new Uint8Array(256), lg=new Uint8Array(256), lb=new Uint8Array(256);
+      for (let t=0;t<256;t++){ lr[t]=Math.min(255,Math.round(t*gr)); lg[t]=Math.min(255,Math.round(t*gg)); lb[t]=Math.min(255,Math.round(t*gb)); }
+      for (let i=0;i<n;i++){ const j=i*4; d[j]=lr[d[j]]; d[j+1]=lg[d[j+1]]; d[j+2]=lb[d[j+2]]; }
+    }
+  }
+  // 2) shadow / midtone LIFT — hue-preserving luminance gain. A gamma curve
+  //    (0.72) brightens the face and mid-tones strongly while leaving bright
+  //    laminate near-unchanged, plus a small extra push on the very darkest
+  //    pixels so a shadowed portrait never reads as a black blob. Capped so it
+  //    only ever brightens.
+  const lut=new Float32Array(256);
+  for (let t=0;t<256;t++){
+    let v=255*Math.pow(t/255, 0.72);
+    v += (1 - t/255) * 14;            // gentle lift of deep shadows
+    lut[t]=Math.min(255, v);
+  }
+  for (let i=0;i<n;i++){
+    const j=i*4; const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+    const g=Math.min(2.0, lut[L]/Math.max(1,L));
+    d[j]  =Math.min(255, d[j]  *g);
+    d[j+1]=Math.min(255, d[j+1]*g);
+    d[j+2]=Math.min(255, d[j+2]*g);
+  }
+  // 3) light unsharp for crisp card text
+  const L2=new Float32Array(n);
+  for (let i=0;i<n;i++){ const j=i*4; L2[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
+  const blur=new Float32Array(L2); boxBlurF(blur, w, h, 1);
+  const SH=0.30;
+  for (let i=0;i<n;i++){ const j=i*4; const add=(L2[i]-blur[i])*SH;
+    d[j]  =Math.max(0,Math.min(255, d[j]  +add));
+    d[j+1]=Math.max(0,Math.min(255, d[j+1]+add));
+    d[j+2]=Math.max(0,Math.min(255, d[j+2]+add)); }
+}
+
 // ---- illumination flattening ("whiten paper", optional) ----
 // Evens out uneven lighting / shadows so crumpled or shadowed paper reads as
 // uniform white, WITHOUT the dark halos around text that a small-radius unsharp
