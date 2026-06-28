@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.80";
+const APP_BUILD = "10.81";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -86,7 +86,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "28 Jun 2026";   // v10.80
+const BUILD_DATETIME = "28 Jun 2026";   // v10.81
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -1893,6 +1893,36 @@ async function encodeUnderBudget(canvas, q0, budget, qFloor){
   }
   return blob;
 }
+// v10.81: encode a scan page to JPEG using MuPDF's real codec, stepping quality
+// down to fit the byte budget. WHY: iOS Safari's canvas.toBlob() IGNORES the JPEG
+// quality argument, so encodeUnderBudget() above could never actually shrink a
+// page on iPhone (every quality produced the same large blob). MuPDF.asJPEG()
+// honours quality precisely, so the budget works. This only changes the bytes —
+// the pixels (all colour/contrast/ID enhancements) are already baked into the
+// canvas before this runs. Falls back to encodeUnderBudget() if MuPDF can't be
+// used (e.g. desktop test harness without a real canvas), so nothing breaks.
+async function encodeScanJpeg(canvas, q0, budget, qFloor){
+  try {
+    const w=canvas.width, h=canvas.height;
+    const rgba=canvas.getContext("2d").getImageData(0,0,w,h).data;
+    const pix=new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0,0,w,h], false);  // RGB, no alpha
+    const stride=pix.getStride(), dst=pix.getPixels();
+    for (let y=0;y<h;y++){
+      let s=y*w*4, d=y*stride;
+      for (let x=0;x<w;x++){ dst[d]=rgba[s]; dst[d+1]=rgba[s+1]; dst[d+2]=rgba[s+2]; s+=4; d+=3; }
+    }
+    const floor=Math.round((qFloor||0.78)*100);
+    let q=Math.round((q0||0.92)*100);
+    let bytes=u8(pix.asJPEG(q));
+    if (budget){
+      while (bytes.length>budget && q>floor){ q=Math.max(floor, q-6); bytes=u8(pix.asJPEG(q)); }
+    }
+    pix.destroy();
+    return new Blob([bytes], {type:"image/jpeg"});
+  } catch(e){
+    return encodeUnderBudget(canvas, q0, budget, qFloor);   // safe fallback
+  }
+}
 let dragIdx = -1;             // corner handle being dragged
 let torchOn = false;          // rear-camera torch state
 
@@ -2543,7 +2573,7 @@ $("cropUse").onclick = async ()=>{
       c.getContext("2d").putImageData(out,0,0);
     }
     const QQ = SCAN_Q[scanQuality] || SCAN_Q.std;
-    const blob = await encodeUnderBudget(c, QQ.jpeg, QQ.budget, QQ.qFloor);
+    const blob = await encodeScanJpeg(c, QQ.jpeg, QQ.budget, QQ.qFloor);
     // small thumbnail (112px tall ≈ 56 css px at 2×) for the review strip
     const tc=document.createElement("canvas");
     tc.height=112; tc.width=Math.max(8,Math.round(out.width*112/out.height));

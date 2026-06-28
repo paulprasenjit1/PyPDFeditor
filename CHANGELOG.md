@@ -4,6 +4,20 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.81] — 2026-06-28 — Fix scan file size on iPhone (MuPDF encoder)
+
+- **Scan pages now actually honour the size budget on iOS.** Root cause: iOS
+  Safari's `canvas.toBlob('image/jpeg', q)` IGNORES the quality argument, so the
+  adaptive `encodeUnderBudget` step-down produced the same large blob at every
+  quality and pages stayed ~1.8 MB regardless. The page is now JPEG-encoded with
+  the bundled MuPDF codec (`Pixmap.asJPEG(quality)`), which honours quality
+  precisely, and the quality is stepped down (from 92, floor 78) until the page
+  fits the ~1.4 MB budget. A dense form that used to come out 1.8 MB now lands
+  ~1.0 MB at quality 78.
+- Encoding only — the pixels (all colour/contrast, Photo ID, crop, whiten work)
+  are unchanged; this just changes how the already-finished image is compressed.
+  Falls back to the old canvas encoder if MuPDF is unavailable, so nothing breaks.
+
 ## [v10.80] — 2026-06-28 — Restore document colour depth
 
 - **Document scans regain the v10.76 / v3 punch.** v10.77 had made the document
