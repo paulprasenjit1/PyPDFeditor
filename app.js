@@ -2,7 +2,7 @@
 import * as mupdf from "./vendor/mupdf/mupdf.js";
 // shared scanner pixel math + edge detection (also imported by the scan worker
 // — one source of truth for the warp, filters and document edge detection)
-import { warpCore, colourBalanceCore, detectQuad, flattenIllumination } from "./scan-core.js";
+import { warpCore, colourBalanceCore, detectQuad, flattenIllumination, documentEnhance } from "./scan-core.js";
 
 const $ = id => document.getElementById(id);
 const PDFLib = window.PDFLib;
@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.74";
+const APP_BUILD = "10.75";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -86,7 +86,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "28 Jun 2026";   // v10.74
+const BUILD_DATETIME = "28 Jun 2026";   // v10.75
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -2427,7 +2427,8 @@ function renderCropPreview(){
   ctx.drawImage(capFrame,0,0,ph.width,ph.height);
   const im=ctx.getImageData(0,0,ph.width,ph.height);
   colourBalanceCore(im.data, im.width, im.height);
-  if (scanEnhance) flattenIllumination(im.data, im.width, im.height);
+  if (scanEnhance){ flattenIllumination(im.data, im.width, im.height);
+    documentEnhance(im.data, im.width, im.height); }   // natural Lens polish (v10.75)
   ctx.putImageData(im,0,0);
 }
 
@@ -2468,7 +2469,8 @@ $("cropUse").onclick = async ()=>{
     if (!out){                                 // fallback: same math, main thread
       out = warpPerspective(capFrame, q, Q.maxDim);
       colourBalanceCore(out.data, out.width, out.height);
-      if (scanEnhance) flattenIllumination(out.data, out.width, out.height);
+      if (scanEnhance){ flattenIllumination(out.data, out.width, out.height);
+        documentEnhance(out.data, out.width, out.height); }   // natural Lens polish (v10.75)
     }
     const c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
     c.getContext("2d").putImageData(out,0,0);

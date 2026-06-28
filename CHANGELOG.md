@@ -4,6 +4,32 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.75] — 2026-06-28 — Natural "Lens" document enhance
+
+- **Scans now get an Adobe Scan / Office Lens-style polish, but tone-preserving.**
+  A new `documentEnhance` pass (scan-core.js) runs by default after the colour
+  balance + illumination flatten, with three gentle steps: (1) *paperClean* —
+  edge-preserving smoothing applied ONLY to bright, low-gradient paper pixels, so
+  sensor grain on the blank page flattens (fewer JPEG bytes spent on noise → more
+  quality per byte) while text/ink edges stay perfectly sharp; (2) *inkDeepen* —
+  a soft tone pull on dark pixels only (≤18% at the darkest) so handwriting and
+  print "pop"; (3) a light 1px luminance unsharp for crisp glyphs. The paper's
+  natural cream tone and any watermark are deliberately NOT bleached to white.
+- Gated on the existing "Whiten" toggle, so it can be turned off. Output stays
+  under the ~1.45 MB budget via the adaptive JPEG step-down (a sparse page lands
+  ~1.3–1.4 MB at high quality).
+
+## [v10.74] — 2026-06-28 — Higher-resolution capture
+
+- **The scanner now requests 4K (3840×2160) from the camera** with a graceful
+  fallback chain (4K → 1440p → default) and a continuous-autofocus hint. On a
+  Pro iPhone this is ~2.25× the pixels of the old 1440p request — the single
+  biggest driver of scan sharpness (the warp + filters were never the bottleneck).
+- **`std` mode warps to a 3200 px long side** (was 2560) so the higher-res frame
+  keeps its detail, and a new **size-budgeted adaptive JPEG encoder** holds the
+  file under ~1.45 MB (starts at q0.92 and only steps down if needed). `small`
+  mode is unchanged.
+
 ## [v10.73] — 2026-06-27 — Consistent empty-state icons; review pass
 
 - **The welcome screen now uses the app's own line-glyph icons** instead of the

@@ -164,6 +164,66 @@ export function boxBlurF(a,w,h,r){
   }
 }
 
+// ---- natural "document" enhance (v10.75) ----
+// An Adobe Scan / Office Lens-style polish that is deliberately TONE-PRESERVING:
+// it does NOT bleach the paper to pure white (the watermark / natural cream tone
+// stays), it just makes the page read cleaner and the ink crisper. Three gentle
+// passes on the warped RGBA, run after colourBalanceCore (+ flattenIllumination):
+//   1) paperClean — edge-preserving smoothing applied ONLY to bright, low-
+//      gradient paper pixels. Sensor grain on the blank page flattens, so the
+//      JPEG spends far fewer bytes on noise (more quality per byte); text and
+//      ink edges have a high gradient, so the mask is ~0 there and they are left
+//      perfectly sharp.
+//   2) inkDeepen — a soft pull on dark pixels only (<150 luma). Letters gain
+//      contrast and "pop" like a Lens scan; paper and watermark tone unchanged.
+//   3) a light 1px luminance unsharp for crisp glyph edges.
+export function documentEnhance(d, w, h){
+  const n = w*h;
+  const L = new Float32Array(n);
+  for (let i=0;i<n;i++){ const j=i*4; L[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
+  // 4-neighbour gradient magnitude (cheap edge proxy)
+  const grad = new Float32Array(n);
+  for (let y=0;y<h;y++) for (let x=0;x<w;x++){
+    const i=y*w+x; let g=0;
+    if (x>0) g+=Math.abs(L[i]-L[i-1]);
+    if (y>0) g+=Math.abs(L[i]-L[i-w]);
+    grad[i]=g;
+  }
+  // 1) paperClean — blend toward a 3×3 average where the pixel is bright AND flat
+  const src = Uint8ClampedArray.from(d);
+  for (let y=0;y<h;y++) for (let x=0;x<w;x++){
+    const i=y*w+x;
+    const bright = Math.max(0, Math.min(1, (L[i]-225)/30));   // 0 below 225 → 1 at 255
+    const flat   = Math.max(0, Math.min(1, (8-grad[i])/8));   // 1 flat → 0 at gradient≥8
+    const m = bright*flat*0.6;                                 // gentle, capped at 0.6
+    if (m<=0.001) continue;
+    let r=0,g=0,b=0,c=0;
+    for (let dy=-1;dy<=1;dy++){ const yy=y+dy; if(yy<0||yy>=h) continue;
+      for (let dx=-1;dx<=1;dx++){ const xx=x+dx; if(xx<0||xx>=w) continue;
+        const k=(yy*w+xx)*4; r+=src[k]; g+=src[k+1]; b+=src[k+2]; c++; } }
+    r/=c; g/=c; b/=c; const j=i*4;
+    d[j]  = src[j]  *(1-m)+r*m;
+    d[j+1]= src[j+1]*(1-m)+g*m;
+    d[j+2]= src[j+2]*(1-m)+b*m;
+  }
+  // 2) inkDeepen — soft tone pull on darks only (≤18% at the very darkest)
+  for (let i=0;i<n;i++){
+    const j=i*4; const Li=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+    const deep = Math.max(0, (150-Li)/150) * 0.18;
+    if (deep>0){ d[j]*=(1-deep); d[j+1]*=(1-deep); d[j+2]*=(1-deep); }
+  }
+  // 3) light luminance unsharp for crisp glyph edges (mild — crispenAndLift
+  //    already did the main sharpen, so keep this gentle to avoid ink halos)
+  const L2 = new Float32Array(n);
+  for (let i=0;i<n;i++){ const j=i*4; L2[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
+  const blur = new Float32Array(L2); boxBlurF(blur, w, h, 1);
+  const SH = 0.35;
+  for (let i=0;i<n;i++){ const j=i*4; const add=(L2[i]-blur[i])*SH;
+    d[j]  =Math.max(0,Math.min(255, d[j]  +add));
+    d[j+1]=Math.max(0,Math.min(255, d[j+1]+add));
+    d[j+2]=Math.max(0,Math.min(255, d[j+2]+add)); }
+}
+
 // ---- illumination flattening ("whiten paper", optional) ----
 // Evens out uneven lighting / shadows so crumpled or shadowed paper reads as
 // uniform white, WITHOUT the dark halos around text that a small-radius unsharp
