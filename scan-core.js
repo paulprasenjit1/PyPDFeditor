@@ -65,19 +65,38 @@ export function homographyTo(q,W,H){
 }
 
 // ---- output filters (raw RGBA array versions) ----
-// Colour: gentle auto-contrast (stretch the 2nd–98th luminance percentiles).
+// Colour: gentle auto-contrast (stretch the 1st–99th luminance percentiles).
+// v10.77 — HUE-PRESERVING. The old version applied the stretch LUT to each RGB
+// channel independently, which on bright COLOURED content (a cream laminated ID
+// card, a photo) pulled the channels apart and forced the region toward a
+// vivid, unnatural yellow while crushing dark photo/QR detail to black. Now the
+// stretch is computed on LUMINANCE only and each pixel's R/G/B are scaled by the
+// SAME factor (newLuma/oldLuma), so the hue and saturation ratio are preserved —
+// the page still gains contrast, but colours keep the natural tone seen at
+// capture. For a neutral page (R=G=B) this is identical to the old behaviour, so
+// text-on-white scans are unchanged. Percentiles eased 2/98 → 1/99 to reduce
+// dark crush, and the scale is clamped so nothing blows out or vanishes.
 export function applyAutoContrast(d,w,h){
   const n=w*h;
   const hist=new Uint32Array(256);
   for (let i=0;i<n;i++){ const j=i*4; hist[(d[j]*77+d[j+1]*151+d[j+2]*28)>>8]++; }
   let lo=0,hi=255,acc=0;
-  for (let t=0;t<256;t++){ acc+=hist[t]; if(acc>=n*0.02){ lo=t; break; } }
+  for (let t=0;t<256;t++){ acc+=hist[t]; if(acc>=n*0.01){ lo=t; break; } }
   acc=0;
-  for (let t=255;t>=0;t--){ acc+=hist[t]; if(acc>=n*0.02){ hi=t; break; } }
+  for (let t=255;t>=0;t--){ acc+=hist[t]; if(acc>=n*0.01){ hi=t; break; } }
   if (hi-lo<30) return;
   const lut=new Uint8Array(256);
   for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round((t-lo)*255/(hi-lo))));
-  for (let i=0;i<n;i++){ const j=i*4; d[j]=lut[d[j]]; d[j+1]=lut[d[j+1]]; d[j+2]=lut[d[j+2]]; }
+  for (let i=0;i<n;i++){
+    const j=i*4;
+    const oldL=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+    const newL=lut[oldL];
+    const s=newL/Math.max(1,oldL);           // single hue-preserving gain
+    const g=s<0 ? 0 : (s>4 ? 4 : s);
+    d[j]  =Math.min(255, d[j]  *g);
+    d[j+1]=Math.min(255, d[j+1]*g);
+    d[j+2]=Math.min(255, d[j+2]*g);
+  }
 }
 // Colour "clean scan" pipeline (v10.17). Two safe, GLOBAL steps — deliberately
 // NOT the v10.14 "magic scan" (that used a per-tile illumination map + unsharp
@@ -141,7 +160,7 @@ export function crispenAndLift(d,w,h){
   for (let i=0;i<n;i++){ const j=i*4; lum[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
   const blur=new Float32Array(lum);
   boxBlurF(blur,w,h,1);
-  const SH=0.55, LIFT=1.06;            // unsharp amount; midtone brightness gain
+  const SH=0.55, LIFT=1.04;            // unsharp amount; midtone brightness gain (v10.77: gentler lift, closer to captured tone)
   for (let i=0;i<n;i++){
     const add=(lum[i]-blur[i])*SH;     // high-pass detail (edges/letters)
     const j=i*4;
@@ -206,10 +225,16 @@ export function documentEnhance(d, w, h){
     d[j+1]= src[j+1]*(1-m)+g*m;
     d[j+2]= src[j+2]*(1-m)+b*m;
   }
-  // 2) inkDeepen — soft tone pull on darks only (≤18% at the very darkest)
+  // 2) inkDeepen — soft tone pull on darks only (≤12% at the very darkest).
+  //    v10.77: COLOUR-SAFE. The pull fades out on chromatic pixels (a photo,
+  //    skin tone, a coloured logo) so photographs and ID-card portraits are not
+  //    darkened/crushed — only near-neutral dark INK is deepened.
   for (let i=0;i<n;i++){
-    const j=i*4; const Li=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
-    const deep = Math.max(0, (150-Li)/150) * 0.18;
+    const j=i*4; const r=d[j],g=d[j+1],b=d[j+2];
+    const Li=(r*77+g*151+b*28)>>8;
+    const chroma=Math.max(r,g,b)-Math.min(r,g,b);
+    const neutral=Math.max(0, Math.min(1, (30-chroma)/30));   // 1 grey → 0 by chroma 30
+    const deep = Math.max(0, (150-Li)/150) * 0.12 * neutral;
     if (deep>0){ d[j]*=(1-deep); d[j+1]*=(1-deep); d[j+2]*=(1-deep); }
   }
   // 3) light luminance unsharp for crisp glyph edges (mild — crispenAndLift

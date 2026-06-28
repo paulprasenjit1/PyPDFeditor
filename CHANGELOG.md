@@ -4,6 +4,24 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.77] — 2026-06-28 — Fix colour cast on photos / ID cards
+
+- **Captured colour is now preserved in the saved PDF.** On scans containing
+  bright COLOURED content — a laminated ID/Aadhaar card, a photo — the output was
+  coming out with a strong yellow cast, the portrait darkened and the QR code
+  crushed to a solid black block, even though the live capture looked natural.
+  Cause: `applyAutoContrast` stretched each R/G/B channel independently, which on
+  coloured regions pulled the channels apart (toward vivid yellow) and crushed
+  dark detail. It now computes the stretch on LUMINANCE and scales R/G/B by the
+  same factor, so contrast still improves but hue and saturation are preserved.
+  Percentiles eased 2/98 → 1/99 to stop dark crush.
+- **`inkDeepen` is now colour-safe:** the dark-pixel deepening fades out on
+  chromatic pixels, so photographs and coloured logos are left alone — only
+  near-neutral ink is deepened. Strength trimmed 0.18 → 0.12 and the midtone lift
+  0.06 → 0.04, so the result sits closer to the natural captured tone.
+- Neutral text-on-white pages are mathematically unchanged (equal channels scale
+  identically), so handwriting/prescription scans look exactly as before.
+
 ## [v10.76] — 2026-06-28 — Honour manual crop; tighter size budget
 
 - **The adjust screen now honours your hand-placed edges exactly.** Previously
