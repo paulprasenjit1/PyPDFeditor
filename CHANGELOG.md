@@ -4,6 +4,16 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.83] — 2026-06-28 — Crop: drag whole sides (edge handles)
+
+- **The adjust screen now has a handle in the middle of each side**, in addition
+  to the four corners. Grab a side's bar and the whole edge follows your finger
+  (both of that side's corners move together, any direction), so you can pull a
+  single side in/out without nudging two corners separately. Corners, whole-box
+  drag, keyboard-arrow nudge and the magnifier loupe all work the same on the new
+  edge handles, and adjusting an edge counts as a manual selection (honoured
+  exactly, no auto-inset).
+
 ## [v10.82] — 2026-06-28 — Photo ID: fix wash-out on dark-surface captures
 
 - **Photo ID cards shot on a dark surface no longer come out pale/washed.** On a

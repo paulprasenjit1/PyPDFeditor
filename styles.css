@@ -407,6 +407,8 @@ input[type=file] { display:none; }
 .cropwrap svg polygon { fill:rgba(79,140,255,.18); stroke:#4f8cff; stroke-width:2;
           vector-effect:non-scaling-stroke; }
 .cropwrap svg circle.hgrip { fill:#fff; stroke:#4f8cff; stroke-width:3; }
+/* edge (side-midpoint) grips: a short bar so they read as "drag this side" */
+.cropwrap svg rect.egrip { fill:#fff; stroke:#4f8cff; stroke-width:3; vector-effect:non-scaling-stroke; }
 /* invisible enlarged hit areas so corners are easy to grab */
 .cropwrap svg circle.hhit { fill:transparent; stroke:none; }
 /* the corner hit areas are keyboard-focusable (arrow-key nudge), but iOS can show

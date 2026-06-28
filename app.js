@@ -14,12 +14,13 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.82";
+const APP_BUILD = "10.83";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
-    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","idToggle","cropReset","cropRetake","cropUse"];
+    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","idToggle","cropReset","cropRetake","cropUse",
+    "ge0","ge1","ge2","ge3","he0","he1","he2","he3"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
     try { sessionStorage.removeItem("pypdf-healed"); } catch(e){}
@@ -86,7 +87,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "28 Jun 2026";   // v10.82
+const BUILD_DATETIME = "28 Jun 2026";   // v10.83
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -2320,6 +2321,15 @@ function updateCropOverlay(){
     grip.setAttribute("cx",p.x*s); grip.setAttribute("cy",p.y*s);
     hit.setAttribute("cx",p.x*s);  hit.setAttribute("cy",p.y*s);
   });
+  // edge (side-midpoint) grips: bar centred on each side, hit area on top
+  for (let i=0;i<4;i++){
+    const a=cropQuad[i], b=cropQuad[(i+1)%4];
+    const mx=(a.x+b.x)/2*s, my=(a.y+b.y)/2*s;
+    const grip=$("ge"+i), hit=$("he"+i);
+    if (grip){ const gw=+grip.getAttribute("width")||0, gh=+grip.getAttribute("height")||0;
+      grip.setAttribute("x", mx-gw/2); grip.setAttribute("y", my-gh/2); }
+    if (hit){ hit.setAttribute("cx",mx); hit.setAttribute("cy",my); }
+  }
 }
 // magnifier loupe: a zoomed look at the pixels under the dragged corner
 function showLoupe(p){
@@ -2382,6 +2392,56 @@ function hideLoupe(){ $("loupe").hidden=true; }
       showLoupe(cropQuad[i]);
     });
     const end=()=>{ dragIdx=-1; hideLoupe(); };
+    hEl.addEventListener("pointerup",end);
+    hEl.addEventListener("pointercancel",end);
+  }
+})();
+
+// draggable EDGE handles (v10.83): grab the middle of a side and move that whole
+// side — both of its corners shift together by the drag amount (free direction).
+(function wireCropEdges(){
+  const clampX=v=>Math.max(0,Math.min(capFrame.width ,v));
+  const clampY=v=>Math.max(0,Math.min(capFrame.height,v));
+  for (let i=0;i<4;i++){
+    const hEl=$("he"+i); if (!hEl) continue;
+    const ia=i, ib=(i+1)%4;                 // the two corners this side connects
+    let start=null, baseA=null, baseB=null;
+    const mid=()=>({ x:(cropQuad[ia].x+cropQuad[ib].x)/2, y:(cropQuad[ia].y+cropQuad[ib].y)/2 });
+    hEl.setAttribute("tabindex","0");
+    hEl.addEventListener("keydown", e=>{
+      if (!cropFit || !capFrame) return;
+      const step = e.shiftKey ? 10 : 2;
+      let dx=0, dy=0;
+      if (e.key==="ArrowLeft") dx=-step; else if (e.key==="ArrowRight") dx=step;
+      else if (e.key==="ArrowUp") dy=-step; else if (e.key==="ArrowDown") dy=step;
+      else return;
+      e.preventDefault();
+      cropQuad[ia]={ x:clampX(cropQuad[ia].x+dx), y:clampY(cropQuad[ia].y+dy) };
+      cropQuad[ib]={ x:clampX(cropQuad[ib].x+dx), y:clampY(cropQuad[ib].y+dy) };
+      cropUserAdjusted = true;
+      updateCropOverlay();
+    });
+    hEl.addEventListener("pointerdown", e=>{
+      if (!cropFit || !capFrame) return;
+      hEl.setPointerCapture(e.pointerId); e.preventDefault();
+      const r=$("cropSvg").getBoundingClientRect();
+      start={ x:(e.clientX-r.left)/cropFit.scale, y:(e.clientY-r.top)/cropFit.scale };
+      baseA={ x:cropQuad[ia].x, y:cropQuad[ia].y };
+      baseB={ x:cropQuad[ib].x, y:cropQuad[ib].y };
+      showLoupe(mid());
+    });
+    hEl.addEventListener("pointermove", e=>{
+      if (!start || !cropFit || !capFrame) return;
+      const r=$("cropSvg").getBoundingClientRect();
+      const dx=(e.clientX-r.left)/cropFit.scale - start.x;
+      const dy=(e.clientY-r.top)/cropFit.scale - start.y;
+      cropQuad[ia]={ x:clampX(baseA.x+dx), y:clampY(baseA.y+dy) };
+      cropQuad[ib]={ x:clampX(baseB.x+dx), y:clampY(baseB.y+dy) };
+      cropUserAdjusted = true;
+      updateCropOverlay();
+      showLoupe(mid());
+    });
+    const end=()=>{ start=null; hideLoupe(); };
     hEl.addEventListener("pointerup",end);
     hEl.addEventListener("pointercancel",end);
   }
