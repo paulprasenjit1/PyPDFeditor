@@ -4,6 +4,19 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.76] — 2026-06-28 — Honour manual crop; tighter size budget
+
+- **The adjust screen now honours your hand-placed edges exactly.** Previously
+  "Use page" pulled all four corners 0.8% inward (`insetQuad`) to hide edge bleed
+  from *auto*-detection — but when you positioned the corners yourself that inset
+  was clipping wanted content near the page edge (e.g. the right-margin contact
+  line). A new `cropUserAdjusted` flag is set the moment you move a corner, drag
+  the whole box, or hit Reset; when set, the page is warped from your exact
+  selection with no inset. The 0.8% trim still applies only to a fully
+  auto-detected quad you didn't touch.
+- **Size budget tightened to 1.4 MB** (from 1.45) with a slightly lower quality
+  floor (0.78), so std pages land reliably under 1.5 MB.
+
 ## [v10.75] — 2026-06-28 — Natural "Lens" document enhance
 
 - **Scans now get an Adobe Scan / Office Lens-style polish, but tone-preserving.**

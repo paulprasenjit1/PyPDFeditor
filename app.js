@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.75";
+const APP_BUILD = "10.76";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -86,7 +86,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "28 Jun 2026";   // v10.75
+const BUILD_DATETIME = "28 Jun 2026";   // v10.76
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -1859,6 +1859,10 @@ let scanWasLive = false;      // camera was on when the app got hidden
 let scanPages = [];           // confirmed pages: [{bytes:Uint8Array(JPEG), w, h, thumb}]
 let capFrame = null;          // canvas holding the full-res captured photo
 let cropQuad = null;          // 4 corners in image px, order TL,TR,BR,BL
+let cropUserAdjusted = false; // v10.76: true once the user moves a corner / the
+                              // whole box, so "Use page" honours their selection
+                              // EXACTLY (no 0.8% auto-inset, which was clipping
+                              // content near the page edge).
 let cropFit = null;           // image→display fit for the crop screen
 const cropFilter = "colour";  // scanner is colour-only (B&W removed in v10.20)
 let scanQuality = "std";      // "std" | "small" — JPEG quality + output size
@@ -1870,7 +1874,7 @@ try { if (localStorage.getItem("scanEnhance")==="0") scanEnhance=false; } catch(
 // check by encodeUnderBudget() (size-budgeted adaptive JPEG) rather than a
 // fixed quality, so sparse document pages stay well under ~1.45 MB while dense
 // pages settle to a slightly lower quality automatically. "small" is unchanged.
-const SCAN_Q = { std:{ jpeg:0.92, maxDim:3200, budget:1450000, qFloor:0.80 },
+const SCAN_Q = { std:{ jpeg:0.92, maxDim:3200, budget:1400000, qFloor:0.78 },
                  small:{ jpeg:0.62, maxDim:1400 } };
 // Encode a canvas to JPEG, stepping quality down only if the blob exceeds the
 // byte budget (document scans are mostly white and compress well, so a sparse
@@ -2231,6 +2235,7 @@ function autoDetectCropQuad(){
 }
 function enterCrop(frame){
   capFrame = frame;
+  cropUserAdjusted = false;     // fresh auto-detected quad until the user edits it
   const found = autoDetectCropQuad();
   $("scanCam").classList.remove("show");
   $("scanCrop").classList.add("show");
@@ -2327,6 +2332,7 @@ function hideLoupe(){ $("loupe").hidden=true; }
       e.preventDefault();
       cropQuad[i]={ x:Math.max(0,Math.min(capFrame.width , cropQuad[i].x+dx)),
                     y:Math.max(0,Math.min(capFrame.height, cropQuad[i].y+dy)) };
+      cropUserAdjusted = true;
       updateCropOverlay();
     });
     hEl.addEventListener("pointerdown", e=>{
@@ -2339,6 +2345,7 @@ function hideLoupe(){ $("loupe").hidden=true; }
       const x=(e.clientX-r.left)/cropFit.scale, y=(e.clientY-r.top)/cropFit.scale;
       cropQuad[i]={ x:Math.max(0,Math.min(capFrame.width ,x)),
                     y:Math.max(0,Math.min(capFrame.height,y)) };
+      cropUserAdjusted = true;
       updateCropOverlay();
       showLoupe(cropQuad[i]);
     });
@@ -2356,6 +2363,7 @@ function resetCropQuad(){
   const mx=capFrame.width*0.04, my=capFrame.height*0.04;
   cropQuad=[{x:mx,y:my},{x:capFrame.width-mx,y:my},
             {x:capFrame.width-mx,y:capFrame.height-my},{x:mx,y:capFrame.height-my}];
+  cropUserAdjusted = true;     // manual control — honour this box exactly, no auto-inset
   updateCropOverlay();
   setStatus("Reset to the full page — drag the box or its corners onto the document.","ok");
 }
@@ -2386,6 +2394,7 @@ $("cropReset").onclick = ()=> resetCropQuad();
     dx=Math.max(-minX, Math.min(capFrame.width -maxX, dx));   // keep the box inside the image
     dy=Math.max(-minY, Math.min(capFrame.height-maxY, dy));
     cropQuad=base.map(p=>({x:p.x+dx, y:p.y+dy}));
+    cropUserAdjusted = true;
     updateCropOverlay();
   });
   const end=()=>{ start=null; base=null; };
@@ -2460,7 +2469,12 @@ $("cropUse").onclick = async ()=>{
   showSpin(true,"Straightening page…");
   try {
     await new Promise(r=>setTimeout(r,30));    // let the spinner paint first
-    const q = insetQuad(orderQuad(cropQuad), 0.008);   // trim a sliver of edge bleed
+    // Honour a hand-placed selection EXACTLY. The 0.8% inset only ever existed
+    // to hide edge bleed on a FULLY auto-detected quad; when the user has moved
+    // a corner or the box it was clipping wanted content near the page edge.
+    const q = cropUserAdjusted
+      ? orderQuad(cropQuad)
+      : insetQuad(orderQuad(cropQuad), 0.008);
     // preferred path: warp + filter in the worker (UI stays responsive)
     const sctx = capFrame.getContext("2d",{willReadFrequently:true});
     const Q = SCAN_Q[scanQuality] || SCAN_Q.std;
