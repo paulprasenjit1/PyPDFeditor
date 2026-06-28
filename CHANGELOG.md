@@ -4,6 +4,20 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.78] — 2026-06-28 — Restore ink depth for handwriting (colour pen)
+
+- **Handwriting and coloured pen are crisp and dark again.** v10.77's colour-safe
+  `inkDeepen` gate skipped *any* chromatic pixel to protect photos — but blue and
+  red PEN ink are chromatic too, so it stopped deepening handwriting and the
+  prescription scans came out faded. The gate is removed: `inkDeepen` once more
+  deepens all dark ink (strength back to 0.18) and the midtone lift is back to
+  0.06. Because the pull is hue-preserving and tapers with brightness, a
+  photographic mid-tone (an ID portrait) still only darkens a few percent and is
+  never crushed — the heavy darkening that ruined the old ID scans came from the
+  per-channel auto-contrast, which stays fixed (hue-preserving) from v10.77.
+- Net result: ID cards keep the v10.77 natural colour, and text/handwriting
+  regains its earlier depth.
+
 ## [v10.77] — 2026-06-28 — Fix colour cast on photos / ID cards
 
 - **Captured colour is now preserved in the saved PDF.** On scans containing

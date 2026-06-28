@@ -160,7 +160,7 @@ export function crispenAndLift(d,w,h){
   for (let i=0;i<n;i++){ const j=i*4; lum[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
   const blur=new Float32Array(lum);
   boxBlurF(blur,w,h,1);
-  const SH=0.55, LIFT=1.04;            // unsharp amount; midtone brightness gain (v10.77: gentler lift, closer to captured tone)
+  const SH=0.55, LIFT=1.06;            // unsharp amount; midtone brightness gain
   for (let i=0;i<n;i++){
     const add=(lum[i]-blur[i])*SH;     // high-pass detail (edges/letters)
     const j=i*4;
@@ -225,16 +225,16 @@ export function documentEnhance(d, w, h){
     d[j+1]= src[j+1]*(1-m)+g*m;
     d[j+2]= src[j+2]*(1-m)+b*m;
   }
-  // 2) inkDeepen — soft tone pull on darks only (≤12% at the very darkest).
-  //    v10.77: COLOUR-SAFE. The pull fades out on chromatic pixels (a photo,
-  //    skin tone, a coloured logo) so photographs and ID-card portraits are not
-  //    darkened/crushed — only near-neutral dark INK is deepened.
+  // 2) inkDeepen — soft tone pull on darks only (≤18% at the very darkest).
+  //    v10.78: deepens ALL dark ink, INCLUDING coloured pen (blue/red), because
+  //    that is what makes handwriting "pop". The pull scales R/G/B by the SAME
+  //    factor so it is hue-preserving, and it tapers with brightness, so a
+  //    photographic mid-tone (an ID portrait, L≈80–130) only darkens a few
+  //    percent and is never crushed — the heavy darkening that ruined the old ID
+  //    scans came from the per-channel auto-contrast, now fixed above, NOT here.
   for (let i=0;i<n;i++){
-    const j=i*4; const r=d[j],g=d[j+1],b=d[j+2];
-    const Li=(r*77+g*151+b*28)>>8;
-    const chroma=Math.max(r,g,b)-Math.min(r,g,b);
-    const neutral=Math.max(0, Math.min(1, (30-chroma)/30));   // 1 grey → 0 by chroma 30
-    const deep = Math.max(0, (150-Li)/150) * 0.12 * neutral;
+    const j=i*4; const Li=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+    const deep = Math.max(0, (150-Li)/150) * 0.18;
     if (deep>0){ d[j]*=(1-deep); d[j+1]*=(1-deep); d[j+2]*=(1-deep); }
   }
   // 3) light luminance unsharp for crisp glyph edges (mild — crispenAndLift
