@@ -271,23 +271,43 @@ export function idCardEnhance(d, w, h){
       for (let i=0;i<n;i++){ const j=i*4; d[j]=lr[d[j]]; d[j+1]=lg[d[j+1]]; d[j+2]=lb[d[j+2]]; }
     }
   }
-  // 2) shadow / midtone LIFT — hue-preserving luminance gain. A gamma curve
-  //    (0.72) brightens the face and mid-tones strongly while leaving bright
-  //    laminate near-unchanged, plus a small extra push on the very darkest
-  //    pixels so a shadowed portrait never reads as a black blob. Capped so it
-  //    only ever brightens.
-  const lut=new Float32Array(256);
-  for (let t=0;t<256;t++){
-    let v=255*Math.pow(t/255, 0.72);
-    v += (1 - t/255) * 14;            // gentle lift of deep shadows
-    lut[t]=Math.min(255, v);
-  }
+  // 2) BRIGHTNESS-ADAPTIVE shadow lift (v10.82). The old flat gamma (0.72) lifted
+  //    the WHOLE image, which on a card shot on a DARK surface — where the camera
+  //    over-exposes the card so it is already bright — pushed it further toward
+  //    white, washing out the colours. Now the lift only touches shadows/midtones
+  //    (below a knee), and its strength scales DOWN as the card's overall
+  //    brightness rises: a dark/normally-lit card still gets a strong face lift,
+  //    an already-bright (over-exposed) card barely gets lifted, so it is no
+  //    longer blown out.
+  let sumL=0;
+  for (let i=0;i<n;i++){ const j=i*4; sumL+=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
+  const meanL=sumL/n;
+  const brightT=Math.max(0, Math.min(1, (meanL-150)/70));   // 0 dark … 1 bright
+  const liftMax=0.50 - 0.34*brightT;                        // dark:0.50 → bright:0.16
+  const KNEE=165;
   for (let i=0;i<n;i++){
     const j=i*4; const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
-    const g=Math.min(2.0, lut[L]/Math.max(1,L));
-    d[j]  =Math.min(255, d[j]  *g);
-    d[j+1]=Math.min(255, d[j+1]*g);
-    d[j+2]=Math.min(255, d[j+2]*g);
+    const lift=liftMax*Math.max(0, (KNEE-L)/KNEE);          // only below the knee
+    if (lift>0){ const g=1+lift;
+      d[j]  =Math.min(255, d[j]  *g);
+      d[j+1]=Math.min(255, d[j+1]*g);
+      d[j+2]=Math.min(255, d[j+2]*g);
+    }
+  }
+  // 2b) gentle saturation + contrast RESTORE (v10.82) — counters the wash-out on
+  //     over-exposed/dark-surface captures: a mild hue-preserving contrast
+  //     deepens grey text and a moderate saturation lift brings back the faded
+  //     flag colours. Tuned gently so a well-exposed card stays natural.
+  const SATK=1.15, CON=0.06;
+  for (let i=0;i<n;i++){
+    const j=i*4; const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+    let Lt=128+(L-128)*(1+CON); if(Lt<0)Lt=0; else if(Lt>255)Lt=255;
+    const cg=Lt/Math.max(1,L);
+    const r=d[j]*cg, g=d[j+1]*cg, b=d[j+2]*cg;
+    const L3=(r*77+g*151+b*28)/256;
+    d[j]  =Math.max(0,Math.min(255, L3+(r-L3)*SATK));
+    d[j+1]=Math.max(0,Math.min(255, L3+(g-L3)*SATK));
+    d[j+2]=Math.max(0,Math.min(255, L3+(b-L3)*SATK));
   }
   // 3) light unsharp for crisp card text
   const L2=new Float32Array(n);

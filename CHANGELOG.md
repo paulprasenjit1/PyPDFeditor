@@ -4,6 +4,21 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.82] — 2026-06-28 — Photo ID: fix wash-out on dark-surface captures
+
+- **Photo ID cards shot on a dark surface no longer come out pale/washed.** On a
+  dark background the camera over-exposes the card (it's already bright), and the
+  old fixed brightening (gamma 0.72) pushed it further toward white, fading the
+  flag colours and greying the text. `idCardEnhance` step 2 is now a
+  BRIGHTNESS-ADAPTIVE shadow lift: it only lifts shadows/midtones (below a knee)
+  and scales the strength down as the card's overall brightness rises — a
+  dark/normal card still gets a strong face lift, an over-exposed card barely
+  any, so it isn't blown out.
+- Added a gentle hue-preserving contrast (+6%) and saturation (+15%) restore to
+  bring back the faded colours and deepen grey text, tuned mild so a well-exposed
+  card stays natural.
+- Photo ID only; documents and every other mode untouched.
+
 ## [v10.81] — 2026-06-28 — Fix scan file size on iPhone (MuPDF encoder)
 
 - **Scan pages now actually honour the size budget on iOS.** Root cause: iOS
