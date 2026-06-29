@@ -4,6 +4,15 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.84] — 2026-06-28 — Header label: keep file size visible on long names
+
+- **The header info label no longer hides the file size when the filename is
+  long.** It was one string (`name • pages • size`) truncated with an ellipsis,
+  so a long name cut off the size at the end. It is now two parts: the filename
+  (which ellipsises as needed) and the size in its own non-shrinking span that is
+  always shown. Page count was dropped per request — the label now reads
+  `filename  •  size`.
+
 ## [v10.83] — 2026-06-28 — Crop: drag whole sides (edge handles)
 
 - **The adjust screen now has a handle in the middle of each side**, in addition

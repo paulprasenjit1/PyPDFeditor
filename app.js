@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.83";
+const APP_BUILD = "10.84";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -87,7 +87,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "28 Jun 2026";   // v10.83
+const BUILD_DATETIME = "28 Jun 2026";   // v10.84
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -198,6 +198,13 @@ function openSheet(){
   setTimeout(()=>{ try{ focusTarget.focus(); }catch(e){} }, 0);
 }
 function fmtKB(b){ return b>=1048576 ? (b/1048576).toFixed(2)+" MB" : (b/1024).toFixed(1)+" KB"; }
+// Header label: filename (ellipsises when long) + size (always kept visible). The
+// size lives in its own non-shrinking span so a long name can't push it off.
+function setMeta(name, info){
+  const a=$("metaName"), b=$("metaInfo");
+  if (a) a.textContent = name || "";
+  if (b) b.textContent = info ? "  •  "+info : "";
+}
 function baseName(){ return (fileName||"document.pdf").replace(/\.[^.]+$/,""); }
 // MuPDF's asUint8Array/asJPEG/asPNG return VIEWS into WASM memory; any later WASM
 // allocation can grow the heap and detach them. Copy into a JS-owned buffer at once.
@@ -213,7 +220,7 @@ const u8 = v => new Uint8Array(v);
   $("bigOpen").disabled = false;
   $("bigScan").disabled = false;
   $("welcomeHint").textContent = "Everything stays on your phone — nothing is uploaded.";
-  $("meta").textContent = "No document open";
+  setMeta("No document open", "");
   // fade out the first-paint launch splash now the engine is live, then remove
   // it from the layer so it never intercepts taps
   const lh = document.getElementById("launch");
@@ -761,7 +768,7 @@ async function render(){
     boundsCache = bc; boundsEpoch = epoch;
     if (tok !== renderToken) return;
     observeStages();
-    $("meta").textContent = `${fileName} • ${n} pages • ${fmtKB(workingBytes.length)}`;
+    setMeta(fileName, fmtKB(workingBytes.length));
   } catch(e){ setStatus("Could not show this PDF: "+friendly(e), "err"); }
   if (tok === renderToken) showSpin(false);
 }
@@ -1589,7 +1596,7 @@ function closeFile(){
   zoomPct = 100; $("zoomLbl").textContent = "100%";
   $("pagePill").classList.remove("show");
   $("emptyMsg").style.display = "block";
-  $("meta").textContent = "No document open";
+  setMeta("No document open", "");
   enableDocButtons(false);
   setStatus("Closed. Open a PDF or scan a document.", "ok");
 }
@@ -2766,7 +2773,7 @@ function openSaveSheet(after){
     const ok = await saveOrShare(workingBytes, nm);
     if (!ok){ setStatus("Save cancelled.","ok"); return; }   // share sheet dismissed
     dirty = false;                 // saved — nothing unsaved any more
-    if (MDOC) $("meta").textContent = nm+" • "+MDOC.countPages()+" pages • "+fmtKB(workingBytes.length);
+    if (MDOC) setMeta(nm, fmtKB(workingBytes.length));
     schedulePersistDoc();
     setStatus("Saved — now pick where to keep it (e.g. Save to Files).","ok");
     if (after) after();

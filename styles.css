@@ -39,8 +39,11 @@ header, .toolbar, .findbar, .zoomctl, .undofab, .pgpill, .scanui, .sheet h3,
 header { display:flex; align-items:center; gap:10px; padding:max(5px,env(safe-area-inset-top)) 14px 2px;
          background:var(--panel); border-bottom:1px solid var(--line); }
 header h1 { font-size:14px; margin:0; font-weight:600; }
-header .meta { color:var(--muted); font-size:10px; margin-left:auto; text-align:right; max-width:55%;
-               overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Filename ellipsises; the size never shrinks, so it stays visible on long names. */
+header .meta { color:var(--muted); font-size:10px; margin-left:auto; max-width:55%;
+               display:flex; gap:4px; align-items:baseline; justify-content:flex-end; min-width:0; }
+header .meta .meta-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+header .meta .meta-info { white-space:nowrap; flex:0 0 auto; }
 /* The whole toolbar always fits the viewport — never scrolls horizontally. The
    segmented group absorbs spare width and every control may shrink (min-width:0)
    so the row fits any iPhone; on a very narrow device a seg label ellipsises as
