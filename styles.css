@@ -7,7 +7,11 @@
    the iPhone's system setting. color-scheme:dark below tells iOS form controls,
    scrollbars and the keyboard to render dark to match. */
 :root { color-scheme:dark;
-        --bg:#000000; --panel:#1c1c1e; --panel2:#2c2c2e; --line:#3a3a3c; --txt:#f5f5f7;
+        /* v10.93: --line is now the iOS separator colour (translucent) so it
+           reads as a hairline on any surface incl. pure black; --chrome is the
+           translucent bar material used by the floating pills. */
+        --bg:#000000; --panel:#1c1c1e; --panel2:#2c2c2e; --line:rgba(84,84,88,.62); --txt:#f5f5f7;
+        --chrome:rgba(24,24,26,.82);
         --muted:#9a9aa0; --accent:#0a84ff; --accent2:#0060df; --grad-a:#0a84ff; --grad-b:#0060df;
         --ok:#30d158; --warn:#ffd60a; --err:#ff453a;
         --scrolltrack:#000000; --scrollthumb:#48484a; --shadow:rgba(0,0,0,.7);
@@ -36,8 +40,11 @@ header, .toolbar, .findbar, .zoomctl, .undofab, .pgpill, .scanui, .sheet h3,
 @media (prefers-reduced-motion: reduce){ .launch-spin { animation:none; } }
 /* header + toolbar are kept deliberately tight so the page viewer gets the most
    height; the safe-area inset still guarantees the status bar never overlaps. */
+/* v10.93 true-black chrome: header/toolbar/findbar sit on pure #000 with a
+   0.5px hairline — on OLED those pixel rows switch off entirely and the page
+   is the only lit surface. Elevated grey stays for sheets and cards. */
 header { display:flex; align-items:center; gap:10px; padding:max(5px,env(safe-area-inset-top)) 14px 2px;
-         background:var(--panel); border-bottom:1px solid var(--line); }
+         background:var(--bg); border-bottom:0.5px solid var(--line); }
 header h1 { font-size:14px; margin:0; font-weight:600; }
 /* Filename ellipsises; the size never shrinks, so it stays visible on long names. */
 header .meta { color:var(--muted); font-size:10px; margin-left:auto; max-width:55%;
@@ -49,8 +56,8 @@ header .meta .meta-info { white-space:nowrap; flex:0 0 auto; }
    so the row fits any iPhone; on a very narrow device a seg label ellipsises as
    the last-resort safety valve instead of pushing the row into a scroll. */
 .toolbar { order:4; display:flex; flex-wrap:nowrap; gap:4px;
-           padding:3px 6px 3px; background:var(--panel);
-           border-top:1px solid var(--line); align-items:stretch; overflow:hidden; }
+           padding:3px 6px 3px; background:var(--bg);
+           border-top:0.5px solid var(--line); align-items:stretch; overflow:hidden; }
 /* Toolbar relocated to the BOTTOM (native iOS bottom-toolbar pattern). flex
    order restacks header → find → viewer → toast → toolbar without touching the
    DOM, so every ID, handler and test keeps working. */
@@ -59,11 +66,13 @@ header { order:0; }
 .viewer { order:2; }
 .status { order:3; }
 .toolbar > * { flex:0 1 auto; min-width:0; white-space:nowrap; }
+/* v10.93 radius scale: 12 controls · 16 cards/tiles · 24 sheets. Press feedback
+   is a uniform fast scale-down (reduced-motion users get none, below). */
 button { background:linear-gradient(180deg, var(--grad-a), var(--grad-b)); color:#fff; border:0;
-         border-radius:9px; padding:9px 10px; font-size:13px; cursor:pointer;
-         transition:transform .08s ease, filter .12s ease; }
-button:active:not(:disabled) { transform:scale(.97); filter:brightness(.92); }
-button.ghost { background:var(--panel2); border:1px solid var(--line); color:var(--txt); }
+         border-radius:12px; padding:9px 10px; font-size:13px; cursor:pointer;
+         transition:transform .1s cubic-bezier(.2,.7,.4,1), filter .12s ease; }
+button:active:not(:disabled) { transform:scale(.96); filter:brightness(.92); }
+button.ghost { background:var(--panel2); border:0.5px solid var(--line); color:var(--txt); }
 button.on { background:var(--ok); }
 button:disabled { opacity:.4; }
 /* visible keyboard focus ring (iPad + keyboard, desktop). tap-highlight is
@@ -83,7 +92,8 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
    where zoom disappeared entirely on every iPhone (<600px). */
 .zoomctl { position:fixed; right:12px; bottom:calc(64px + env(safe-area-inset-bottom));
            z-index:55; display:none; align-items:center; gap:2px;
-           background:var(--panel); border:1px solid var(--line); border-radius:18px;
+           background:var(--chrome); border:0.5px solid var(--line); border-radius:18px;
+           -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
            padding:3px; box-shadow:0 4px 14px var(--shadow); }
 .zoomctl.show { display:flex; }
 .zoomctl button { padding:7px 9px; background:transparent; border:0; color:var(--txt); border-radius:14px; }
@@ -110,7 +120,8 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    by refreshUndo() only while the undo stack is non-empty. */
 .undofab { position:fixed; left:12px; bottom:calc(64px + env(safe-area-inset-bottom));
            z-index:55; display:none; flex-direction:row; align-items:center; gap:6px;
-           background:var(--panel); border:1px solid var(--line); border-radius:18px;
+           background:var(--chrome); border:0.5px solid var(--line); border-radius:18px;
+           -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
            padding:7px 13px 7px 11px; color:var(--txt); box-shadow:0 4px 14px var(--shadow); }
 .undofab.show { display:inline-flex; }
 .undofab span { font-size:12px; font-weight:600; }
@@ -119,17 +130,19 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 /* the middle actions live in one quiet segmented group that stretches to
    absorb the leftover width — calm, even, no scattered pills */
 .seg { display:flex; flex:1 1 auto; min-width:0; align-items:stretch;
-       background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:0 2px; }
+       background:var(--panel2); border:0.5px solid var(--line); border-radius:12px; padding:0 2px; }
 /* flex-basis auto: spare width is shared on TOP of each label's natural
    width, so "Compress" never truncates while "Edit" floats in slack */
 .toolbar .seg .segbtn { flex:1 1 auto; min-width:0; white-space:nowrap;
        background:transparent; border:0; color:var(--txt);
        padding:4px 3px; font-size:14px; border-radius:8px; }
-.seg .segbtn:not(:first-child) { border-left:1px solid var(--line); border-radius:0; }
+.seg .segbtn:not(:first-child) { border-left:0.5px solid var(--line); border-radius:0; }
 .seg .segbtn:first-child { border-radius:7px 0 0 7px; }
 .seg .segbtn:last-child { border-radius:0 7px 7px 0; }
 .toolbar .seg .segbtn:active:not(:disabled) { background:var(--panel); transform:none; filter:none; }
-.toolbar .seg .segbtn.on { background:linear-gradient(180deg,var(--grad-a),var(--grad-b)); color:#fff; }
+/* v10.93: the active mode is a soft accent-tinted pill instead of a solid
+   gradient block — clearer "you are in this mode" without shouting */
+.toolbar .seg .segbtn.on { background:rgba(10,132,255,.26); color:#fff; border-radius:8px; }
 .toolbar .seg .segbtn:disabled { opacity:.35; }
 /* borderless close (✕) beside Save — neutral, not red: red is reserved for
    destructive actions (delete), and close is not destructive. */
@@ -153,7 +166,11 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 /* content-visibility:auto lets the browser skip rendering offscreen pages
    entirely — a big CPU/GPU/battery win on long PDFs. contain-intrinsic-size
    is set per-stage in JS so scrollbar/layout stay stable. */
-.stage { position:relative; box-shadow:0 6px 24px var(--shadow); background:#fff; border-radius:2px;
+/* v10.93 page framing: a 0.5px light outline + soft 4px radius makes each page
+   read as a floating sheet on the black canvas — dark scans no longer melt
+   into the background. overflow:hidden clips the raster to the radius. */
+.stage { position:relative; box-shadow:0 6px 24px var(--shadow); background:#fff; border-radius:4px;
+         outline:0.5px solid rgba(255,255,255,.18); overflow:hidden;
          content-visibility:auto; }
 /* Page badge sits top-RIGHT so it never covers the document's own heading
    (which is almost always top-left). Pairs with the floating "Page x of n"
@@ -201,15 +218,15 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    nowrap + overflow:hidden guarantees nothing spills past the screen edge;
    the input is the only flexible element so it absorbs whatever width is left. */
 .findbar { display:flex; flex-wrap:nowrap; align-items:center; gap:4px; padding:5px 6px;
-           overflow:hidden; background:var(--panel); border-bottom:1px solid var(--line); }
+           overflow:hidden; background:var(--bg); border-bottom:0.5px solid var(--line); }
 .findbar[hidden] { display:none; }
 .findbar .fic { width:16px; height:16px; color:var(--muted); flex:0 0 auto; }
 /* font-size:16px keeps iOS from zooming the page (and hiding the toolbar) on focus */
 .findbar input { flex:1 1 auto; min-width:0; width:0; background:var(--panel2); color:var(--txt);
-           border:1px solid var(--line); border-radius:8px; padding:6px 9px; font-size:16px; }
+           border:0.5px solid var(--line); border-radius:8px; padding:6px 9px; font-size:16px; }
 .findbar .fcount { flex:0 0 auto; font-size:11px; color:var(--muted); min-width:30px;
            text-align:center; white-space:nowrap; font-variant-numeric:tabular-nums; }
-.findbar .fnav { flex:0 0 auto; background:var(--panel2); border:1px solid var(--line);
+.findbar .fnav { flex:0 0 auto; background:var(--panel2); border:0.5px solid var(--line);
            color:var(--txt); padding:6px 6px; border-radius:8px; }
 .findbar .fnav:active:not(:disabled){ background:var(--panel); transform:none; filter:none; }
 .findbar .fnav:disabled { opacity:.4; }
@@ -239,7 +256,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .welcome .wtitle { margin:0 0 8px; font-size:27px; font-weight:800; letter-spacing:-.02em;
         background:linear-gradient(120deg, var(--txt) 30%, var(--accent));
         -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
-.welcome .big { width:min(280px,80vw); padding:16px 18px; font-size:17px; border-radius:15px;
+.welcome .big { width:min(280px,80vw); padding:16px 18px; font-size:17px; border-radius:16px;
         display:inline-flex; align-items:center; justify-content:center; gap:10px;
         box-shadow:0 8px 24px rgba(43,99,235,.30); }
 /* welcome buttons use the same line-glyph SVG set as the toolbar (no emoji), so
@@ -253,8 +270,8 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .recents .rctitle { margin:0 0 6px 2px; font-size:12px; font-weight:600; letter-spacing:.06em;
         text-transform:uppercase; color:var(--muted); }
 .recents .rcrow { display:flex; flex-direction:column; align-items:flex-start; gap:1px;
-        width:100%; padding:10px 12px; margin-bottom:6px; border-radius:11px;
-        background:var(--panel2); border:1px solid var(--line); text-align:left; }
+        width:100%; padding:10px 12px; margin-bottom:6px; border-radius:12px;
+        background:var(--panel2); border:0.5px solid var(--line); text-align:left; }
 .recents .rcname { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
         font-size:14px; color:var(--txt); }
 .recents .rcinfo { font-size:12px; color:var(--muted); }
@@ -263,7 +280,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 /* engine download progress bar — inserted by engine-watchdog.js on first launch
    only (the ~10MB WASM engine). Fill width is set via the CSSOM (CSP-safe). */
 .welcome .engbar { width:min(280px,80vw); height:6px; border-radius:3px; background:var(--panel2);
-        border:1px solid var(--line); overflow:hidden; }
+        border:0.5px solid var(--line); overflow:hidden; }
 .welcome .engbar-fill { height:100%; width:0%; border-radius:3px;
         background:linear-gradient(90deg, var(--grad-a), var(--grad-b)); transition:width .2s ease; }
 @media (prefers-reduced-motion: reduce){ .welcome .engbar-fill { transition:none; } }
@@ -309,8 +326,8 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
          z-index:110; visibility:hidden;
          transition:background .3s ease, visibility .3s ease; }
 .sheet-bg.show { background:rgba(0,0,0,.55); visibility:visible; }
-.sheet { background:var(--panel); width:100%; border-top-left-radius:20px; border-top-right-radius:20px;
-         border-top:1px solid var(--line); padding:12px 16px calc(20px + env(safe-area-inset-bottom));
+.sheet { background:var(--panel); width:100%; border-top-left-radius:24px; border-top-right-radius:24px;
+         border-top:0.5px solid var(--line); padding:12px 16px calc(20px + env(safe-area-inset-bottom));
          max-height:82dvh; overflow:auto; box-shadow:0 -10px 36px rgba(0,0,0,.35);
          transform:translateY(100%); will-change:transform;
          transition:transform .42s cubic-bezier(.32,.72,0,1); }
@@ -328,16 +345,16 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .sheet label.ck { display:flex; gap:8px; align-items:center; font-size:14px; }
 .sheet .full { width:100%; }
 .sheet textarea { width:100%; min-height:84px; background:var(--bg); color:var(--txt);
-         border:1px solid var(--line); border-radius:8px; padding:10px; font-size:16px; resize:vertical; }
+         border:0.5px solid var(--line); border-radius:8px; padding:10px; font-size:16px; resize:vertical; }
 /* font-size MUST stay >= 16px on every text-entry field: iOS Safari auto-zooms
    the whole page when you focus an input smaller than 16px, and that zoom pushes
    the header + toolbar out of view (and doesn't reset). type=number was missing
    here, which is why the "Go to page" box zoomed in and hid the toolbar. */
 .sheet input[type=password], .sheet input[type=text], .sheet input[type=number]{
          flex:1; background:var(--bg); color:var(--txt);
-         border:1px solid var(--line); border-radius:8px; padding:10px; font-size:16px; }
+         border:0.5px solid var(--line); border-radius:8px; padding:10px; font-size:16px; }
 .sheet .pgprev { width:100%; height:auto; max-height:46dvh; object-fit:contain;
-         background:#fff; border-radius:8px; border:1px solid var(--line); }
+         background:#fff; border-radius:8px; border:0.5px solid var(--line); }
 .mt8  { margin-top:8px; }
 .mt12 { margin-top:12px; }
 /* sticky action footer for long list sheets (Pages / Copy pages / Combine):
@@ -349,21 +366,21 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
   position: sticky; bottom: 0; z-index: 2;
   background: var(--panel);
   margin: 12px -16px 0; padding: 12px 16px 4px;
-  border-top: 1px solid var(--line);
+  border-top: 0.5px solid var(--line);
 }
 .sheet .sheetfoot .row { margin: 0 0 8px; }
 .sheet .sheetfoot .row:last-child { margin-bottom: 0; }
 .hint { font-size:12px; color:var(--muted); line-height:1.5; }
 .hint.pwerr { color:var(--err); font-weight:600; }
-.about { border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--panel2); }
+.about { border:0.5px solid var(--line); border-radius:12px; overflow:hidden; background:var(--panel2); }
 .about .abrow { display:flex; justify-content:space-between; gap:12px; padding:9px 12px;
-         font-size:13px; border-bottom:1px solid var(--line); }
+         font-size:13px; border-bottom:0.5px solid var(--line); }
 .about .abrow:last-child { border-bottom:0; }
 .about .abrow span { color:var(--muted); }
 .about .abrow b { color:var(--txt); text-align:right; word-break:break-word; }
 .about a { color:var(--accent); }
 .porow { display:flex; align-items:center; gap:8px; padding:7px 9px; margin-bottom:7px;
-         background:var(--panel2); border:1px solid var(--line); border-radius:11px;
+         background:var(--panel2); border:0.5px solid var(--line); border-radius:12px;
          /* long-press drag-to-reorder: stop iOS text selection / callout on hold */
          -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
 /* the row being dragged floats above its neighbours and follows the finger
@@ -444,7 +461,7 @@ input[type=file] { display:none; }
          border:2px solid var(--accent); pointer-events:none;
          box-shadow:0 4px 14px rgba(0,0,0,.5); background:#000; }
 .scanfilters { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; padding:10px 16px 0; background:#000; }
-.scanfilters button { background:transparent; border:1px solid var(--line); color:#cfd6e4; }
+.scanfilters button { background:transparent; border:0.5px solid var(--line); color:#cfd6e4; }
 .scanfilters button.on { background:var(--accent2); border-color:var(--accent2); color:#fff; }
 
 /* ---------------- More menu: grouped icon grid ---------------- */
@@ -456,8 +473,8 @@ input[type=file] { display:none; }
 .mgrp-l:first-of-type { margin-top:2px; }
 .mgrid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
 .mtile { display:flex; flex-direction:column; align-items:center; justify-content:center;
-         gap:6px; background:var(--panel2); border:1px solid var(--line); color:var(--txt);
-         border-radius:13px; padding:11px 4px; min-height:66px; }
+         gap:6px; background:var(--panel2); border:0.5px solid var(--line); color:var(--txt);
+         border-radius:16px; padding:11px 4px; min-height:66px; }
 .mtile svg.ic { width:22px; height:22px; }
 .mtile span { font-size:10px; font-weight:600; text-align:center; line-height:1.15; }
 .mtile:active:not(:disabled){ background:var(--panel); }

@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.90";
+const APP_BUILD = "10.93";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -87,7 +87,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "5 Jul 2026";    // v10.90
+const BUILD_DATETIME = "5 Jul 2026";    // v10.93
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -219,6 +219,7 @@ const u8 = v => new Uint8Array(v);
   $("unlockBtn").disabled = false;   // Unlock works without an open doc (picks a file)
   $("bigOpen").disabled = false;
   $("bigScan").disabled = false;
+  $("bigPhotos").disabled = false;
   $("welcomeHint").textContent = "Everything stays on your phone — nothing is uploaded.";
   setMeta("No document open", "");
   // fade out the first-paint launch splash now the engine is live, then remove
@@ -232,6 +233,7 @@ const u8 = v => new Uint8Array(v);
 })();
 $("bigOpen").onclick = ()=> confirmDiscard("open another PDF", ()=>$("fileInput").click());
 $("bigScan").onclick = ()=> startScan();
+$("bigPhotos").onclick = ()=> $("imgInput").click();   // no confirm needed: welcome = nothing open
 
 // ---------------- session persistence (IndexedDB, on-device only) ----------------
 // The working document and any in-progress scan survive iOS evicting the PWA.
@@ -474,6 +476,44 @@ async function setZoom(newPct, anchorX, anchorY){
   v.scrollLeft = (sx + ax) * ratio - ax;
   v.scrollTop  = (sy + ay) * ratio - ay;
   zooming = false;
+  saveViewState();               // v10.91: remember zoom for this document
+}
+
+// ---------------- per-document view memory (v10.91) ----------------
+// Remember zoom + reading position per document (keyed by filename, LRU 20)
+// so a file reopened from Recents or session restore comes back exactly where
+// you left it. Throttled; best-effort — failures never surface.
+let viewSaveT = 0;
+function saveViewState(){
+  if (!workingBytes || !MDOC) return;
+  clearTimeout(viewSaveT);
+  viewSaveT = setTimeout(async ()=>{
+    try {
+      const v = $("viewer");
+      const range = v.scrollHeight - v.clientHeight;
+      const frac = range > 0 ? v.scrollTop/range : 0;
+      const views = (await idbGet("views")) || {};
+      views[fileName] = { zoom: zoomPct, frac, ts: Date.now() };
+      const keys = Object.keys(views);
+      if (keys.length > 20){
+        keys.sort((a,b)=>views[a].ts-views[b].ts);
+        for (const k of keys.slice(0, keys.length-20)) delete views[k];
+      }
+      idbSet("views", views).catch(()=>{});
+    } catch(e){}
+  }, 800);
+}
+async function restoreViewState(){
+  try {
+    const views = await idbGet("views");
+    const st = views && views[fileName];
+    if (!st) return;
+    if (st.zoom && st.zoom !== zoomPct) await setZoom(st.zoom);
+    if (st.frac){
+      const v = $("viewer");
+      v.scrollTop = st.frac * (v.scrollHeight - v.clientHeight);
+    }
+  } catch(e){}
 }
 function applyZoom(delta){ setZoom(zoomPct + delta); }
 // On phones (<600px) the − / + buttons are hidden, so the hint must point at the
@@ -627,6 +667,7 @@ async function openBytes(bytes, name){
   await render();
   enableDocButtons(true);
   recentsRemember();               // welcome screen shows it next launch
+  await restoreViewState();        // v10.91: back to where you left off
   // v10.90: level with the user on very large documents — some safeguards
   // (shorter undo history, lighter rendering) kick in to keep iOS from
   // killing the app for memory.
@@ -1969,9 +2010,29 @@ $("imgInput").onchange = async e=>{
   try {
     const doc = await PDFDocument.create();         // fresh document, ignores any open file
     for (const f of files){
-      const buf = new Uint8Array(await f.arrayBuffer());
-      let img;
-      if (/png$/i.test(f.type)||/\.png$/i.test(f.name)) img = await doc.embedPng(buf);
+      // v10.92: size budget. Original camera bytes went straight into the PDF —
+      // five 12MP photos made a ~15–20MB file. Photos larger than ~1.8MB or
+      // 2600px are now downscaled to max 2200px and re-encoded as JPEG q85,
+      // which reads identically on a page but keeps documents shareable.
+      // Small images and PNGs with transparency are embedded untouched.
+      let buf = new Uint8Array(await f.arrayBuffer());
+      const isPng = /png$/i.test(f.type)||/\.png$/i.test(f.name);
+      let img = null;
+      if (!isPng && buf.length > 1.8*1024*1024){
+        try {
+          const url = await fileToDataURL(f);
+          const im = await loadImage(url);
+          if (Math.max(im.width, im.height) > 2600 || buf.length > 1.8*1024*1024){
+            const s = Math.min(1, 2200/Math.max(im.width, im.height));
+            const c = document.createElement("canvas");
+            c.width = Math.round(im.width*s); c.height = Math.round(im.height*s);
+            c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+            const jpg = c.toDataURL("image/jpeg", 0.85);
+            buf = new Uint8Array(await (await fetch(jpg)).arrayBuffer());
+          }
+        } catch(e){ /* fall through: embed the original bytes */ }
+      }
+      if (isPng) img = await doc.embedPng(buf);
       else img = await doc.embedJpg(buf).catch(async()=>{
         const jpg = await toJpeg(await fileToDataURL(f), 0.92);
         return doc.embedJpg(await (await fetch(jpg)).arrayBuffer());
@@ -1985,11 +2046,14 @@ $("imgInput").onchange = async e=>{
     }
     // replace whatever was open — behaves like opening a new document
     workingBytes = new Uint8Array(await doc.save());
-    fileName = "images.pdf";
+    // dated default name, same convention as scans (v10.85)
+    const d=new Date();
+    fileName="Photos "+d.getDate()+" "+d.toLocaleString("en",{month:"short"})+" "+d.getFullYear()
+      +" "+String(d.getHours()).padStart(2,"0")+"."+String(d.getMinutes()).padStart(2,"0")+".pdf";
     undoStack = [];
     setMode(null);
     reopen(); dirty = true; await render(); enableDocButtons(true);
-    setStatus("Done — your photos are now a PDF.","ok");
+    setStatus("Done — your photos are now a PDF ("+fmtKB(workingBytes.length)+"). Tap Save to keep it.","ok");
   } catch(err){ setStatus("Could not turn the photos into a PDF: "+friendly(err),"err"); }
   showSpin(false);
 };
@@ -3385,6 +3449,9 @@ if ("serviceWorker" in navigator)
 
 // welcome screen: show recent files (no-op once a document is open)
 renderRecents();
+
+// v10.91: track the reading position (throttled inside saveViewState)
+$("viewer").addEventListener("scroll", saveViewState, { passive:true });
 
 // one-line "what's new" the first launch after an update, so updates are
 // visible instead of silent. Shown a beat after boot so the engine-ready

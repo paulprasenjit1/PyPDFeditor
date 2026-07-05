@@ -4,6 +4,54 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.93] — 2026-07-05 — OLED visual refresh (styles.css only)
+
+- **True-black chrome.** Header, toolbar and find bar now sit on pure #000 with
+  0.5px translucent hairlines (`--line` is now the iOS separator colour) — on
+  an OLED screen those pixel rows switch off entirely, the page becomes the
+  only lit surface, and battery benefits slightly. Sheets and cards keep the
+  elevated greys.
+- **Floating pills get the iOS bar material.** Zoom and Undo pills use a
+  translucent background with `backdrop-filter` blur+saturate, matching the
+  status toast and page pill that already had it.
+- **Page framing.** Each page has a 0.5px light outline and 4px radius, so
+  pages read as floating sheets — dark scans no longer melt into the black
+  background.
+- **Clearer active mode.** The active Edit/Select/Sign segment is a soft
+  accent-tinted pill instead of a solid gradient block.
+- **Consistency pass.** Radius scale standardised (12 controls · 16 tiles ·
+  24 sheets — was a mix of 9/10/11/13/15/20), all `--line` borders are now
+  0.5px hairlines, and button press feedback is a uniform fast scale(0.96)
+  (reduced-motion unchanged: no transforms).
+- Zero logic changes — this release touches styles.css only (plus version
+  bumps), so behaviour, tests and the scanner are untouched.
+
+## [v10.92] — 2026-07-05 — Photos → PDF: size budget, dated name, welcome button
+
+- **Photos → PDF output is dramatically smaller.** The feature embedded the
+  original camera bytes untouched, so five 12MP photos made a ~15–20MB PDF.
+  Photos over ~1.8MB are now downscaled to max 2200px and re-encoded (JPEG
+  q85) — visually identical on a page, a fraction of the size. Small images
+  and PNGs are still embedded untouched; on any processing error the original
+  bytes are used, so nothing can fail that worked before.
+- **Dated default name** ("Photos 5 Jul 2026 14.30.pdf") instead of every
+  export being "images.pdf", matching the scan-name convention (v10.85), and
+  the done message now shows the resulting file size.
+- **"Photos to PDF" button on the welcome screen.** The feature existed only
+  inside More → Create, invisible to new users; it's now a third big button
+  under Open/Scan.
+
+## [v10.91] — 2026-07-05 — Reopened documents return to where you left off
+
+- **Per-document view memory.** Zoom level and reading position are now saved
+  (throttled, on zoom/scroll, keyed by filename, last 20 documents) and
+  restored when the same document is reopened from Recents or session restore
+  — the file comes back at the exact page and zoom you left, like a proper
+  reader. Best-effort: if nothing was stored the document opens at page 1 /
+  100% exactly as before.
+- Double-tap zoom already existed (toggles 100%↔200% centred on the tap); this
+  completes the "viewer niceties" pair.
+
 ## [v10.90] — 2026-07-05 — Memory guard for large documents
 
 - **The undo budget now scales with document size.** Previously a 20MB+ scanned
