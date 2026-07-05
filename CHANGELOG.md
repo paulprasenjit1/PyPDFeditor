@@ -4,6 +4,59 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.90] — 2026-07-05 — Memory guard for large documents
+
+- **The undo budget now scales with document size.** Previously a 20MB+ scanned
+  file could hold up to 10 full snapshots (plus the working copy, engine and
+  page rasters) — enough to breach WKWebView's hard memory limit on older
+  iPhones, where iOS kills the app silently and the session is lost. Now: files
+  over 24MB keep 3 undo steps (48MB budget), over 8MB keep 5 (80MB), small
+  documents keep the full 10-step / 120MB history as before.
+- **Stale thumbnails are dropped on every edit.** Page thumbnails were only
+  evicted by a 400-entry LRU cap, so a long editing session kept hundreds of
+  dataURLs from old document versions alive; the cache is now pruned to the
+  current version whenever the bytes change.
+- **Large-document notice on open.** Files over 24MB or 150 pages now say up
+  front that undo history is shortened and rendering lightened, instead of
+  applying the safeguards silently.
+- Existing protections unchanged: >150-page docs render at 2× with a 2600px
+  cap, offscreen pages release their bitmaps, snapshots are skipped entirely
+  above 48MB per copy.
+
+## [v10.89] — 2026-07-05 — Install polish: manifest, maskable icon, landscape splash
+
+- **Manifest completed:** stable `id`, `categories` (productivity/utilities),
+  and a dedicated `icon-maskable-512.png` — the app icon content scaled to the
+  80% safe zone on a full-bleed background, so Android launchers no longer risk
+  clipping the artwork (previously the plain icon doubled as maskable).
+- **Landscape launch screens.** Ten landscape variants of the iOS startup
+  images were generated (dimensions swapped, logo centred) and declared with
+  `orientation: landscape` media queries — a landscape cold launch now shows
+  the branded splash instead of a white flash.
+- **Housekeeping:** stray write-test artifacts removed from `backups/`;
+  `package.json` gains an `npm test` script running the full 5-file suite and
+  moves jsdom to devDependencies. Confirmed `backups/` and `tests/` are already
+  excluded from deployment via .gitignore + DEPLOY.md (nothing to fix there).
+- Maskable icon added to the SW app-shell precache.
+
+## [v10.88] — 2026-07-05 — Hardening: storage failures surfaced, SW cache constrained
+
+- **Storage failures are no longer silent.** All persistence writes (session
+  backup, incremental scan pages, recents) previously swallowed every error;
+  on a storage-full iPhone they quietly stopped working. Quota-type failures
+  now surface once per session as a clear warning toast ("device low on
+  storage — unsaved-work backup and Recents are paused"); the app keeps
+  running and explicit saves are unaffected. Audit note: user-initiated
+  actions (open/save/export/compress) already reported failures via
+  `friendly()` + status; the remaining ~50 empty catches are benign cleanup
+  (destroy/focus/revoke) and were deliberately left alone.
+- **`navigator.storage.persist()` requested at startup** so iOS is less likely
+  to evict session-restore and recents data after periods of non-use.
+- **Service worker runtime cache constrained.** The fetch handler cached ANY
+  same-origin GET into the app cache forever (cache-first, no expiry). It now
+  only caches known asset types (html/css/js/json/webmanifest/png/svg/wasm/
+  fonts); anything else passes through to the network uncached.
+
 ## [v10.87] — 2026-07-05 — Scanner: stop the box landing on tables and beds
 
 - **Work-table (wood) and bed surfaces no longer attract the green box.** The

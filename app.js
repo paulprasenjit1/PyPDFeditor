@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.87";
+const APP_BUILD = "10.90";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -87,7 +87,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "5 Jul 2026";    // v10.87
+const BUILD_DATETIME = "5 Jul 2026";    // v10.90
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -298,6 +298,23 @@ async function idbDel(key){
     tx.onerror=()=>rej(tx.error);
   });
 }
+// ---- storage failure funnel (v10.88) ----
+// Persist writes used to swallow every failure silently; on a full iPhone that
+// meant session-restore / scan pages / recents quietly stopped working. Quota
+// problems now surface ONCE per session as a warning toast (the app keeps
+// running — persistence is a convenience, not a requirement).
+let storageWarned = false;
+function storageWarn(e){
+  const quota = e && (e.name === "QuotaExceededError" || /quota|storage/i.test(String(e.message||e)));
+  if (!quota || storageWarned) return;
+  storageWarned = true;
+  setStatus("Your device is low on storage — unsaved-work backup and Recents are paused. Saved PDFs are not affected.", "warn");
+}
+// Ask the browser to protect our storage from automatic eviction (iOS clears
+// unprotected site data after periods of non-use — that silently wiped
+// session-restore and recents). Best-effort; denial is fine.
+try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{}); } catch(e){}
+
 // very large documents are not auto-persisted: cloning ~100MB to storage on
 // every change caused multi-second stalls and memory spikes. The original
 // file already exists in Files, so nothing is lost — only session-restore.
@@ -306,7 +323,7 @@ function persistDocNow(){
   persistT=0;
   try {
     if (workingBytes && !docSensitive && workingBytes.length <= PERSIST_MAX_BYTES)
-      idbSet("doc",{ name:fileName, bytes:workingBytes, ts:Date.now(), dirty }).catch(()=>{});
+      idbSet("doc",{ name:fileName, bytes:workingBytes, ts:Date.now(), dirty }).catch(storageWarn);
     else idbDel("doc").catch(()=>{});
   } catch(e){}
 }
@@ -329,8 +346,8 @@ function persistScan(){
     if (!appendOnly)
       for (let i=scanPages.length;i<prev.length;i++) idbDel("scan:p"+i).catch(()=>{});
     for (let i=(appendOnly?prev.length:0); i<scanPages.length; i++)
-      idbSet("scan:p"+i, scanPages[i]).catch(()=>{});
-    idbSet("scan", { count:scanPages.length, ts:Date.now() }).catch(()=>{});
+      idbSet("scan:p"+i, scanPages[i]).catch(storageWarn);
+    idbSet("scan", { count:scanPages.length, ts:Date.now() }).catch(storageWarn);
     scanPersistPrev = scanPages.slice();
   } catch(e){}
 }
@@ -366,7 +383,7 @@ function recentsRemember(){
     await idbSet(id, bytes);
     await idbSet("recents", list);
     renderRecents();
-  } catch(e){} })();
+  } catch(e){ storageWarn(e); } })();
 }
 async function renderRecents(){
   const box = $("recents"); if (!box) return;
@@ -413,6 +430,10 @@ function reopen(){
   MDOC = mupdf.Document.openDocument(workingBytes.slice(0), "application/pdf").asPDF();
   epoch++;
   spanCache.clear();
+  // v10.90: drop thumbnails from previous epochs immediately. They were only
+  // evicted by the 400-entry LRU cap, so a long editing session on a big
+  // document kept hundreds of stale dataURLs alive.
+  for (const k of [...thumbCache.keys()]) if (!k.startsWith(epoch+":")) thumbCache.delete(k);
   schedulePersistDoc();        // every byte change flows through here
   // an edit changes the bytes → previously found matches are stale. Re-run the
   // search against the new document so highlights and the count stay correct.
@@ -606,6 +627,12 @@ async function openBytes(bytes, name){
   await render();
   enableDocButtons(true);
   recentsRemember();               // welcome screen shows it next launch
+  // v10.90: level with the user on very large documents — some safeguards
+  // (shorter undo history, lighter rendering) kick in to keep iOS from
+  // killing the app for memory.
+  if (workingBytes.length > 24*1024*1024 || MDOC.countPages() > 150)
+    setStatus("Opened "+fileName+" — large document, so undo history is shortened and rendering is lightened to keep things smooth.","ok");
+  else
   setStatus("Opened "+fileName+". "+zoomTip(),"ok");
 }
 function baseFrom(n){ return (n||"document.pdf").replace(/\.[^.]+$/,""); }
@@ -3037,19 +3064,31 @@ async function rasterize(dpi, quality){
 }
 
 // ---------------- undo ----------------
-const UNDO_LIMIT = 10;                       // max steps
+const UNDO_LIMIT = 10;                       // max steps (small documents)
 const UNDO_BYTES_CAP = 120*1024*1024;        // max total memory for undo copies
 let undoStack = [];
+// v10.90: the undo budget now SCALES DOWN with document size. A 20MB scanned
+// file with 10 snapshots plus the working copy, engine and page rasters can
+// breach WKWebView's hard memory limit on older iPhones — iOS then kills the
+// app silently, losing the session. Fewer, cheaper steps on big files keeps
+// the total footprint predictable; small documents keep the full history.
+function undoBudget(){
+  const sz = workingBytes ? workingBytes.length : 0;
+  if (sz > 24*1024*1024) return { steps:3, bytes:48*1024*1024 };
+  if (sz >  8*1024*1024) return { steps:5, bytes:80*1024*1024 };
+  return { steps:UNDO_LIMIT, bytes:UNDO_BYTES_CAP };
+}
 function pushUndo(){
   // Each entry remembers BOTH the pre-mutation bytes and the dirty state at that
   // point, so undoing back to the originally-opened document also restores
   // dirty=false (rather than always leaving a spurious "unsaved changes" flag).
   undoStack.push({ bytes: workingBytes ? workingBytes.slice(0) : null, dirty });
   dirty = true;                              // every mutation passes through here
-  if (undoStack.length>UNDO_LIMIT) undoStack.shift();
+  const budget = undoBudget();
+  while (undoStack.length > budget.steps) undoStack.shift();
   // large documents: keep undo memory bounded by dropping the oldest steps
   let total=0; for (const e of undoStack) total += e.bytes ? e.bytes.length : 0;
-  while (total > UNDO_BYTES_CAP && undoStack.length > 1){
+  while (total > budget.bytes && undoStack.length > 1){
     const drop = undoStack.shift(); total -= drop.bytes ? drop.bytes.length : 0;
   }
   refreshUndo();
