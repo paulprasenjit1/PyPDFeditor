@@ -247,6 +247,19 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    big buttons. */
 .welcome .big svg.ic { width:21px; height:21px; flex:0 0 auto; }
 .welcome .big.ghost { border-width:1.5px; box-shadow:none; }
+/* recent files list under the welcome buttons: quiet rows, filename first,
+   size · date second. Hidden entirely (attribute) when there is nothing. */
+.recents { width:min(280px,80vw); margin-top:6px; text-align:left; }
+.recents .rctitle { margin:0 0 6px 2px; font-size:12px; font-weight:600; letter-spacing:.06em;
+        text-transform:uppercase; color:var(--muted); }
+.recents .rcrow { display:flex; flex-direction:column; align-items:flex-start; gap:1px;
+        width:100%; padding:10px 12px; margin-bottom:6px; border-radius:11px;
+        background:var(--panel2); border:1px solid var(--line); text-align:left; }
+.recents .rcname { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+        font-size:14px; color:var(--txt); }
+.recents .rcinfo { font-size:12px; color:var(--muted); }
+.recents .rcclear { display:block; margin:2px auto 0; padding:8px 12px; background:none;
+        border:none; font-size:12px; color:var(--muted); text-decoration:underline; }
 /* engine download progress bar — inserted by engine-watchdog.js on first launch
    only (the ~10MB WASM engine). Fill width is set via the CSSOM (CSP-safe). */
 .welcome .engbar { width:min(280px,80vw); height:6px; border-radius:3px; background:var(--panel2);
@@ -350,7 +363,15 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .about .abrow b { color:var(--txt); text-align:right; word-break:break-word; }
 .about a { color:var(--accent); }
 .porow { display:flex; align-items:center; gap:8px; padding:7px 9px; margin-bottom:7px;
-         background:var(--panel2); border:1px solid var(--line); border-radius:11px; }
+         background:var(--panel2); border:1px solid var(--line); border-radius:11px;
+         /* long-press drag-to-reorder: stop iOS text selection / callout on hold */
+         -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+/* the row being dragged floats above its neighbours and follows the finger
+   (transform set from JS); neighbours slide out of the way with a transition */
+.porow { transition:transform .12s ease; }
+.porow.drag { transition:none; position:relative; z-index:5; opacity:.92;
+         box-shadow:0 8px 22px rgba(0,0,0,.45); border-color:var(--accent); }
+@media (prefers-reduced-motion: reduce){ .porow { transition:none; } }
 /* square, fixed footprint so a 90°/270° preview rotation stays fully inside the
    box (the footprint is unchanged by a quarter turn) and never overlaps the row */
 .porow img { width:52px; height:52px; object-fit:contain; background:#fff; border-radius:3px;

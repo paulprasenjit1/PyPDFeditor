@@ -442,11 +442,114 @@ export function detectQuad(im){
     const mask=dqBuf("mask",n,Uint8Array,false);   // pooled; fully overwritten below
     if (bright){ for (let i=0;i<n;i++) mask[i]=bl[i]>thr?1:0; }
     else       { for (let i=0;i<n;i++) mask[i]=bl[i]<=thr?1:0; }
-    const q=bestRegionQuad(mask,w,h);
+    const q=bestRegionQuad(mask,w,h,bl,d);
     if (q) return q;
   }
   // pass 2: gradient fallback (same-tone paper separated only by an edge/shadow)
-  return gradientQuad(bl,g,w,h);
+  return gradientQuad(bl,g,w,h,d);
+}
+
+// ---- document priors (v10.86): prefer things shaped and toned like a page ----
+// bilinear point inside/along a quad: u across the top/bottom edges, v down
+function quadPoint(q,u,v){
+  const tx=q[0].x+(q[1].x-q[0].x)*u, ty=q[0].y+(q[1].y-q[0].y)*u;
+  const bx=q[3].x+(q[2].x-q[3].x)*u, by=q[3].y+(q[2].y-q[3].y)*u;
+  return { x:tx+(bx-tx)*v, y:ty+(by-ty)*v };
+}
+// HARD gate: a page/card seen by a hand-held phone has corners near 90°.
+// ±25° tolerance covers real perspective; arbitrary trapezoids from surface
+// edges, shadows and furniture fail this.
+function quadAnglesOk(q){
+  for (let i=0;i<4;i++){
+    const a=q[(i+3)&3], b=q[i], c=q[(i+1)&3];
+    const v1x=a.x-b.x, v1y=a.y-b.y, v2x=c.x-b.x, v2y=c.y-b.y;
+    const m=Math.hypot(v1x,v1y)*Math.hypot(v2x,v2y)||1;
+    const ang=Math.acos(Math.max(-1,Math.min(1,(v1x*v2x+v1y*v2y)/m)))*180/Math.PI;
+    if (ang<65 || ang>115) return false;
+  }
+  return true;
+}
+// SOFT prior 0.5..1.0: aspect ratio close to a known document — A5/A4 portrait
+// & Letter (~1.29–1.46) or an ISO ID-1 card (1.586: PAN, Aadhaar, voter card,
+// driving licence). Off-ratio shapes are down-weighted, never rejected, so
+// receipts/odd sizes still win when nothing better is in frame.
+function aspectPrior(q){
+  const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  const s1=(dist(q[0],q[1])+dist(q[3],q[2]))/2;
+  const s2=(dist(q[0],q[3])+dist(q[1],q[2]))/2;
+  const ar=Math.max(s1,s2)/Math.max(1,Math.min(s1,s2));
+  let best=0;
+  for (const t of [1.294, 1.414, 1.586])
+    best=Math.max(best, Math.exp(-((ar-t)/0.35)*((ar-t)/0.35)));
+  return 0.5+0.5*best;
+}
+// SOFT prior 0.55..1.0: documents separate from their background (interior vs
+// just-outside brightness) and paper/card faces are bright with low-to-moderate
+// colour saturation. A patch of bare desk scores low on both. Soft on purpose —
+// D2-style same-tone paper (shadow-line only) must stay detectable.
+function docTonePrior(q, bl, d, w, h){
+  let inSum=0, inN=0, satSum=0;
+  for (let iu=0; iu<4; iu++) for (let iv=0; iv<4; iv++){
+    const p=quadPoint(q, 0.2+0.6*iu/3, 0.2+0.6*iv/3);
+    const x=p.x|0, y=p.y|0; if (x<0||y<0||x>=w||y>=h) continue;
+    const i=y*w+x; inSum+=bl[i]; inN++;
+    const j=i*4, r=d[j], g=d[j+1], b=d[j+2], mx=Math.max(r,g,b)||1;
+    satSum+=(mx-Math.min(r,g,b))/mx;
+  }
+  if (!inN) return 0.55;
+  const cx=(q[0].x+q[1].x+q[2].x+q[3].x)/4, cy=(q[0].y+q[1].y+q[2].y+q[3].y)/4;
+  let outSum=0, outN=0;
+  for (const [u,v] of [[0.5,0],[1,0.5],[0.5,1],[0,0.5],[0,0],[1,0],[1,1],[0,1]]){
+    const e=quadPoint(q,u,v);
+    const x=(e.x+(e.x-cx)*0.12)|0, y=(e.y+(e.y-cy)*0.12)|0;
+    if (x<0||y<0||x>=w||y>=h) continue;
+    outSum+=bl[y*w+x]; outN++;
+  }
+  const contrast = outN ? Math.abs(inSum/inN - outSum/outN) : 48;
+  const cScore = Math.min(1, contrast/48);                    // 0..1
+  const sat = satSum/inN;
+  // v10.87: penalty starts at 0.30 saturation (was 0.45) with more weight, so
+  // bare wood (sat ~0.3–0.6) scores low even away from the frame borders
+  const pScore = 1 - Math.min(1, Math.max(0, sat-0.30)/0.35);
+  return (0.55+0.45*cScore) * (0.7+0.3*pScore);
+}
+// v10.87 — surfaces (work table, bed) run OFF the frame; a document the user
+// is aiming at sits INSIDE it. borderFrac = fraction of the quad's outline
+// lying within ~2% of the frame border.
+function borderFrac(q,w,h){
+  const m = Math.max(3, 0.02*Math.min(w,h));
+  let hit=0, tot=0;
+  for (let s=0;s<4;s++){
+    const a=q[s], b=q[(s+1)&3];
+    const steps=Math.max(8, Math.round(Math.hypot(b.x-a.x,b.y-a.y)/4));
+    for (let k=0;k<=steps;k++){
+      const x=a.x+(b.x-a.x)*k/steps, y=a.y+(b.y-a.y)*k/steps;
+      tot++;
+      if (x<m || y<m || x>w-1-m || y>h-1-m) hit++;
+    }
+  }
+  return hit/tot;
+}
+// warm-saturated interior (brown/orange, R>G>B) — wood, not paper or a card
+function warmInterior(q,d,w,h){
+  let r=0,g=0,b=0,sat=0,nn=0;
+  for (let iu=0; iu<4; iu++) for (let iv=0; iv<4; iv++){
+    const p=quadPoint(q, 0.2+0.6*iu/3, 0.2+0.6*iv/3);
+    const x=p.x|0, y=p.y|0; if (x<0||y<0||x>=w||y>=h) continue;
+    const j=(y*w+x)*4, mx=Math.max(d[j],d[j+1],d[j+2])||1;
+    r+=d[j]; g+=d[j+1]; b+=d[j+2]; sat+=(mx-Math.min(d[j],d[j+1],d[j+2]))/mx; nn++;
+  }
+  if (!nn) return false;
+  r/=nn; g/=nn; b/=nn; sat/=nn;
+  return sat>0.25 && r>g*1.15 && g>b*1.05;
+}
+// combined off-frame surface penalty: soft for everything, extra-strong once
+// most of the outline hugs the border (a surface, not an aimed-at document) —
+// never a hard rejection, so a lone edge-to-edge page still detects
+function offFramePenalty(bf){
+  let p = 1 - 0.5*bf;
+  if (bf > 0.6) p *= 0.35;
+  return p;
 }
 
 // scan all connected components of a binary mask; return the best one that
@@ -454,7 +557,7 @@ export function detectQuad(im){
 // the aimed-at document is preferred over an off-centre distractor (a trackpad,
 // a keyboard, a phone) of comparable size. `opts.fill` / `opts.outline` relax
 // the shape gates for the fallback pass (defaults are the strict values).
-function bestRegionQuad(mask,w,h){
+function bestRegionQuad(mask,w,h,bl,d){
   const n=w*h;
   const cw=w/2, ch=h/2, diag=Math.hypot(w,h)||1;
   const seen=dqBuf("seen",n,Uint8Array,true);    // visited flags: must start zeroed
@@ -496,8 +599,15 @@ function bestRegionQuad(mask,w,h){
       }
     }
     if (outlineCoverage(q,boundary,w,h) < 0.80) continue;
+    if (!quadAnglesOk(q)) continue;                 // v10.86: corners must be page-like
+    const bf=borderFrac(q,w,h);
+    // v10.87 wood gate: a warm-saturated region running off the frame is a
+    // table top, never a page or an ID card — reject outright
+    if (bf>0.6 && warmInterior(q,d,w,h)) continue;
     const qx=(tl.x+tr.x+br.x+blc.x)/4, qy=(tl.y+tr.y+br.y+blc.y)/4;
-    const score=area*(1 - 0.6*Math.hypot(qx-cw,qy-ch)/diag);   // centre bias
+    const score=area*(1 - 0.6*Math.hypot(qx-cw,qy-ch)/diag)    // centre bias
+               *aspectPrior(q)*docTonePrior(q,bl,d,w,h)        // v10.86 document priors
+               *offFramePenalty(bf);                           // v10.87 surface penalty
     if (score>bestScore){ best=q; bestScore=score; }
   }
   return best;
@@ -519,7 +629,7 @@ function quadIsSane(q,w,h){
 
 // gradient fallback: Sobel edges -> dilate -> largest edge structure ->
 // corner extremes -> accept only if edges cover most of the quad outline
-function gradientQuad(bl,g,w,h){
+function gradientQuad(bl,g,w,h,d){
   const n=w*h;
   const cw=w/2, ch=h/2, diag=Math.hypot(w,h)||1;
   const mag=dqBuf("mag",n,Float32Array,true);   // interior only written; borders must be 0
@@ -567,8 +677,14 @@ function gradientQuad(bl,g,w,h){
     if (quadArea(q) > n*0.95) continue;
     if (!quadIsSane(q,w,h)) continue;
     if (outlineCoverage(q,dil,w,h) < 0.80) continue;   // outline must really exist
+    if (!quadAnglesOk(q)) continue;                    // v10.86: corners must be page-like
+    const bf=borderFrac(q,w,h);
+    if (bf>0.6 && warmInterior(q,d,w,h)) continue;     // v10.87 wood gate
     const qx=(tl.x+tr.x+br.x+blc.x)/4, qy=(tl.y+tr.y+br.y+blc.y)/4;
-    const score=span*(1 - 0.6*Math.hypot(qx-cw,qy-ch)/diag);   // centre bias
+    // aspect prior only here — the tone prior needs an interior/surround
+    // brightness difference, which same-tone shadow-line documents (the very
+    // case this fallback exists for) legitimately don't have
+    const score=span*(1 - 0.6*Math.hypot(qx-cw,qy-ch)/diag)*aspectPrior(q)*offFramePenalty(bf);
     if (score>bestScore){ best=q; bestScore=score; }
   }
   return best;

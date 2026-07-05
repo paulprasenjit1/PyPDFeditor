@@ -4,6 +4,71 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.87] — 2026-07-05 — Scanner: stop the box landing on tables and beds
+
+- **Work-table (wood) and bed surfaces no longer attract the green box.** The
+  key observation: a document you're aiming at sits INSIDE the frame, while a
+  table or bed runs OFF its edges. New `borderFrac` measures how much of a
+  candidate's outline hugs the frame border:
+  - **Off-frame surface penalty (soft):** score scaled down with border
+    contact, and cut hard (×0.35) once >60% of the outline is on the border —
+    so any real document elsewhere in frame always outranks the surface. Never
+    a hard rejection: a lone page framed edge-to-edge (D6) still detects.
+  - **Wood gate (hard):** a candidate that is BOTH >60% off-frame AND has a
+    warm-saturated interior (brown/orange, R>G>B — wood tones) is rejected
+    outright; that is never a page or an ID card.
+  - **Stronger saturation penalty:** starts at 0.30 saturation (was 0.45) with
+    more weight, so bare wood scores low even away from the borders.
+- New tests: D13 off-frame wooden surface alone → no box; D14 page lying on a
+  wooden table → page detected to 1px; D15 page beats a much larger off-frame
+  bed-sheet region. Full 68-test suite green.
+- Known limit (unchanged): an empty neutral bed sheet filling the whole frame
+  with nothing else in view is geometrically a huge white page and may still
+  box occasionally; the moment a document enters the frame it wins.
+
+## [v10.86] — 2026-07-05 — Scanner: detect documents, not surfaces
+
+- **The live green box now prefers things shaped and toned like a document**
+  instead of latching onto any large bright/dark patch (a tabletop against the
+  floor, a keyboard, a tile). Three "document priors" were added to the shared
+  detector in `scan-core.js`:
+  - **Corner-angle gate (hard):** all four corners must be within 90° ± 25° —
+    real pages and cards seen by a hand-held phone are near-rectangular, while
+    surface edges/shadows produce skewed trapezoids that now fail outright.
+  - **Aspect-ratio prior (soft):** candidates near known document shapes score
+    higher — A4/A5/Letter (~1.29–1.46) and ISO ID-1 cards (1.586 — PAN, Aadhaar
+    card, voter card, driving licence all share this shape). Off-ratio shapes
+    are down-weighted, never rejected, so receipts and odd sizes still detect.
+  - **Tone prior (soft):** interior-vs-surround brightness contrast plus a
+    low-saturation "paper/card face" preference — a patch of bare desk or a
+    saturated mousepad scores low; a page or ID card scores high.
+- Priors are deliberately soft (learned from the v10.40→10.41 over-eager
+  detection revert): only the angle gate is hard, the gradient fallback keeps
+  working for same-tone paper found by its shadow line (its tone prior is
+  skipped by design), and manual crop is unchanged.
+- New detector tests: D9 skewed trapezoid rejected, D10 ID-1 card detected,
+  D11 A4 page beats a larger square distractor, D12 neutral page beats a larger
+  saturated patch. All 12 detect tests and the full 65-test suite pass.
+
+## [v10.85] — 2026-07-05 — UX: recent files, drag-reorder pages, dated scan names, what's-new
+
+- **Recent files on the welcome screen.** The last 5 opened/saved PDFs are kept
+  on-device (IndexedDB) and listed under the Open/Scan buttons — tap to reopen,
+  or "Clear recents" to forget them. Password-unlocked documents and files over
+  25 MB are never remembered (same privacy rule as session restore). A dead
+  entry (storage evicted) removes itself when tapped.
+- **Pages sheet: hold-and-drag to reorder.** Long-press (250 ms) a page row and
+  drag it to its new position — neighbours slide out of the way live. The ↑ ↓
+  buttons still work; a quick swipe before the hold matures still scrolls the
+  sheet. Respects reduced-motion.
+- **Scans get a dated default name** — "Scan 5 Jul 2026 14.30.pdf" instead of
+  every scan being "scan.pdf", so saved scans are findable in Files. The save
+  sheet still lets you rename before saving. (S9 test updated to match.)
+- **"What's new" note after an update.** The first launch on a new build shows a
+  one-line status toast saying what changed, instead of updating silently. Never
+  shown on a fresh install.
+- Version bumped to 10.85 (app.js, sw.js cache, index.html data-build).
+
 ## [v10.84] — 2026-06-28 — Header label: keep file size visible on long names
 
 - **The header info label no longer hides the file size when the filename is

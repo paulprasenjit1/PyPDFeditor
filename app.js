@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.84";
+const APP_BUILD = "10.87";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -87,7 +87,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "28 Jun 2026";   // v10.84
+const BUILD_DATETIME = "5 Jul 2026";    // v10.87
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -346,6 +346,65 @@ function dropScanStorage(count){
   } catch(e){}
 }
 
+// ---------------- recent files (welcome screen, most-recent-first) ----------------
+// A small MRU list so the app opens to your work, not a blank screen. Bytes are
+// stored per entry under their own key; sensitive (password-unlocked) documents
+// and very large files are never remembered, same rule as session persistence.
+const RECENTS_MAX = 5;
+async function recentsGet(){ try { return (await idbGet("recents")) || []; } catch(e){ return []; } }
+function recentsRemember(){
+  if (!workingBytes || docSensitive || workingBytes.length > PERSIST_MAX_BYTES) return;
+  const bytes = workingBytes, name = fileName;
+  (async ()=>{ try {
+    let list = await recentsGet();
+    for (const r of list.filter(r=>r.name===name)) idbDel(r.id).catch(()=>{});
+    list = list.filter(r=>r.name!==name);
+    const id = "recent:"+Date.now();
+    list.unshift({ id, name, size:bytes.length, ts:Date.now() });
+    for (const r of list.slice(RECENTS_MAX)) idbDel(r.id).catch(()=>{});
+    list = list.slice(0, RECENTS_MAX);
+    await idbSet(id, bytes);
+    await idbSet("recents", list);
+    renderRecents();
+  } catch(e){} })();
+}
+async function renderRecents(){
+  const box = $("recents"); if (!box) return;
+  const list = await recentsGet();
+  if (!list.length){ box.hidden = true; box.innerHTML = ""; return; }
+  const rows = list.map(r=>{
+    const d = new Date(r.ts);
+    const when = d.toLocaleDateString(undefined, { day:"numeric", month:"short" });
+    return h`<button class="rcrow" data-rc="${r.id}">
+      <span class="rcname">${r.name}</span>
+      <span class="rcinfo">${fmtKB(r.size)} · ${when}</span>
+    </button>`;
+  }).join("");
+  box.innerHTML = h`<p class="rctitle">Recent</p>${raw(rows)}
+    <button class="rcclear" id="rcClear">Clear recents</button>`;
+  box.hidden = false;
+  box.querySelectorAll("[data-rc]").forEach(b=>b.onclick = async ()=>{
+    if ($("bigOpen").disabled){ setStatus("One moment — the engine is still loading.","warn"); return; }
+    const id = b.dataset.rc;
+    try {
+      const bytes = await idbGet(id);
+      if (!bytes || !bytes.length) throw new Error("no longer stored on this device");
+      const entry = (await recentsGet()).find(r=>r.id===id);
+      showSpin(true,"Opening…");
+      await openBytes(bytes, (entry && entry.name) || "document.pdf");
+    } catch(e){
+      setStatus("Could not open it: "+friendly(e),"err");
+      // drop the dead entry so the list stays honest
+      try { const list=(await recentsGet()).filter(r=>r.id!==id); await idbSet("recents", list); idbDel(id).catch(()=>{}); renderRecents(); } catch(e2){}
+    }
+    showSpin(false);
+  });
+  $("rcClear").onclick = async ()=>{
+    try { for (const r of await recentsGet()) idbDel(r.id).catch(()=>{}); await idbDel("recents"); } catch(e){}
+    renderRecents();
+  };
+}
+
 // ---------------- mupdf doc lifecycle ----------------
 function closeDoc(){ if (MDOC){ try{ MDOC.destroy(); }catch(e){} MDOC=null; } }
 function reopen(){
@@ -546,6 +605,7 @@ async function openBytes(bytes, name){
   setMode(null);
   await render();
   enableDocButtons(true);
+  recentsRemember();               // welcome screen shows it next launch
   setStatus("Opened "+fileName+". "+zoomTip(),"ok");
 }
 function baseFrom(n){ return (n||"document.pdf").replace(/\.[^.]+$/,""); }
@@ -1598,6 +1658,7 @@ function closeFile(){
   $("emptyMsg").style.display = "block";
   setMeta("No document open", "");
   enableDocButtons(false);
+  renderRecents();                 // welcome screen is visible again
   setStatus("Closed. Open a PDF or scan a document.", "ok");
 }
 
@@ -1658,7 +1719,7 @@ async function openOrganise(){
       </div>`;
     }).join("");
     $("sheet").innerHTML = h`<h3>Pages</h3>
-      <p class="hint">Move pages with ↑ ↓. ⟳ turns a page a quarter. Nothing changes until you tap Apply.</p>
+      <p class="hint">Hold a page and drag to move it, or use ↑ ↓. ⟳ turns a page a quarter. Nothing changes until you tap Apply.</p>
       <div id="orgRows">${raw(rows)}</div>
       <div class="sheetfoot">
         <div class="row"><button class="full" id="orgApply">Apply</button></div>
@@ -1676,6 +1737,58 @@ async function openOrganise(){
     $("sheet").querySelectorAll("img[data-pthumb]").forEach(im=>{
       const deg = rot[+im.dataset.pthumb]||0;
       im.style.transform = deg ? "rotate("+deg+"deg)" : "";
+    });
+    // long-press (250ms) drag-to-reorder — the ↑ ↓ buttons still work, this is
+    // just faster for big moves. Before the hold matures, a >8px move is treated
+    // as a normal sheet scroll and the drag is abandoned.
+    $("sheet").querySelectorAll(".porow").forEach(row=>{
+      row.addEventListener("pointerdown", (ev)=>{
+        if (ev.target.closest("button")) return;
+        const pos = +row.dataset.pos;
+        const rows = [...$("orgRows").children];
+        const rh = row.offsetHeight + 7;                 // row height + margin
+        let dragging=false, startY=ev.clientY, curY=startY;
+        const timer = setTimeout(()=>{
+          dragging = true;
+          row.classList.add("drag");
+          try { row.setPointerCapture(ev.pointerId); } catch(e){}
+        }, 250);
+        const clampShift = ()=> Math.max(-pos, Math.min(order.length-1-pos, Math.round((curY-startY)/rh)));
+        const move = (e)=>{
+          curY = e.clientY;
+          if (!dragging){ if (Math.abs(curY-startY) > 8) cleanup(); return; }
+          e.preventDefault();                            // stop sheet scroll while dragging
+          row.style.transform = "translateY("+(curY-startY)+"px)";
+          const target = pos + clampShift();
+          rows.forEach((r,i)=>{
+            if (r===row) return;
+            let dy = 0;
+            if (i>pos && i<=target) dy = -rh;
+            if (i<pos && i>=target) dy =  rh;
+            r.style.transform = dy ? "translateY("+dy+"px)" : "";
+          });
+        };
+        const up = ()=>{
+          const wasDragging = dragging, shift = clampShift();
+          cleanup();
+          if (wasDragging && shift){
+            const [m] = order.splice(pos,1);
+            order.splice(pos+shift, 0, m);
+            draw();
+          }
+        };
+        const cleanup = ()=>{
+          clearTimeout(timer); dragging=false;
+          row.classList.remove("drag"); row.style.transform="";
+          rows.forEach(r=>r.style.transform="");
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", cleanup);
+        };
+        window.addEventListener("pointermove", move, { passive:false });
+        window.addEventListener("pointerup", up);
+        window.addEventListener("pointercancel", cleanup);
+      });
     });
     lazyThumbs();
   }
@@ -2677,9 +2790,14 @@ async function createScanPdf(){
       pg.drawImage(img,{x:0,y:0,width:p.w*sPt,height:p.h*sPt});
     }
     workingBytes=new Uint8Array(await doc.save());
-    fileName="scan.pdf"; undoStack=[]; setMode(null);
+    // dated default name ("Scan 5 Jul 2026 14.30.pdf") so saved scans are
+    // findable in Files instead of a pile of identical "scan.pdf"s
+    const d=new Date();
+    fileName="Scan "+d.getDate()+" "+d.toLocaleString("en",{month:"short"})+" "+d.getFullYear()
+      +" "+String(d.getHours()).padStart(2,"0")+"."+String(d.getMinutes()).padStart(2,"0")+".pdf";
+    undoStack=[]; setMode(null);
     reopen(); dirty = true; await render(); enableDocButtons(true);
-    setStatus("Scanned "+pages.length+" page(s) into scan.pdf — tap Save to keep it.","ok");
+    setStatus("Scanned "+pages.length+" page(s) — tap Save to keep it as “"+fileName+"”.","ok");
   } catch(err){ setStatus("Could not create the PDF: "+friendly(err),"err"); }
   showSpin(false);
 };
@@ -2775,6 +2893,7 @@ function openSaveSheet(after){
     dirty = false;                 // saved — nothing unsaved any more
     if (MDOC) setMeta(nm, fmtKB(workingBytes.length));
     schedulePersistDoc();
+    recentsRemember();             // saved under its final name
     setStatus("Saved — now pick where to keep it (e.g. Save to Files).","ok");
     if (after) after();
   };
@@ -3224,3 +3343,16 @@ window.addEventListener("pageshow", (e)=>{
 // service worker
 if ("serviceWorker" in navigator)
   window.addEventListener("load", ()=> navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+
+// welcome screen: show recent files (no-op once a document is open)
+renderRecents();
+
+// one-line "what's new" the first launch after an update, so updates are
+// visible instead of silent. Shown a beat after boot so the engine-ready
+// status has already settled; skipped entirely on a brand-new install.
+try {
+  const seen = localStorage.getItem("pypdf-seen-build");
+  localStorage.setItem("pypdf-seen-build", APP_BUILD);
+  if (seen && seen !== APP_BUILD)
+    setTimeout(()=>{ setStatus("Updated to v"+APP_BUILD+" — recent files on the welcome screen, drag pages to reorder, dated scan names.","ok"); }, 3500);
+} catch(e){}
