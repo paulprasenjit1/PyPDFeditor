@@ -4,6 +4,23 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.94.1] — 2026-07-05 — Regression round for v10.85–v10.94 (tests only)
+
+- **Full regression + validation pass over everything added since v10.85.**
+  Found and fixed: `tests/harness.mjs` (91 checks) was never wired into
+  `npm test` and still asserted the old "scan.pdf" name — assertion updated to
+  the dated pattern and the harness added to the test script.
+- **New feature-regression checks (N1–N5 in scenario-tests):** recents list
+  records/dedupes/orders correctly; undo budget scales 10→3 steps past 24MB;
+  per-document view memory saves zoom and restores it on reopen; `docHasText`
+  classifies a text PDF as text (PNG path) and a scan as image-only (JPEG
+  path); the scanner quad locks after steady frames and unlocks on a jump.
+- Suite totals: **170 checks across 6 files, all passing** (13 colour, 15
+  detect, 4 guard, 30 scenario, 17 version, 91 harness). Static validation
+  clean: build 10.94 consistent across app.js/sw.js/index.html, manifest and
+  package.json valid JSON, all SW app-shell and referenced splash files
+  present, all five JS files parse. No app code changed in this round.
+
 ## [v10.94] — 2026-07-05 — Instant open, faster scans, capture feedback
 
 - **Open a PDF while the engine is still starting.** Open and the welcome
