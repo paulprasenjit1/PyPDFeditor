@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.93";
+const APP_BUILD = "10.94";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -87,7 +87,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "5 Jul 2026";    // v10.93
+const BUILD_DATETIME = "5 Jul 2026";    // v10.94
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -230,6 +230,19 @@ const u8 = v => new Uint8Array(v);
   // tell the engine-load watchdog the engine is live, so it cancels its timer
   window.__pypdfEngineReady = true;
   try { window.dispatchEvent(new Event("pypdf-engine-ready")); } catch(e){}
+  // v10.94: a file picked during engine boot (engine-watchdog early open)
+  // opens right now — the user never waited on the compile.
+  const pf = window.__pypdfPendingFile;
+  if (pf){
+    window.__pypdfPendingFile = null;
+    window.__pypdfHadPendingFile = true;   // suppresses the session-restore prompt
+    (async ()=>{
+      showSpin(true, "Opening "+pf.name+" …");
+      try { await openBytes(new Uint8Array(await pf.arrayBuffer()), pf.name); }
+      catch(err){ setStatus("Could not open: "+friendly(err),"err"); }
+      showSpin(false);
+    })();
+  }
 })();
 $("bigOpen").onclick = ()=> confirmDiscard("open another PDF", ()=>$("fileInput").click());
 $("bigScan").onclick = ()=> startScan();
@@ -921,7 +934,11 @@ async function renderStage(stage, i){
     // gets large, where PNG encode time and size balloon, so past ~2800px (and
     // for very long documents) fall back to fast JPEG q94 to keep zoom snappy.
     const rasterMax = Math.max(wPt*scale, hPt*scale);
-    const usePng = !bigDoc && rasterMax <= 2800;
+    // v10.94: lossless PNG only pays off on born-digital TEXT pages (crisp
+    // glyph edges). On scanned/image-only documents PNG is 3–5× larger and
+    // slower to encode/decode than JPEG q94 with no visible gain, so those
+    // take the JPEG path. Text presence is sampled once per document version.
+    const usePng = !bigDoc && rasterMax <= 2800 && docHasText();
     const bin = usePng ? u8(pix.asPNG()) : u8(pix.asJPEG(94));
     pix.destroy(); page.destroy();
     const url = URL.createObjectURL(new Blob([bin], {type: usePng ? "image/png" : "image/jpeg"}));
@@ -2347,7 +2364,12 @@ function sizeQuadCanvas(){
 // it appears only after 2 consistent detections, eases toward each new
 // detection (lerp), and survives up to 2 missed frames before vanishing.
 let liveQuad=null, livePend=null, liveHits=0, liveMiss=0;
-function resetLiveQuad(){ liveQuad=null; livePend=null; liveHits=0; liveMiss=0; }
+function resetLiveQuad(){ liveQuad=null; livePend=null; liveHits=0; liveMiss=0; liveStable=0; }
+// v10.94: consecutive stable frames — >=3 (~0.9s) means the box has "locked"
+// onto the document: drawn bolder with corner ticks, and detection relaxes to
+// every other tick (600ms) to save battery while nothing is changing.
+let liveStable = 0;
+const quadLocked = ()=> liveStable >= 3;
 function smoothQuad(q){
   if (!q){
     if (++liveMiss>2) resetLiveQuad();
@@ -2362,8 +2384,10 @@ function smoothQuad(q){
   }
   if (!quadClose(liveQuad,q)){              // detection jumped to something else: snap
     liveQuad=q.map(p=>({x:p.x,y:p.y}));
+    liveStable=0;                           // lock is lost on a jump
     return liveQuad;
   }
+  liveStable++;                             // same document, holding steady
   const a=0.35;                             // ease toward the new detection
   liveQuad=liveQuad.map((p,i)=>({x:p.x+(q[i].x-p.x)*a, y:p.y+(q[i].y-p.y)*a}));
   return liveQuad;
@@ -2378,10 +2402,15 @@ function quadClose(a,b){
 function startLiveDetect(){
   if (scanLive) clearInterval(scanLive);
   resetLiveQuad();
+  let tick = 0;
   scanLive = setInterval(()=>{
     try {
       const v = $("scanVideo");
       if (!v.videoWidth || document.hidden) return;
+      // battery: once the box has locked, detect every other tick (600ms) —
+      // a steady scene doesn't need re-detection 3×/second. Any jump or miss
+      // clears the lock (in smoothQuad/resetLiveQuad) and full rate resumes.
+      if (quadLocked() && (tick++ & 1)) return;
       drawLiveQuad(smoothQuad(detectOnVideoFrame(v)));
     } catch(e){ /* one bad camera frame must not kill the preview loop */ }
   }, 300);
@@ -2417,8 +2446,25 @@ function drawLiveQuad(q){
   // light fill so the document stays clearly visible while framing; the outline
   // carries the signal (a touch bolder/brighter to compensate for less fill)
   ctx.fillStyle="rgba(63,185,80,.07)"; ctx.fill();
-  ctx.lineWidth = 3;
-  ctx.strokeStyle="#46d65c"; ctx.stroke();
+  // locked (stable ~0.9s): bolder line + corner ticks say "safe to capture";
+  // still settling: the regular thinner outline
+  const locked = quadLocked();
+  ctx.lineWidth = locked ? 4 : 3;
+  ctx.strokeStyle = locked ? "#5dff78" : "#46d65c";
+  ctx.stroke();
+  if (locked){
+    const pts = q.map(p=>({ x:p.x*fit.scale+fit.offX, y:p.y*fit.scale+fit.offY }));
+    ctx.lineWidth = 5; ctx.strokeStyle = "#ffffff";
+    const L = 14;
+    for (let i=0;i<4;i++){
+      const c=pts[i], a=pts[(i+3)&3], b=pts[(i+1)&3];
+      for (const o of [a,b]){
+        const d=Math.hypot(o.x-c.x,o.y-c.y)||1;
+        ctx.beginPath(); ctx.moveTo(c.x,c.y);
+        ctx.lineTo(c.x+(o.x-c.x)/d*L, c.y+(o.y-c.y)/d*L); ctx.stroke();
+      }
+    }
+  }
 }
 
 // ---- capture ----
@@ -2434,6 +2480,12 @@ function captureFrame(){
 }
 $("scanShot").onclick = ()=>{
   if (scanFallback){ $("camInput").click(); return; }
+  // v10.94: iOS-camera-style capture confirmation — snap bright, fade out
+  const fl = document.getElementById("scanFlash");
+  if (fl && typeof requestAnimationFrame === "function"){
+    fl.classList.add("go");
+    requestAnimationFrame(()=>requestAnimationFrame(()=>fl.classList.remove("go")));
+  }
   captureFrame();
 };
 // shared: load a photo file (native camera fallback, or library import)
@@ -3020,6 +3072,16 @@ $("compBtn").onclick = ()=>{
 // first few pages. A scanned / image-only PDF returns ~0; a born-digital text
 // page returns hundreds. Used to protect text PDFs from being silently
 // rasterised by Compress. Cheap: stops as soon as the threshold is reached.
+// cached "does this document have real text?" — sampled once per epoch and
+// reused by the render path (PNG vs JPEG choice) and compress
+let docTextEpoch = -1, docTextVal = true;
+function docHasText(){
+  if (docTextEpoch !== epoch){
+    try { docTextVal = sampledTextLength() >= 80; } catch(e){ docTextVal = true; }
+    docTextEpoch = epoch;
+  }
+  return docTextVal;
+}
 function sampledTextLength(maxPages=8, stopAt=80){
   let chars=0;
   try {
@@ -3409,6 +3471,7 @@ window.addEventListener("pageshow", (e)=>{
   const hasScan = !!scanSaved;
   if (!hasDoc && !hasScan) return;
   if (workingBytes) return;                  // user already opened something
+  if (window.__pypdfHadPendingFile) return;  // an early-picked file is opening
   const rows = [];
   if (hasDoc)  rows.push(h`<div class="row"><button class="full" id="rsDoc">Restore “${doc.name}” (${fmtKB(doc.bytes.length)})</button></div>`);
   if (hasScan) rows.push(h`<div class="row"><button class="full" id="rsScan">Continue scan (${scanSaved.length} page${scanSaved.length>1?"s":""})</button></div>`);

@@ -4,6 +4,26 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.94] — 2026-07-05 — Instant open, faster scans, capture feedback
+
+- **Open a PDF while the engine is still starting.** Open and the welcome
+  button are enabled immediately (the file picker needs no engine); a file
+  picked during the 1–3s WASM compile is stashed and opened the instant the
+  engine is live, with a hint confirming it. The launch splash also fades as
+  soon as the welcome screen exists, so the app is interactive during boot
+  instead of hiding behind the logo. Perceived cold-start ≈ zero.
+- **Scanned/image PDFs render as JPEG.** Lossless PNG rendering (v10.55) only
+  pays off on born-digital text pages; on image-only documents it was 3–5×
+  larger and slower with no visible gain. Text presence is sampled once per
+  document version (`docHasText`); scans now take the JPEG q94 path — faster
+  page display, less memory, on the app's main use case.
+- **Capture feedback.** The shutter fires an iOS-camera-style white flash, and
+  the green box gains a LOCKED state: after ~0.9s of holding steady it draws
+  bolder with white corner ticks — the "safe to capture now" signal.
+- **Battery:** once locked, live detection relaxes from every 300ms to every
+  600ms (a steady scene needs no re-detection); any jump or miss restores full
+  rate instantly. Detection already paused when the app is hidden.
+
 ## [v10.93] — 2026-07-05 — OLED visual refresh (styles.css only)
 
 - **True-black chrome.** Header, toolbar and find bar now sit on pure #000 with

@@ -109,6 +109,34 @@
     };
   }
 
+  // ---- (1b) instant open (v10.94) ----
+  // The file picker needs no engine, so let the user tap Open (or the welcome
+  // button) immediately instead of staring at disabled buttons for the 1–3s
+  // WASM compile. A file picked early is stashed on window.__pypdfPendingFile;
+  // app.js opens it the moment the engine is live. Once the engine is ready,
+  // these early handlers become inert (app.js owns the flow). The first-paint
+  // splash is also dropped as soon as the welcome screen exists — the app is
+  // interactive during the engine load instead of hiding behind the logo.
+  function wireEarlyOpen(){
+    var open = document.getElementById("openBtn"), big = document.getElementById("bigOpen"),
+        inp = document.getElementById("fileInput"), hint = document.getElementById("welcomeHint"),
+        launch = document.getElementById("launch");
+    if (!inp) return;
+    var early = function(){ if (window.__pypdfEngineReady) return; inp.click(); };
+    if (open){ open.disabled = false; open.addEventListener("click", early); }
+    if (big){ big.disabled = false; big.addEventListener("click", early); }
+    inp.addEventListener("change", function(e){
+      if (window.__pypdfEngineReady) return;       // app.js owns the flow now
+      var f = e.target.files && e.target.files[0];
+      if (!f) return;
+      window.__pypdfPendingFile = f;
+      if (hint) hint.textContent = "Got “" + f.name + "” — opening as soon as the engine is ready…";
+    });
+    if (launch) setTimeout(function(){ launch.classList.add("gone"); }, 350);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wireEarlyOpen);
+  else wireEarlyOpen();
+
   // ---- (2) failure watchdog ----
   var fired = false;
   var timer = setTimeout(function(){

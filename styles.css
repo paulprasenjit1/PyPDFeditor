@@ -419,6 +419,11 @@ input[type=file] { display:none; }
           position:absolute; inset:0; width:100%; height:100%; }
 .scanview video { object-fit:contain; }
 .scanview canvas.quad { pointer-events:none; }
+/* capture flash: snaps to bright instantly (.go), then fades out */
+.scanflash { position:absolute; inset:0; background:#fff; opacity:0;
+             pointer-events:none; z-index:3; transition:opacity .3s ease; }
+.scanflash.go { opacity:.8; transition:none; }
+@media (prefers-reduced-motion: reduce){ .scanflash { transition:none; } }
 /* scanned-page thumbnail strip: tap a page to review or delete it */
 .scanthumbs { display:none; gap:8px; padding:8px 12px 0; overflow-x:auto;
           background:#000; align-items:flex-end; }
