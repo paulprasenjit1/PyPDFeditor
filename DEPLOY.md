@@ -51,3 +51,18 @@ always server-side: get ALL files of one build live together.
 From v9.2 onward this manual clean-up is never needed again: updates install
 atomically, a mismatch self-heals with one automatic reload, and if the server
 itself is stale the app says so explicitly instead of freezing.
+
+## Recommended security headers (v10.99)
+
+The page's own CSP lives in a `<meta>` tag in index.html, but two protections
+can only be set as real HTTP RESPONSE HEADERS by the web server / CDN:
+
+    Content-Security-Policy: frame-ancestors 'none'
+    X-Content-Type-Options: nosniff
+
+`frame-ancestors 'none'` stops any other site embedding the app in an iframe
+(clickjacking); `nosniff` stops MIME-type guessing. GitHub Pages cannot set
+custom headers — these apply if the app is ever hosted on Netlify, Cloudflare
+Pages, nginx, etc. (e.g. a `_headers` file on Netlify/CF Pages). Optional
+extra: `Cross-Origin-Opener-Policy: same-origin`. None of these affect the
+app's behaviour; they only harden the hosting.

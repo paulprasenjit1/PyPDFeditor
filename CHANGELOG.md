@@ -4,6 +4,101 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v10.99] — 2026-07-06 — Storage budget, Scan shortcut, deploy hardening
+
+- **Recents now respect a total-bytes budget (60 MB), not just a count.** Five
+  25 MB documents used to pin ~125 MB of IndexedDB, hastening the storage-full
+  warning (v10.88) and iOS eviction. Oldest entries (and their stored bytes)
+  are dropped once the budget is exceeded; the newest always survives.
+- **Home-screen "Scan" shortcut.** The manifest gains `shortcuts`; long-press
+  the installed app icon → Scan a document opens the app straight into the
+  scanner (`?action=scan`, handled after engine-ready; the session-restore
+  prompt is suppressed because intent is clear). The service worker now
+  matches navigations with `ignoreSearch`, so the shortcut also works offline.
+  (iOS ignores manifest shortcuts today — this benefits Android/desktop
+  installs for free and is inert elsewhere. Manifest `screenshots` were
+  considered and skipped: they need real device captures to be honest.)
+- **DEPLOY.md documents the two protections only a server can add** —
+  `frame-ancestors 'none'` and `X-Content-Type-Options: nosniff` (the page's
+  meta CSP can't express frame-ancestors). No app behaviour change.
+- What's-new toast refreshed to summarise the v10.95–v10.99 round.
+
+## [v10.98] — 2026-07-06 — Resilience: no blank pages, plain-language errors
+
+- **A page that fails to rasterise is no longer permanently blank.** The first
+  failure retries once automatically (transient memory pressure is the usual
+  cause); a second failure turns the placeholder into a tappable "Couldn't
+  show this page — tap to retry". Previously the failure was swallowed and the
+  page stayed white with no way out short of re-zooming.
+- **Unexpected error banners now speak plain language.** The global error
+  handler showed raw engine/JS text ("RangeError: out of memory @ app.js:…");
+  the visible banner now goes through the same `friendly()` translation as
+  action errors (new pure `friendlyText()` helper). The raw message is still
+  kept in the on-device log for diagnosis — which now retains 10 entries
+  (was 3).
+- **Very large files warn before opening.** Picks over 150 MB get a clear
+  "may exceed this device's memory" confirm instead of a long stall that iOS
+  could kill silently. Opening anyway remains one tap.
+- **Native-camera fallback scans match live-scan sharpness.** The fallback
+  path downscaled photos to 2600 px before cropping while the live path warps
+  at 3200 px; both are 3200 now.
+- Zoom hint updated: the floating − / + pill exists on phones since v10.73,
+  so the "Opened" tip now mentions it there too.
+- Still pending from the audit (manual, device-only): EXIF-orientation check
+  of Photos → PDF with a portrait HEIC capture (expected fine — Safari applies
+  EXIF orientation in canvas drawImage — but unverified on-device).
+
+## [v10.97] — 2026-07-06 — Keyboard no longer covers sheet inputs
+
+- **The iOS keyboard can no longer hide a sheet's input or buttons.** On
+  SE-class iPhones, focusing the Save/rename, password, or go-to-page field
+  raised the keyboard over the bottom sheet. The app now listens to
+  `visualViewport` resize/scroll and lifts the sheet by exactly the keyboard
+  overlap; the lift clears when the keyboard hides or the sheet closes. No
+  effect on devices/browsers without `visualViewport` (guarded), and none
+  while no sheet is open.
+- Manual device test: Save sheet + rename field on a 375×667 viewport; password
+  sheet on the same; rotate with the keyboard up.
+
+## [v10.96] — 2026-07-06 — Accessibility: real modals for VoiceOver & keyboards
+
+- **Sheets and scanner screens now behave as true modals for assistive tech.**
+  Previously only pointer input was blocked (by the backdrop); VoiceOver and
+  Tab could wander into the hidden toolbar/viewer behind an open sheet, or
+  under the camera screen. Now everything behind an open layer is marked
+  `inert` (header, toolbar, find bar, viewer, floating pills — and the scanner
+  screens themselves when a sheet opens on top of them). One MutationObserver
+  watches the three layer elements, so every open/close path stays correct.
+- **Focus trap on the sheet.** Tab / Shift-Tab wrap inside the open sheet —
+  containment even on engines without `inert` support.
+- **Scanner screens get dialog semantics** (`role="dialog"`, `aria-modal`,
+  labels "Scan document" / "Adjust edges").
+- **Page pill is keyboard-reachable while visible** (tabIndex toggles with its
+  visibility, Enter/Space opens Go to page) — previously `role="button"` with
+  no way to focus it.
+- **"N page(s) scanned" is now `aria-live`**, so VoiceOver hears each page
+  being added during a scan session.
+
+## [v10.95] — 2026-07-06 — Camera: no re-prompt after switching apps mid-scan
+
+- **Switching apps mid-scan no longer re-asks for camera permission.** Hiding
+  the app used to stop the camera tracks, so returning called `getUserMedia`
+  afresh — and standalone iOS re-shows its permission prompt on every fresh
+  call. The stream is now KEPT across brief hides (detection paused, exactly
+  like the per-page pause from v10.52) and only released after 60 s hidden, or
+  when the app really closes (`pagehide`/`releaseAll`, unchanged). iOS
+  suspends camera capture in the background anyway, so keeping the muted
+  stream costs no battery and no privacy indicator.
+- **One-time explainer on installed iOS.** The cross-LAUNCH prompt is a WebKit
+  platform limitation — getUserMedia grants are not persisted for standalone
+  home-screen web apps (WebKit bugs 215884 / 185448) and no web API can change
+  that. The first scan on an installed app now says so once, so the recurring
+  prompt reads as an Apple limitation rather than an app fault. Shown only in
+  standalone display mode; browser-tab use never sees it.
+- Manual device test matrix: scan → home → return <10 s (no prompt, live box
+  resumes); scan → home → return after >60 s (prompt expected — stream was
+  released); scan → lock → unlock; crop screen → home → return → Retake.
+
 ## [v10.94.1] — 2026-07-05 — Regression round for v10.85–v10.94 (tests only)
 
 - **Full regression + validation pass over everything added since v10.85.**

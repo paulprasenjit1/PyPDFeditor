@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="10.94">
+<html lang="en" data-build="10.99">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -177,12 +177,12 @@
 <input type="file" id="camInput" accept="image/*" capture="environment">
 
 <!-- ---------------- document scanner: camera screen ---------------- -->
-<div class="scanui" id="scanCam">
+<div class="scanui" id="scanCam" role="dialog" aria-modal="true" aria-label="Scan document">
   <div class="scantop">
     <span class="ttl">Scan document</span>
     <span class="tools">
       <button class="ghost mini" id="torchBtn" aria-label="Camera torch" hidden>Torch</button>
-      <span class="pgct" id="scanCount"></span>
+      <span class="pgct" id="scanCount" aria-live="polite"></span>
     </span>
   </div>
   <div class="scanview" id="scanView">
@@ -201,7 +201,7 @@
 </div>
 
 <!-- ---------------- document scanner: adjust / crop screen ---------------- -->
-<div class="scanui" id="scanCrop">
+<div class="scanui" id="scanCrop" role="dialog" aria-modal="true" aria-label="Adjust edges">
   <div class="scantop">
     <span class="ttl">Adjust edges</span>
     <span class="tools">

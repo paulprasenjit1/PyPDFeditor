@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.94";
+const APP_BUILD = "10.99";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -64,9 +64,11 @@ function reportError(kind, msg, src){
   try {
     const log = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]");
     log.unshift(new Date().toISOString().slice(0,16).replace("T"," ")+" "+scrubForLog(text));
-    localStorage.setItem("pypdf-errlog", JSON.stringify(log.slice(0,3)));
+    localStorage.setItem("pypdf-errlog", JSON.stringify(log.slice(0,10)));   // v10.98: keep 10 (was 3) for better diagnosis
   } catch(e){}
-  try { setStatus(text+" — the app keeps running; if something stops working, close and reopen it.", "err"); } catch(e){}
+  // v10.98: the banner shows the PLAIN-LANGUAGE translation; the raw message
+  // is kept above in the on-device log (More → About) for diagnosis.
+  try { setStatus(kind+": "+friendlyText(String(msg||"unknown"))+" — the app keeps running; if something stops working, close and reopen it.", "err"); } catch(e){}
 }
 window.addEventListener("error", (e)=>{
   // iOS reports many benign cross-context errors as an opaque "Script error."
@@ -87,7 +89,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "5 Jul 2026";    // v10.94
+const BUILD_DATETIME = "6 Jul 2026";    // v10.99
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -160,14 +162,18 @@ function setStatus(msg, cls=""){
   }
 }
 // Translate raw engine errors into plain language. The raw message is kept in
-// the on-device error log (More → About) for diagnosis.
+// the on-device error log (More → About) for diagnosis. friendlyText is the
+// pure translation (no logging) — used by reportError, which logs separately.
 function friendly(err){
   const m = String((err && err.message) || err || "");
   try {
     const log = JSON.parse(localStorage.getItem("pypdf-errlog")||"[]");
     log.unshift(new Date().toISOString().slice(0,16).replace("T"," ")+" "+scrubForLog(m).slice(0,120));
-    localStorage.setItem("pypdf-errlog", JSON.stringify(log.slice(0,3)));
+    localStorage.setItem("pypdf-errlog", JSON.stringify(log.slice(0,10)));   // v10.98: keep 10 (was 3)
   } catch(e){}
+  return friendlyText(m);
+}
+function friendlyText(m){
   if (/password/i.test(m))                                   return "this PDF is password-protected.";
   if (/format error|cannot recognize|trailer|startxref|xref|no objects found|no pages found|not a PDF|repair/i.test(m))
                                                              return "this file appears damaged, or isn't really a PDF.";
@@ -243,6 +249,17 @@ const u8 = v => new Uint8Array(v);
       showSpin(false);
     })();
   }
+  // v10.99: home-screen "Scan" shortcut (manifest `shortcuts`) — launching the
+  // app with ?action=scan goes straight to the scanner. Deferred one tick so
+  // the module finishes initialising (scanner state lives further down the
+  // file); the session-restore prompt is suppressed because intent is clear.
+  try {
+    const act = new URLSearchParams((window.location && window.location.search) || "").get("action");
+    if (act === "scan" && !pf){
+      window.__pypdfHadPendingFile = true;
+      setTimeout(()=>{ try { startScan(); } catch(e){} }, 0);
+    }
+  } catch(e){}
 })();
 $("bigOpen").onclick = ()=> confirmDiscard("open another PDF", ()=>$("fileInput").click());
 $("bigScan").onclick = ()=> startScan();
@@ -383,6 +400,10 @@ function dropScanStorage(count){
 // stored per entry under their own key; sensitive (password-unlocked) documents
 // and very large files are never remembered, same rule as session persistence.
 const RECENTS_MAX = 5;
+// v10.99: also cap TOTAL recents bytes — five 25MB documents pinned ~125MB of
+// IndexedDB, which hastened the storage-full warning and iOS eviction. The
+// newest entry always survives even if it alone exceeds the budget.
+const RECENTS_MAX_BYTES = 60*1024*1024;
 async function recentsGet(){ try { return (await idbGet("recents")) || []; } catch(e){ return []; } }
 function recentsRemember(){
   if (!workingBytes || docSensitive || workingBytes.length > PERSIST_MAX_BYTES) return;
@@ -395,6 +416,12 @@ function recentsRemember(){
     list.unshift({ id, name, size:bytes.length, ts:Date.now() });
     for (const r of list.slice(RECENTS_MAX)) idbDel(r.id).catch(()=>{});
     list = list.slice(0, RECENTS_MAX);
+    let tot = 0; const keep = [];
+    for (const r of list){
+      if (!keep.length || tot + r.size <= RECENTS_MAX_BYTES){ keep.push(r); tot += r.size; }
+      else idbDel(r.id).catch(()=>{});
+    }
+    list = keep;
     await idbSet(id, bytes);
     await idbSet("recents", list);
     renderRecents();
@@ -529,11 +556,11 @@ async function restoreViewState(){
   } catch(e){}
 }
 function applyZoom(delta){ setZoom(zoomPct + delta); }
-// On phones (<600px) the − / + buttons are hidden, so the hint must point at the
-// gestures that actually work there; tablets/desktop keep the buttons.
+// v10.98: the floating − / + zoom pill is visible on every screen size now, so
+// the hint mentions it everywhere; phones lead with the gestures.
 function zoomTip(){
   const phone = (typeof window.matchMedia === "function") && window.matchMedia("(max-width:599px)").matches;
-  return phone ? "Pinch or double-tap to zoom." : "Pinch or use − / + to zoom.";
+  return phone ? "Pinch, double-tap, or − / + to zoom." : "Pinch or use − / + to zoom.";
 }
 $("undoBtn").onclick = ()=> doUndo();
 $("closeBtn").onclick = ()=> confirmDiscard("close this PDF", closeFile);
@@ -603,13 +630,32 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
 
 // ---------------- open (with password support) ----------------
 $("openBtn").onclick = ()=> confirmDiscard("open another PDF", ()=>$("fileInput").click());
+// v10.98: warn before loading a file likely to breach WKWebView's memory limit
+// — previously a 300MB pick stalled with no explanation and iOS could kill the
+// app mid-open. The user can still proceed knowingly.
+const OPEN_WARN_BYTES = 150*1024*1024;
 $("fileInput").onchange = async e=>{
-  const f=e.target.files[0]; if(!f) return;
+  const f=e.target.files[0]; e.target.value="";
+  if(!f) return;
+  if (f.size > OPEN_WARN_BYTES){
+    $("sheet").innerHTML = h`
+      <h3>Very large file</h3>
+      <p class="hint">“${f.name}” is ${fmtKB(f.size)}. Files this large can exceed this device's memory, and iOS may close the app while it opens. Continue?</p>
+      <div class="row"><button class="full" id="lgGo">Open anyway</button></div>
+      <div class="row"><button class="ghost full" id="lgNo">Cancel</button></div>`;
+    $("lgGo").onclick = ()=>{ closeSheet(); openPickedFile(f); };
+    $("lgNo").onclick = ()=>{ closeSheet(); setStatus("Open cancelled.","warn"); };
+    openSheet();
+    return;
+  }
+  openPickedFile(f);
+};
+async function openPickedFile(f){
   showSpin(true,"Opening "+f.name+" …"); setStatus("Opening "+f.name+" …");
   try { await openBytes(new Uint8Array(await f.arrayBuffer()), f.name); }
   catch(err){ setStatus("Could not open: "+friendly(err),"err"); }
-  showSpin(false); e.target.value="";
-};
+  showSpin(false);
+}
 
 async function openBytes(bytes, name){
   let wasEncrypted = false;
@@ -949,10 +995,38 @@ async function renderStage(stage, i){
     img.onload = ()=> setTimeout(()=>{ URL.revokeObjectURL(url); liveURLs.delete(url); }, 1000);
     img.src = url;
     holder.replaceWith(img);
+    delete stage.dataset.rtry;               // rendered fine — reset retry count
     if (mode === "text") await buildSpanBoxes(stage, i);
     else if (mode === "select") buildTextLayer(stage, i);
     if (SEARCH.open) paintPageHighlights(stage, i);
-  } catch(e){ /* leave placeholder */ }
+  } catch(e){
+    // v10.98: a failed rasterisation is no longer a permanently blank page.
+    // The first failure retries once automatically (transient memory pressure
+    // is the usual cause); after that the placeholder becomes a tappable
+    // "retry", so the user is never stuck with white space and no way out.
+    delete stage.dataset.rendered;
+    const tries = (+stage.dataset.rtry || 0) + 1;
+    stage.dataset.rtry = tries;
+    const holder = stage.querySelector(".holder");
+    if (tries <= 1){
+      setTimeout(()=>{
+        if (stage.isConnected && !stage.dataset.rendered && MDOC){
+          stage.dataset.rendered = "1";
+          renderStage(stage, i);
+        }
+      }, 800);
+    } else if (holder){
+      holder.classList.add("failed");
+      holder.textContent = "Couldn't show this page — tap to retry";
+      holder.onclick = ()=>{
+        holder.classList.remove("failed");
+        holder.textContent = "";
+        holder.onclick = null;
+        stage.dataset.rtry = 0;
+        if (MDOC){ stage.dataset.rendered = "1"; renderStage(stage, i); }
+      };
+    }
+  }
 }
 
 function revokeURLs(){ for (const u of liveURLs){ try{ URL.revokeObjectURL(u); }catch(e){} } liveURLs.clear(); }
@@ -1739,7 +1813,7 @@ function closeFile(){
   thumbCache.clear();
   setMode(null);
   zoomPct = 100; $("zoomLbl").textContent = "100%";
-  $("pagePill").classList.remove("show");
+  $("pagePill").classList.remove("show"); $("pagePill").tabIndex = -1;
   $("emptyMsg").style.display = "block";
   setMeta("No document open", "");
   enableDocButtons(false);
@@ -2223,7 +2297,21 @@ async function startScan(){
   updateScanCount();
   $("scanCrop").classList.remove("show");
   $("scanCam").classList.add("show");
-  setStatus("Point the camera at a document and tap the shutter.","ok");
+  // v10.95: one-time expectation-setting on installed iOS web apps — WebKit
+  // does not persist getUserMedia grants for standalone PWAs (bugs 215884 /
+  // 185448), so the OS re-asks on every app launch. Say so once, so the
+  // recurring prompt reads as an Apple limitation rather than an app fault.
+  let camHint = false;
+  try {
+    const standalone = window.navigator.standalone === true ||
+      (typeof window.matchMedia === "function" && window.matchMedia("(display-mode: standalone)").matches);
+    if (standalone && !localStorage.getItem("pypdf-cam-hint")){
+      localStorage.setItem("pypdf-cam-hint","1");
+      camHint = true;
+      setStatus("Note: iOS asks for camera access on each app launch — an Apple limit of installed web apps, not a fault.","warn");
+    }
+  } catch(e){}
+  if (!camHint) setStatus("Point the camera at a document and tap the shutter.","ok");
   await startCamera();
 }
 function endScan(){
@@ -2494,7 +2582,9 @@ async function loadPhotoToCrop(f){
   showSpin(true,"Loading photo…");
   try {
     const im = await loadImage(await fileToDataURL(f));
-    const s = Math.min(1, 2600/Math.max(im.naturalWidth, im.naturalHeight));
+    // v10.98: 3200 (was 2600) so the native-camera fallback and photo imports
+    // match the live path's SCAN_Q.std.maxDim — fallback scans were softer.
+    const s = Math.min(1, 3200/Math.max(im.naturalWidth, im.naturalHeight));
     const c=document.createElement("canvas");
     c.width=Math.round(im.naturalWidth*s); c.height=Math.round(im.naturalHeight*s);
     c.getContext("2d").drawImage(im,0,0,c.width,c.height);
@@ -3249,6 +3339,7 @@ function closeSheet(){
   $("sheetBg").classList.remove("show");
   const sh = $("sheet");                         // clear any drag-leftover state
   sh.removeAttribute("data-drag"); sh.style.transform = "";
+  sh.style.marginBottom = "";                    // clear any keyboard lift (v10.97)
   if (sheetThumbObs){ sheetThumbObs.disconnect(); sheetThumbObs=null; }
   // resolve any awaited sheet (e.g. password) as "cancelled" so it never hangs
   const cb = sheetOnDismiss; sheetOnDismiss = null;
@@ -3259,6 +3350,70 @@ function closeSheet(){
 $("sheetBg").addEventListener("click", e=>{ if(e.target===$("sheetBg")) closeSheet(); });
 // Esc closes the open sheet (keyboard users / iPad with a keyboard)
 document.addEventListener("keydown", e=>{ if(e.key==="Escape" && $("sheetBg").classList.contains("show")) closeSheet(); });
+
+// ---------------- modal inert + focus trap (v10.96) ----------------
+// While a sheet or a full-screen scanner view is open, everything behind it is
+// marked inert so VoiceOver / keyboard focus cannot wander into hidden UI
+// (previously only pointer input was blocked, by the backdrop). inert is
+// supported on the app's iOS 16.4+ baseline; where it isn't, the attribute is
+// a harmless no-op and the focus trap below still contains keyboard users.
+const APP_CHROME_IDS = ["toolbar","findbar","viewer","pagePill","zoomctl","undoBtn"];
+function updateModalInert(){
+  const sheetOpen = $("sheetBg").classList.contains("show");
+  const camOpen   = $("scanCam").classList.contains("show");
+  const cropOpen  = $("scanCrop").classList.contains("show");
+  const scanOpen  = camOpen || cropOpen;
+  const set = (el,on)=>{ if (el){ try { el.toggleAttribute("inert", !!on); } catch(e){} } };
+  set(document.querySelector("header"), sheetOpen || scanOpen);
+  for (const id of APP_CHROME_IDS) set($(id), sheetOpen || scanOpen);
+  // a sheet can open ON TOP of the scanner (page review, discard confirm):
+  // the scanner screens themselves go inert underneath it
+  set($("scanCam"),  sheetOpen || (scanOpen && !camOpen));
+  set($("scanCrop"), sheetOpen || (scanOpen && !cropOpen));
+}
+// One wiring point: watch the class changes that show/hide these layers, so
+// every open/close path (there are many) keeps the inert state correct.
+(function wireModalInert(){
+  if (typeof MutationObserver !== "function") return;   // headless harness: skip
+  const mo = new MutationObserver(updateModalInert);
+  for (const id of ["sheetBg","scanCam","scanCrop"]){
+    const el = $(id); if (el) mo.observe(el, { attributes:true, attributeFilter:["class"] });
+  }
+})();
+// ---------------- keyboard avoidance (v10.97) ----------------
+// On smaller iPhones the on-screen keyboard can cover a bottom sheet's input
+// and action buttons (Save/rename, password, go-to-page). visualViewport
+// reports the actually-visible area while the keyboard is up; lift the sheet
+// by the overlap so the focused field and its buttons stay reachable. Cleared
+// whenever the sheet closes (closeSheet) or the keyboard hides (overlap 0).
+(function keyboardAvoid(){
+  const vv = window.visualViewport;
+  if (!vv || typeof vv.addEventListener !== "function") return;
+  const apply = ()=>{
+    const sheet = $("sheet");
+    if (!$("sheetBg").classList.contains("show")){ sheet.style.marginBottom = ""; return; }
+    const overlap = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    sheet.style.marginBottom = overlap > 0 ? overlap + "px" : "";
+  };
+  vv.addEventListener("resize", apply);
+  vv.addEventListener("scroll", apply);
+})();
+
+// Trap Tab inside the open sheet (belt-and-braces on top of inert, and the
+// only containment on engines without inert support).
+$("sheet").addEventListener("keydown", (e)=>{
+  if (e.key !== "Tab") return;
+  const sheet = $("sheet");
+  const f = [...sheet.querySelectorAll("button,input,textarea,select,a[href],[tabindex]")]
+    .filter(el=>!el.disabled && el.tabIndex >= 0);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length-1];
+  if (e.shiftKey && (document.activeElement === first || document.activeElement === sheet)){
+    e.preventDefault(); last.focus();
+  } else if (!e.shiftKey && document.activeElement === last){
+    e.preventDefault(); first.focus();
+  }
+});
 
 // ---- native-style drag-to-dismiss on the sheet grabber ----------------------
 // A downward drag that starts in the top grabber zone (and only when the sheet
@@ -3378,6 +3533,20 @@ async function saveOrShare(bytes, name, mime="application/pdf"){
 // Appears during scroll on multi-page documents, fades out when you stop.
 const raf = (typeof requestAnimationFrame !== "undefined") ? requestAnimationFrame : (f)=>setTimeout(f,16);
 let pillT = 0, pillPending = false;
+// v10.96: the pill is focusable only while visible, so keyboard/switch users
+// can reach it but never land on an invisible control.
+function pillShow(on){
+  const p = $("pagePill");
+  p.classList.toggle("show", !!on);
+  p.tabIndex = on ? 0 : -1;
+}
+$("pagePill").tabIndex = -1;
+$("pagePill").addEventListener("keydown", (e)=>{
+  if (e.key === "Enter" || e.key === " "){
+    e.preventDefault();
+    if (workingBytes && MDOC && MDOC.countPages() > 1) openJumpToPage();
+  }
+});
 $("viewer").addEventListener("scroll", ()=>{
   if (!workingBytes || !MDOC || pillPending) return;
   pillPending = true;
@@ -3396,10 +3565,10 @@ $("viewer").addEventListener("scroll", ()=>{
       const p = $("pagePill");
       p.textContent = (best+1)+" of "+n;                  // compact, e-reader style
       p.setAttribute("aria-label", "Go to page — currently page "+(best+1)+" of "+n);
-      p.classList.add("show");
+      pillShow(true);
       clearTimeout(pillT);
       // stay visible a little longer than before so it's comfortable to tap
-      pillT = setTimeout(()=>p.classList.remove("show"), 2500);
+      pillT = setTimeout(()=>pillShow(false), 2500);
     } catch(e){}
   });
 }, { passive:true });
@@ -3408,7 +3577,7 @@ $("pagePill").onclick = ()=>{ if (workingBytes && MDOC && MDOC.countPages()>1) o
 // don't let it fade while a finger/cursor is on it, so the tap can't miss
 ["pointerenter","pointerdown"].forEach(ev=>$("pagePill").addEventListener(ev, ()=>{ clearTimeout(pillT); }));
 $("pagePill").addEventListener("pointerleave", ()=>{ clearTimeout(pillT);
-  pillT = setTimeout(()=>$("pagePill").classList.remove("show"), 1200); });
+  pillT = setTimeout(()=>pillShow(false), 1200); });
 
 // Re-render on rotate / real width change only. iOS fires "resize" constantly
 // as the address bar shows/hides (height-only changes); re-rendering on those
@@ -3434,15 +3603,33 @@ function releaseAll(){
   spanCache.clear();
 }
 
+// v10.95: keep the camera stream across BRIEF hides (app switch, notification
+// peek). Stopping the tracks here meant a fresh getUserMedia on return, and in
+// a standalone iOS PWA every fresh call re-shows the permission prompt — so a
+// user who glanced at Messages mid-scan got prompted again. iOS suspends
+// camera capture while a page is hidden anyway, so keeping the (muted) stream
+// costs nothing; it is released after a grace window if the user stays away,
+// and by pagehide/releaseAll when the app really closes.
+const CAM_HIDE_GRACE_MS = 60000;
+let camReleaseT = 0;
 document.addEventListener("visibilitychange", ()=>{
   if (document.hidden){
     pauseWork();
     flushPersistDoc();                 // don't lose a pending save if iOS kills us
     scanWasLive = !!scanStream;        // remember to relight the camera on return
-    if (scanStream) stopCamera();
+    if (scanStream){
+      pauseCamera();                   // stop the detect loop; KEEP the stream
+      clearTimeout(camReleaseT);
+      camReleaseT = setTimeout(()=>{ camReleaseT = 0;
+        if (document.hidden) stopCamera();   // long absence → release (privacy/battery)
+      }, CAM_HIDE_GRACE_MS);
+    }
   } else {
     resumeWork();
-    if (scanWasLive && $("scanCam").classList.contains("show")) startCamera();
+    if (camReleaseT){ clearTimeout(camReleaseT); camReleaseT = 0; }
+    // resumeCamera reuses the still-live stream (no permission prompt); if iOS
+    // ended the track while hidden it falls back to a fresh startCamera().
+    if (scanWasLive && $("scanCam").classList.contains("show")) resumeCamera();
     scanWasLive = false;
   }
 });
@@ -3523,5 +3710,5 @@ try {
   const seen = localStorage.getItem("pypdf-seen-build");
   localStorage.setItem("pypdf-seen-build", APP_BUILD);
   if (seen && seen !== APP_BUILD)
-    setTimeout(()=>{ setStatus("Updated to v"+APP_BUILD+" — recent files on the welcome screen, drag pages to reorder, dated scan names.","ok"); }, 3500);
+    setTimeout(()=>{ setStatus("Updated to v"+APP_BUILD+" — smoother camera permissions, VoiceOver-friendly dialogs, keyboard-safe sheets, and a home-screen Scan shortcut.","ok"); }, 3500);
 } catch(e){}

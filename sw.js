@@ -6,7 +6,7 @@
    - VENDOR_CACHE (~12MB: MuPDF wasm + pdf-lib) — bump ONLY when vendor/ files
      actually change. Kept across app releases, so updates no longer re-download
      the engine and the first load after an update is fast. */
-const APP_CACHE    = "pypdf-app-v10.94";
+const APP_CACHE    = "pypdf-app-v10.99";
 const VENDOR_CACHE = "pypdf-vendor-v1";
 
 const APP_SHELL = [
@@ -64,7 +64,10 @@ self.addEventListener("fetch", (e)=>{
   if (url.origin !== location.origin) return;
   if (url.pathname.includes("/backups/")) return;
   e.respondWith((async ()=>{
-    const cached = await caches.match(req);   // searches both caches
+    // v10.99: shortcut launches navigate to "./?action=scan" — same document,
+    // different query. Match navigations ignoring the query string so the
+    // cached app shell serves them (and shortcuts keep working offline).
+    const cached = await caches.match(req, { ignoreSearch: req.mode === "navigate" });   // searches both caches
     if (cached) return cached;
     try {
       const res = await fetch(req);

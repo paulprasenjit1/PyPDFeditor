@@ -179,6 +179,11 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
          background:rgba(0,0,0,.45); padding:1px 6px; border-radius:5px; z-index:2; }
 .stage img { display:block; width:100%; height:auto; }
 .stage .holder { background:#fff; }
+/* v10.98: a page that failed to rasterise shows a tappable retry message
+   instead of staying silently blank. */
+.stage .holder.failed { display:flex; align-items:center; justify-content:center;
+         text-align:center; padding:16px; box-sizing:border-box; cursor:pointer;
+         color:#555; font-size:13px; background:#f4f4f4; }
 /* Overlay never blocks scrolling — it only catches input while drawing a
    signature box (sign mode). In view / text mode touches fall through to the
    scroll container so pages scroll freely. */
