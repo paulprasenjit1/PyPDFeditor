@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "10.99";
+const APP_BUILD = "11.00";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -734,6 +734,20 @@ async function openBytes(bytes, name){
     setStatus("Opened "+fileName+" — large document, so undo history is shortened and rendering is lightened to keep things smooth.","ok");
   else
   setStatus("Opened "+fileName+". "+zoomTip(),"ok");
+  maybeLiveTextHint();
+}
+// Live Text hint (iOS 16+): scanned/image PDFs have no text layer, so the
+// app's own Select mode has nothing to grab — but the OS can. Pages render as
+// real <img> and the CSS enables the callout in view mode, so touch-and-hold
+// gives Vision-powered select / copy / translate, same engine as Preview and
+// Photos. Mention it once, and only for documents that actually need it.
+function maybeLiveTextHint(){
+  try {
+    if (docHasText()) return;                      // has a text layer — Select mode works
+    if (localStorage.getItem("ltHinted")) return;  // said it once already
+    localStorage.setItem("ltHinted", "1");
+    setTimeout(()=> setStatus("Tip: this looks like a scanned PDF — touch and hold text on the page to select or copy it (Live Text).", "ok"), 2500);
+  } catch(e){}
 }
 function baseFrom(n){ return (n||"document.pdf").replace(/\.[^.]+$/,""); }
 

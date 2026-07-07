@@ -4,6 +4,34 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.00] — 2026-07-06 — Live Text on scanned pages (iOS 16+)
+
+Backups: `backups/*_pre_livetext.*`. **NEEDS ON-DEVICE VERIFICATION** —
+Live Text behaviour inside a home-screen PWA is undocumented by Apple; it
+works in Safari tabs, but confirm in the installed app on your iPhone.
+
+- **Touch-and-hold text selection on scans (Live Text).** Pages already
+  render as real `<img>` elements (MuPDF → JPEG), which is what iOS Live
+  Text needs. The page image now explicitly allows the iOS callout and
+  selection in view mode (`-webkit-touch-callout:default`,
+  `user-select:auto` on `.stage img` only — app chrome keeps them off), so
+  touch-and-hold on a scanned page gives Vision-powered select / copy /
+  translate / look-up: the same on-device engine as Preview and Photos, with
+  no OCR code, no downloads, fully offline. Edit (`textmode`), Select-overlay
+  (`selmode`), and signature-placing (`.placing`) re-suppress the callout so
+  app gestures keep priority.
+- **One-time hint.** Opening a document with no text layer (sampled via the
+  existing `docHasText()`) shows a single status tip — "touch and hold text
+  on the page to select it" — remembered in localStorage, never repeated.
+- Scope note (deliberate): Live Text is selection-in-the-moment only. It does
+  NOT embed a text layer, so in-app Find still won't match scan text and a
+  saved copy stays image-only. A real OCR pipeline in the PWA would need
+  Tesseract.js (~12 MB+, slower, below Vision accuracy) — decided against
+  for now; the Mac app covers full OCR.
+- Verify on iPhone: 1. open a scan in the installed PWA → hold a word →
+  selection handles appear; 2. copy/translate menu works; 3. pinch-zoom,
+  double-tap, Edit, Sign, Select modes unaffected; 4. hint shows once.
+
 ## [v10.99] — 2026-07-06 — Storage budget, Scan shortcut, deploy hardening
 
 - **Recents now respect a total-bytes budget (60 MB), not just a count.** Five
