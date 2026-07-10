@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.06">
+<html lang="en" data-build="11.10">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -145,6 +145,9 @@
   <div class="empty" id="emptyMsg">
     <div class="welcome">
       <p class="wtitle">PyPDF</p>
+      <!-- v11.10: the three actions sit side-by-side as compact tiles so the
+           recents thumbnail grid below gets the vertical room -->
+      <div class="wactions">
       <button class="big" id="bigOpen" disabled>
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2z"/></svg>
         <span>Open a PDF</span>
@@ -157,6 +160,7 @@
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"/><path d="M4 16l5 -5l4 4l3 -3l4 4"/><path d="M14.5 8.5a1 1 0 1 0 0 .01"/></svg>
         <span>Photos to PDF</span>
       </button>
+      </div>
       <p class="hint" id="welcomeHint">Getting ready…</p>
       <!-- recent files (filled by app.js renderRecents; hidden when empty) -->
       <div class="recents" id="recents" hidden></div>

@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.06";
+const APP_BUILD = "11.10";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -89,10 +89,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "10 Jul 2026";   // v11.06
+const BUILD_DATETIME = "10 Jul 2026";   // v11.10
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "smoother zoom that always stays on your page, and rotation keeps your reading position.";
+const WHATS_NEW = "a new home screen with document previews, full-screen reading (tap the page to hide or show the bars), and an All-pages thumbnail grid in More.";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -408,15 +408,31 @@ const RECENTS_MAX = 5;
 // newest entry always survives even if it alone exceeds the budget.
 const RECENTS_MAX_BYTES = 60*1024*1024;
 async function recentsGet(){ try { return (await idbGet("recents")) || []; } catch(e){ return []; } }
+// v11.10: a small first-page JPEG (≈200px wide, a few KB) stored with each
+// recents entry, so the welcome screen shows Files-style thumbnail cards.
+// Best-effort: any failure just means the card shows a blank placeholder.
+function recentFirstThumb(){
+  try {
+    if (!MDOC) return null;
+    const page = MDOC.loadPage(0);
+    const [x0,y0,x1,y1] = page.getBounds();
+    const s = 200/(x1-x0);
+    const pix = page.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false);
+    const jpg = u8(pix.asJPEG(72)); pix.destroy(); page.destroy();
+    let bin=""; for (let k=0;k<jpg.length;k+=8192) bin += String.fromCharCode.apply(null, jpg.subarray(k,k+8192));
+    return "data:image/jpeg;base64,"+btoa(bin);
+  } catch(e){ return null; }
+}
 function recentsRemember(){
   if (!workingBytes || docSensitive || workingBytes.length > PERSIST_MAX_BYTES) return;
   const bytes = workingBytes, name = fileName;
+  const thumb = recentFirstThumb();
   (async ()=>{ try {
     let list = await recentsGet();
     for (const r of list.filter(r=>r.name===name)) idbDel(r.id).catch(()=>{});
     list = list.filter(r=>r.name!==name);
     const id = "recent:"+Date.now();
-    list.unshift({ id, name, size:bytes.length, ts:Date.now() });
+    list.unshift({ id, name, size:bytes.length, ts:Date.now(), thumb });
     for (const r of list.slice(RECENTS_MAX)) idbDel(r.id).catch(()=>{});
     list = list.slice(0, RECENTS_MAX);
     let tot = 0; const keep = [];
@@ -437,12 +453,17 @@ async function renderRecents(){
   const rows = list.map(r=>{
     const d = new Date(r.ts);
     const when = d.toLocaleDateString(undefined, { day:"numeric", month:"short" });
-    return h`<button class="rcrow" data-rc="${r.id}">
+    // v11.10: thumbnail card (first page) instead of a text row
+    const img = (r.thumb && /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(r.thumb))
+      ? h`<img class="rcthumb" src="${r.thumb}" alt="">`
+      : h`<span class="rcthumb rcph" aria-hidden="true"></span>`;
+    return h`<button class="rccard" data-rc="${r.id}" aria-label="Open ${r.name}">
+      ${raw(img)}
       <span class="rcname">${r.name}</span>
       <span class="rcinfo">${fmtKB(r.size)} · ${when}</span>
     </button>`;
   }).join("");
-  box.innerHTML = h`<p class="rctitle">Recent</p>${raw(rows)}
+  box.innerHTML = h`<p class="rctitle">Recent</p><div class="rcgrid">${raw(rows)}</div>
     <button class="rcclear" id="rcClear">Clear recents</button>`;
   box.hidden = false;
   box.querySelectorAll("[data-rc]").forEach(b=>b.onclick = async ()=>{
@@ -604,6 +625,27 @@ $("closeBtn").onclick = ()=> confirmDiscard("close this PDF", closeFile);
 $("zoomOut").onclick = ()=> applyZoom(-25);
 $("zoomIn").onclick  = ()=> applyZoom(25);
 
+// ---------------- immersive reading (v11.10) ----------------
+// The header + toolbar float over the pages (translucent blur) and slide away
+// while reading: scroll down or single-tap the page to hide them, scroll up,
+// tap again, or return to the top to bring them back — Books/Preview style.
+function setImmersive(on){
+  if (on && (!workingBytes || mode || SEARCH.open)) on = false;
+  document.body.classList.toggle("immersive", !!on);
+}
+let imLastY = 0, imAcc = 0, chromeTapT = 0;
+$("viewer").addEventListener("scroll", ()=>{
+  clearTimeout(chromeTapT);                        // a scroll is never a tap
+  if (!workingBytes || mode || SEARCH.open) return;
+  const y = $("viewer").scrollTop;
+  const dy = y - imLastY; imLastY = y;
+  if ((dy > 0) !== (imAcc > 0)) imAcc = 0;         // direction changed → restart
+  imAcc += dy;
+  if (y < 40){ setImmersive(false); imAcc = 0; }
+  else if (imAcc > 28){ setImmersive(true);  imAcc = 0; }
+  else if (imAcc < -28){ setImmersive(false); imAcc = 0; }
+}, { passive:true });
+
 // ---------------- pinch-to-zoom + double-tap (iOS-style) ----------------
 // During the pinch the already-rendered pages are scaled instantly with a CSS
 // transform (60fps, no engine work); when the fingers lift, the pages
@@ -716,17 +758,35 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
     const fallback = setTimeout(finish, 420);   // guard if transitionend never fires
   }
 
+  // v11.10: remember where a single touch started, so a drag that happens to
+  // end without momentum isn't mistaken for a tap (chrome toggle) below
+  let t0x = 0, t0y = 0;
+  v.addEventListener("touchstart", (e)=>{
+    if (e.touches.length===1){ t0x = e.touches[0].clientX; t0y = e.touches[0].clientY; }
+  }, { passive:true });
+
   v.addEventListener("touchend", (e)=>{
     if (pinch || mode || !workingBytes) return;
     if (e.touches.length || e.changedTouches.length!==1) return;
     const t = e.changedTouches[0], now = Date.now();
     if (now-lastTap < 300 && Math.hypot(t.clientX-lastX, t.clientY-lastY) < 30){
       lastTap = 0;
+      clearTimeout(chromeTapT);          // second tap of a double-tap: zoom, not chrome
       e.preventDefault();
       // v11.06: Preview-style direction — zoom IN unless already meaningfully
       // zoomed (a light pinch to 110% then double-tap should go closer, not out)
       smoothDoubleZoom(zoomPct < 125 ? 150 : 100, t.clientX, t.clientY);
-    } else { lastTap = now; lastX = t.clientX; lastY = t.clientY; }
+    } else {
+      lastTap = now; lastX = t.clientX; lastY = t.clientY;
+      // v11.10: a stationary single tap (no second tap within the double-tap
+      // window) toggles the chrome, Books/Preview style
+      clearTimeout(chromeTapT);
+      if (Math.hypot(t.clientX-t0x, t.clientY-t0y) < 12){
+        chromeTapT = setTimeout(()=>{
+          setImmersive(!document.body.classList.contains("immersive"));
+        }, 330);
+      }
+    }
   });
 })();
 
@@ -1300,6 +1360,7 @@ const SEARCH = {
 function openFind(){
   if (!workingBytes || !MDOC){ setStatus("Open a PDF first, then search it.","warn"); return; }
   SEARCH.open = true;
+  setImmersive(false);           // v11.10: search needs the chrome visible
   const bar = $("findbar"); bar.hidden = false;
   const inp = $("findInput");
   inp.focus(); inp.select();
@@ -1705,6 +1766,7 @@ function sanitizeForFont(t){ return t.replace(/[^\x09\x0A\x0D\x20-\xFF]/g, "?");
 // ---------------- modes ----------------
 function setMode(m){
   mode = m;
+  setImmersive(false);           // v11.10: entering any mode brings the chrome back
   $("textBtn").classList.toggle("on", m==="text");
   $("selectBtn").classList.toggle("on", m==="select");
   $("signBtn").classList.toggle("on", m==="sign");
@@ -1876,6 +1938,7 @@ $("moreBtn").onclick = ()=>{
     </div>
     <div class="mgrp-l">Pages</div>
     <div class="mgrid">
+      <button class="mtile" id="mPages" ${d}>${ic("grid")}<span>All pages</span></button>
       <button class="mtile" id="mMerge" ${d}>${ic("combine")}<span>Combine</span></button>
       <button class="mtile" id="mOrg" ${d}>${ic("grid")}<span>Organize</span></button>
       <button class="mtile" id="mExtract" ${d}>${ic("copy")}<span>Copy pages</span></button>
@@ -1890,6 +1953,7 @@ $("moreBtn").onclick = ()=>{
   $("mFind").onclick  = ()=>{ closeSheet(); openFind(); };
   $("mGoto").onclick  = ()=>{ closeSheet(); openJumpToPage(); };
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
+  $("mPages").onclick = ()=>{ closeSheet(); openPagesGrid(); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mExtract").onclick = ()=>{ closeSheet(); openExtract(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
@@ -1932,6 +1996,7 @@ function openAbout(){
 
 // Close the open document and return to the empty state, releasing all memory.
 function closeFile(){
+  setImmersive(false);           // v11.10: welcome screen always shows the chrome
   if (SEARCH.open) closeFind();
   if (pageObserver) pageObserver.disconnect();
   $("viewer").querySelectorAll(".stage").forEach(s=>s.remove());
@@ -2154,6 +2219,70 @@ async function doExtract(pages){
                  : "Save cancelled.","ok");
   } catch(err){ setStatus("Could not copy the pages: "+friendly(err),"err"); }
   showSpin(false);
+}
+
+// ---------------- all pages: Preview-style thumbnail grid (v11.10) ----------------
+// A near-full-height sheet with every page as a thumbnail. Tap a page to jump
+// to it; Select mode allows rotate / copy-to-new-PDF / delete on a selection.
+// Reordering keeps its dedicated Organize sheet (drag needs the row layout).
+function openPagesGrid(keepSel){
+  if (!workingBytes || !MDOC) return;
+  const n = MDOC.countPages();
+  let selecting = !!(keepSel && keepSel.size);
+  const sel = new Set(keepSel || []);
+  function draw(){
+    const cells = Array.from({length:n},(_,i)=> h`<button class="pgcell ${sel.has(i)?'sel':''}" data-pg="${i}"
+        aria-label="Page ${i+1}${sel.has(i)?', selected':''}">
+        <img data-pthumb="${i}" alt="">
+        <span class="pgnum">${i+1}</span>
+      </button>`).join("");
+    const acts = selecting ? h`<div class="pgacts">
+        <button class="ghost" id="pgRot" ${sel.size?"":"disabled"}>⟳ Rotate</button>
+        <button class="ghost" id="pgExt" ${sel.size?"":"disabled"}>Copy</button>
+        <button class="ghost danger" id="pgDel" ${sel.size?"":"disabled"}>Delete</button>
+      </div>` : "";
+    $("sheet").innerHTML = h`
+      <div class="pghead">
+        <button class="ghost mini" id="pgDone">Done</button>
+        <h3 class="pgttl">All pages</h3>
+        <button class="ghost mini" id="pgSel">${selecting ? "Cancel" : "Select"}</button>
+      </div>
+      <div class="pggrid">${raw(cells)}</div>${raw(acts)}`;
+    $("sheet").classList.add("fullpage");
+    $("pgDone").onclick = closeSheet;
+    $("pgSel").onclick = ()=>{ selecting = !selecting; sel.clear(); draw(); };
+    $("sheet").querySelectorAll("[data-pg]").forEach(b=>b.onclick = ()=>{
+      const i = +b.dataset.pg;
+      if (!selecting){ closeSheet(); scrollToPage(i); return; }
+      sel.has(i) ? sel.delete(i) : sel.add(i);
+      draw();
+    });
+    if (selecting){
+      const ident = ()=>Array.from({length:MDOC.countPages()},(_,i)=>i);
+      $("pgRot").onclick = async ()=>{
+        const rot = {}; for (const i of sel) rot[i] = 90;
+        closeSheet();
+        await applyOrganise(ident(), rot);
+        openPagesGrid(sel);                    // page count unchanged → keep selection
+      };
+      $("pgExt").onclick = async ()=>{
+        const pages = [...sel].sort((a,b)=>a-b);
+        closeSheet();
+        await doExtract(pages);
+      };
+      $("pgDel").onclick = async ()=>{
+        if (sel.size >= n){ setStatus("Cannot delete every page.","err"); return; }
+        const keep = ident().filter(i=>!sel.has(i));
+        closeSheet();
+        await applyOrganise(keep, {});
+        setStatus("Deleted "+sel.size+" page"+(sel.size>1?"s":"")+" — Undo brings them back.","ok");
+        openPagesGrid();
+      };
+    }
+    lazyThumbs();
+  }
+  draw();
+  openSheet();
 }
 
 // ---------------- merge (mupdf graftPage, with chosen order) ----------------
@@ -3472,6 +3601,7 @@ async function doUndo(){
 function closeSheet(){
   $("sheetBg").classList.remove("show");
   const sh = $("sheet");                         // clear any drag-leftover state
+  sh.classList.remove("fullpage");               // v11.10: pages grid height reset
   sh.removeAttribute("data-drag"); sh.style.transform = "";
   sh.style.marginBottom = "";                    // clear any keyboard lift (v10.97)
   if (sheetThumbObs){ sheetThumbObs.disconnect(); sheetThumbObs=null; }
