@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.00";
+const APP_BUILD = "11.01";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -89,7 +89,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "7 Jul 2026";    // v11.00
+const BUILD_DATETIME = "10 Jul 2026";   // v11.01
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -513,8 +513,12 @@ async function setZoom(newPct, anchorX, anchorY){
   $("zoomLbl").textContent = zoomPct + "%";
   refreshZoomButtons();
   await render();
-  v.scrollLeft = (sx + ax) * ratio - ax;
-  v.scrollTop  = (sy + ay) * ratio - ay;
+  // keep the anchored content point in place, but clamp to the scrollable
+  // range so a zoom never snaps the view to the first/previous page (v11.01)
+  const maxL = Math.max(0, v.scrollWidth  - v.clientWidth);
+  const maxT = Math.max(0, v.scrollHeight - v.clientHeight);
+  v.scrollLeft = Math.max(0, Math.min(maxL, (sx + ax) * ratio - ax));
+  v.scrollTop  = Math.max(0, Math.min(maxT, (sy + ay) * ratio - ay));
   zooming = false;
   saveViewState();               // v10.91: remember zoom for this document
 }
@@ -615,7 +619,9 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
   v.addEventListener("touchend", endPinch);
   v.addEventListener("touchcancel", endPinch);
 
-  // double-tap: toggle 100% <-> 200%, centred on the tap
+  // double-tap: toggle 100% <-> 150%, centred on the tap (v11.01: was 200%).
+  // setZoom anchors on the tap point and clamps scroll, so the same page stays
+  // in view — double-tap never jumps to the first/previous page.
   v.addEventListener("touchend", (e)=>{
     if (pinch || mode || !workingBytes) return;
     if (e.touches.length || e.changedTouches.length!==1) return;
@@ -623,7 +629,7 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
     if (now-lastTap < 300 && Math.hypot(t.clientX-lastX, t.clientY-lastY) < 30){
       lastTap = 0;
       e.preventDefault();
-      setZoom(zoomPct===100 ? 200 : 100, t.clientX, t.clientY);
+      setZoom(zoomPct===100 ? 150 : 100, t.clientX, t.clientY);
     } else { lastTap = now; lastX = t.clientX; lastY = t.clientY; }
   });
 })();
