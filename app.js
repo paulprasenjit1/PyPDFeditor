@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.01";
+const APP_BUILD = "11.02";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -89,7 +89,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "10 Jul 2026";   // v11.01
+const BUILD_DATETIME = "10 Jul 2026";   // v11.02
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -622,6 +622,44 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
   // double-tap: toggle 100% <-> 150%, centred on the tap (v11.01: was 200%).
   // setZoom anchors on the tap point and clamps scroll, so the same page stays
   // in view — double-tap never jumps to the first/previous page.
+  //
+  // v11.02: smooth, iOS-Preview-style transition. Instead of an instant
+  // re-render we reuse the pinch GPU-layer trick — animate a CSS transform
+  // scale on pageWrap around the tap point, then render sharp at the end.
+  // Because both the transform-origin and the setZoom anchor sit on the tap
+  // point, the tapped content stays visually fixed through the whole
+  // animation and the re-render, so the handoff is seamless.
+  const reduceMotion = (typeof window.matchMedia === "function") &&
+                       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let dtAnimating = false;
+
+  function smoothDoubleZoom(targetPct, tx, ty){
+    if (dtAnimating || zooming) return;
+    const from = zoomPct, ratio = targetPct / from;
+    // no animation when there's nothing to scale or the user prefers reduced motion
+    if (reduceMotion || Math.abs(ratio-1) < 0.001){ setZoom(targetPct, tx, ty); return; }
+    dtAnimating = true;
+    const wr = wrap.getBoundingClientRect();
+    wrap.style.transformOrigin = (tx-wr.left)+"px "+(ty-wr.top)+"px";
+    wrap.classList.add("pinching", "dtzoom");   // GPU layer + transition (CSS)
+    $("zoomLbl").textContent = targetPct + "%";
+    // next frame so the transition is registered before the transform changes
+    requestAnimationFrame(()=>{ wrap.style.transform = "scale("+ratio+")"; });
+
+    let done = false;
+    const finish = ()=>{
+      if (done) return; done = true;
+      wrap.removeEventListener("transitionend", finish);
+      clearTimeout(fallback);
+      wrap.classList.remove("pinching", "dtzoom");
+      wrap.style.transform = "";
+      dtAnimating = false;
+      setZoom(targetPct, tx, ty);               // render sharp, same anchor
+    };
+    wrap.addEventListener("transitionend", finish);
+    const fallback = setTimeout(finish, 380);   // guard if transitionend never fires
+  }
+
   v.addEventListener("touchend", (e)=>{
     if (pinch || mode || !workingBytes) return;
     if (e.touches.length || e.changedTouches.length!==1) return;
@@ -629,7 +667,7 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
     if (now-lastTap < 300 && Math.hypot(t.clientX-lastX, t.clientY-lastY) < 30){
       lastTap = 0;
       e.preventDefault();
-      setZoom(zoomPct===100 ? 150 : 100, t.clientX, t.clientY);
+      smoothDoubleZoom(zoomPct===100 ? 150 : 100, t.clientX, t.clientY);
     } else { lastTap = now; lastX = t.clientX; lastY = t.clientY; }
   });
 })();

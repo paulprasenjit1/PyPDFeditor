@@ -160,6 +160,11 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 /* GPU promotion ONLY during an active pinch — a permanently promoted wrapper
    the height of a 500-page book exhausts compositor memory (black screen) */
 .pagewrap.pinching { will-change:transform; }
+/* v11.02: smooth iOS-Preview-style double-tap zoom. The scale is animated only
+   while .dtzoom is set (double-tap); live pinch has no transition so it still
+   tracks the fingers 1:1. */
+.pagewrap.dtzoom { transition:transform .26s cubic-bezier(.2,.7,.4,1); }
+@media (prefers-reduced-motion: reduce){ .pagewrap.dtzoom { transition:none; } }
 .viewer::-webkit-scrollbar { width:12px; height:12px; }
 .viewer::-webkit-scrollbar-track { background:var(--scrolltrack); }
 .viewer::-webkit-scrollbar-thumb { background:var(--scrollthumb); border-radius:7px; border:3px solid var(--scrolltrack); }
