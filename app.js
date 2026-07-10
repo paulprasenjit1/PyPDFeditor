@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.13";
+const APP_BUILD = "11.14";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -1372,6 +1372,7 @@ function openFind(){
   if (!workingBytes || !MDOC){ setStatus("Open a PDF first, then search it.","warn"); return; }
   SEARCH.open = true;
   setImmersive(false);           // v11.10: search needs the chrome visible
+  $("findBtn").classList.add("on");   // v11.14: bar shows Find is active
   const bar = $("findbar"); bar.hidden = false;
   const inp = $("findInput");
   inp.focus(); inp.select();
@@ -1381,6 +1382,7 @@ function openFind(){
 
 function closeFind(){
   SEARCH.open = false;
+  $("findBtn").classList.remove("on");   // v11.14
   SEARCH.token++;                     // cancel any in-flight background scan
   SEARCH.needle = "";
   SEARCH.pages.clear(); SEARCH.order = []; SEARCH.activeKey = null; SEARCH.scanned.clear();
@@ -2275,6 +2277,7 @@ function openPagesGrid(keepSel){
       </div>
       <div class="pggrid">${raw(cells)}</div>${raw(acts)}`;
     $("sheet").classList.add("fullpage");
+    $("pagesBtn").classList.add("on");     // v11.14: bar shows Pages is open
     $("pgDone").onclick = closeSheet;
     $("pgSel").onclick = ()=>{ selecting = !selecting; sel.clear(); draw(); };
     $("sheet").querySelectorAll("[data-pg]").forEach(b=>b.onclick = ()=>{
@@ -3628,6 +3631,7 @@ function closeSheet(){
   $("sheetBg").classList.remove("show");
   const sh = $("sheet");                         // clear any drag-leftover state
   sh.classList.remove("fullpage");               // v11.10: pages grid height reset
+  try { $("pagesBtn").classList.remove("on"); } catch(e){}   // v11.14
   sh.removeAttribute("data-drag"); sh.style.transform = "";
   sh.style.marginBottom = "";                    // clear any keyboard lift (v10.97)
   if (sheetThumbObs){ sheetThumbObs.disconnect(); sheetThumbObs=null; }
