@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.04";
+const APP_BUILD = "11.05";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -89,7 +89,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "10 Jul 2026";   // v11.04
+const BUILD_DATETIME = "10 Jul 2026";   // v11.05
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -998,11 +998,18 @@ async function render(){
       stage.style.width = dispW+"px";
       stage.style.containIntrinsicSize = dispW+"px "+dispH+"px";
       stage.dataset.dh = dispH;
-      const holder = document.createElement("div");
-      holder.className = "holder";
-      holder.style.width = dispW+"px"; holder.style.height = dispH+"px";
-      const cur = stage.querySelector("img") || stage.querySelector(".holder");
-      if (cur) cur.replaceWith(holder);
+      // v11.05: keep the existing bitmap on screen, just resized (momentarily
+      // soft), instead of swapping in a blank white holder. The lazy observer
+      // re-rasterises it sharp at the same size, so a zoom never flashes white
+      // and the page's height never changes under the scroll position.
+      let cur = stage.querySelector("img") || stage.querySelector(".holder");
+      if (cur && cur.tagName === "IMG" && !cur.complete){
+        // its blob URL was just revoked mid-load — fall back to a clean holder
+        const holder = document.createElement("div");
+        holder.className = "holder";
+        cur.replaceWith(holder); cur = holder;
+      }
+      if (cur){ cur.style.width = dispW+"px"; cur.style.height = dispH+"px"; }
       delete stage.dataset.rendered;
       stage.querySelectorAll(".span").forEach(s=>s.remove());
       const tx = stage.querySelector(".txt"); if (tx) tx.textContent = "";
@@ -1091,12 +1098,23 @@ async function renderStage(stage, i){
     pix.destroy(); page.destroy();
     const url = URL.createObjectURL(new Blob([bin], {type: usePng ? "image/png" : "image/jpeg"}));
     liveURLs.add(url);
-    const holder = stage.querySelector(".holder");
     const img = document.createElement("img");
     img.decoding = "async";
     img.onload = ()=> setTimeout(()=>{ URL.revokeObjectURL(url); liveURLs.delete(url); }, 1000);
     img.src = url;
-    holder.replaceWith(img);
+    // v11.05 (root cause of the double-tap page jump): decode BEFORE inserting,
+    // and give the img the page's exact CSS size. Previously an unsized img
+    // replaced the sized holder while still decoding, so the page collapsed to
+    // 0px for a few frames, pulling the scroll position up towards page 1 right
+    // after setZoom had positioned it correctly. Sizing + decode-first means a
+    // page's height never changes during a swap, so zoom can't drift pages.
+    try { await img.decode(); } catch(e){}
+    // size from the stage's CURRENT dimensions (a zoom may have landed while
+    // the bitmap was decoding), so the swap is always footprint-neutral
+    img.style.width  = parseFloat(stage.style.width)+"px";
+    img.style.height = (stage.dataset.dh||0)+"px";
+    const cur = stage.querySelector(".holder") || stage.querySelector("img");
+    if (cur && cur.isConnected && cur !== img) cur.replaceWith(img);
     delete stage.dataset.rtry;               // rendered fine — reset retry count
     if (mode === "text") await buildSpanBoxes(stage, i);
     else if (mode === "select") buildTextLayer(stage, i);
