@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.03";
+const APP_BUILD = "11.04";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -89,7 +89,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "10 Jul 2026";   // v11.03
+const BUILD_DATETIME = "10 Jul 2026";   // v11.04
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -663,18 +663,32 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
                        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let dtAnimating = false;
 
-  function smoothDoubleZoom(targetPct, tx, ty){
+  // v11.04: render-truth-first, animate-second. The earlier version animated the
+  // old bitmap and THEN re-rendered + repositioned, so the re-render was a visible
+  // "second stage" and any tiny anchor error showed as a page jump. Now we do the
+  // real zoom first (sharp, page-accurate scroll via setZoom), so the final state
+  // is already correct. Then we play a purely cosmetic transform that starts at
+  // the OLD size (scaled around the tap) and animates to identity — i.e. to the
+  // already-correct render. Because the animation ENDS at the real pixels, there
+  // is no handoff jump, and because setZoom set the page, it can't drift a page.
+  async function smoothDoubleZoom(targetPct, tx, ty){
     if (dtAnimating || zooming) return;
-    const from = zoomPct, ratio = targetPct / from;
-    // no animation when there's nothing to scale or the user prefers reduced motion
-    if (reduceMotion || Math.abs(ratio-1) < 0.001){ setZoom(targetPct, tx, ty); return; }
+    const from = zoomPct;
+    if (from === targetPct) return;
     dtAnimating = true;
+    await setZoom(targetPct, tx, ty);           // 1) real zoom: sharp + correct page
+    if (reduceMotion || from === zoomPct){ dtAnimating = false; return; }
+
+    // 2) cosmetic scale: begin at the old apparent size, centred on the tap,
+    //    then animate back to identity (the true, already-rendered new size)
+    const inv = from / zoomPct;                 // <1 when zooming in, >1 when out
     const wr = wrap.getBoundingClientRect();
     wrap.style.transformOrigin = (tx-wr.left)+"px "+(ty-wr.top)+"px";
-    wrap.classList.add("pinching", "dtzoom");   // GPU layer + transition (CSS)
-    $("zoomLbl").textContent = targetPct + "%";
-    // next frame so the transition is registered before the transform changes
-    requestAnimationFrame(()=>{ wrap.style.transform = "scale("+ratio+")"; });
+    wrap.classList.add("pinching");             // GPU layer (no transition yet)
+    wrap.style.transform = "scale("+inv+")";    // instant: looks like the old zoom
+    void wrap.offsetWidth;                       // commit the start frame
+    wrap.classList.add("dtzoom");               // enable the CSS transition
+    requestAnimationFrame(()=>{ wrap.style.transform = ""; });  // animate -> identity
 
     let done = false;
     const finish = ()=>{
@@ -683,11 +697,11 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
       clearTimeout(fallback);
       wrap.classList.remove("pinching", "dtzoom");
       wrap.style.transform = "";
+      wrap.style.transformOrigin = "";
       dtAnimating = false;
-      setZoom(targetPct, tx, ty);               // render sharp, same anchor
     };
     wrap.addEventListener("transitionend", finish);
-    const fallback = setTimeout(finish, 380);   // guard if transitionend never fires
+    const fallback = setTimeout(finish, 420);   // guard if transitionend never fires
   }
 
   v.addEventListener("touchend", (e)=>{
