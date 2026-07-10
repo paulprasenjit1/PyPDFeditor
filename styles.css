@@ -46,7 +46,7 @@ header, .toolbar, .findbar, .zoomctl, .undofab, .pgpill, .scanui, .sheet h3,
 /* v11.10 immersive chrome: header + toolbar FLOAT over the pages as translucent
    blurred bars (iOS Preview/Books material) and slide away in immersive mode
    (body.immersive, toggled by scroll direction or a single tap on the page). */
-header { display:flex; align-items:center; gap:10px; padding:max(5px,env(safe-area-inset-top)) 14px 5px;
+header { display:flex; align-items:center; gap:10px; padding:max(3px,env(safe-area-inset-top)) 14px 3px;
          position:fixed; top:0; left:0; right:0; z-index:30;
          background:var(--chrome); border-bottom:0.5px solid var(--line);
          -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
@@ -62,8 +62,8 @@ header .meta .meta-info { white-space:nowrap; flex:0 0 auto; }
    segmented group absorbs spare width and every control may shrink (min-width:0)
    so the row fits any iPhone; on a very narrow device a seg label ellipsises as
    the last-resort safety valve instead of pushing the row into a scroll. */
-.toolbar { order:4; display:flex; flex-wrap:nowrap; gap:4px;
-           padding:3px 6px max(2px, calc(env(safe-area-inset-bottom) - 16px)); background:var(--chrome);
+.toolbar { order:4; display:flex; flex-wrap:nowrap; gap:2px;
+           padding:2px 6px max(2px, calc(env(safe-area-inset-bottom) - 18px)); background:var(--chrome);
            position:fixed; bottom:0; left:0; right:0; z-index:30;
            -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
            border-top:0.5px solid var(--line); align-items:stretch; overflow:hidden;
@@ -105,7 +105,7 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
    default and revealed (.show, added by refreshZoomButtons) only while a
    document is open. Moving it out of the toolbar fixed the long-standing issue
    where zoom disappeared entirely on every iPhone (<600px). */
-.zoomctl { position:fixed; right:12px; bottom:calc(58px + max(2px, calc(env(safe-area-inset-bottom) - 16px)));
+.zoomctl { position:fixed; right:12px; bottom:calc(48px + max(2px, calc(env(safe-area-inset-bottom) - 18px)));
            z-index:55; display:none; align-items:center; gap:2px;
            background:var(--chrome); border:0.5px solid var(--line); border-radius:18px;
            -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
@@ -119,8 +119,9 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
    behaviour are unchanged; this is purely the visual treatment. */
 .toolbar .tbtn, .toolbar .seg .segbtn {
   display:flex; flex-direction:column; align-items:center; justify-content:center;
-  gap:2px; line-height:1; min-height:44px; }    /* 44pt vertical hit area (Apple HIG) */
-.toolbar .tbtn { padding:4px 5px; flex:1 1 0; background:transparent; color:var(--txt); }
+  gap:1px; line-height:1; min-height:40px; }    /* v11.13: squeezed; width keeps the 44pt hit area */
+.toolbar .tbtn { padding:2px 5px; flex:1 1 0; background:transparent; color:var(--txt); }
+.toolbar .tbtn svg.ic { width:17px; height:17px; }
 .toolbar .tbtn:active:not(:disabled){ background:var(--panel); transform:none; filter:none; }
 .toolbar .tbtn.on { background:rgba(10,132,255,.26); }
 /* header ✕ (Done position): quiet icon button on the right of the title row */
@@ -129,7 +130,7 @@ header .xbtn { background:transparent; border:0; color:var(--muted); padding:5px
 header .xbtn svg.ic { width:16px; height:16px; }
 /* v11.11 Markup popover: floats above the toolbar like the zoom pill */
 .mkmenu { position:fixed; left:50%; transform:translateX(-50%);
-        bottom:calc(58px + max(2px, calc(env(safe-area-inset-bottom) - 16px))); z-index:56;
+        bottom:calc(48px + max(2px, calc(env(safe-area-inset-bottom) - 18px))); z-index:56;
         display:flex; gap:2px; padding:4px;
         background:var(--chrome); border:0.5px solid var(--line); border-radius:18px;
         -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
@@ -152,7 +153,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 
 /* Floating Undo pill (bottom-left). Mirrors the zoom pill on the right; shown
    by refreshUndo() only while the undo stack is non-empty. */
-.undofab { position:fixed; left:12px; bottom:calc(58px + max(2px, calc(env(safe-area-inset-bottom) - 16px)));
+.undofab { position:fixed; left:12px; bottom:calc(48px + max(2px, calc(env(safe-area-inset-bottom) - 18px)));
            z-index:55; display:none; flex-direction:row; align-items:center; gap:6px;
            background:var(--chrome); border:0.5px solid var(--line); border-radius:18px;
            -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
@@ -188,8 +189,8 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    possible. Pages stay top-aligned (column flex, default justify-content) and
    horizontally centred (align-items). */
 .viewer { flex:1; overflow:auto;
-          padding:calc(38px + max(5px, env(safe-area-inset-top))) 4px
-                  calc(60px + max(2px, calc(env(safe-area-inset-bottom) - 16px)));
+          padding:calc(32px + max(3px, env(safe-area-inset-top))) 4px
+                  calc(50px + max(2px, calc(env(safe-area-inset-bottom) - 18px)));
           display:flex; flex-direction:column; gap:10px; -webkit-overflow-scrolling:touch;
           align-items:safe center; touch-action:pan-x pan-y; }
 .pagewrap { display:flex; flex-direction:column; gap:10px; align-items:safe center; }
@@ -273,7 +274,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    nowrap + overflow:hidden guarantees nothing spills past the screen edge;
    the input is the only flexible element so it absorbs whatever width is left. */
 .findbar { display:flex; flex-wrap:nowrap; align-items:center; gap:4px; padding:5px 6px;
-           position:fixed; top:calc(30px + max(5px, env(safe-area-inset-top))); left:0; right:0; z-index:29;
+           position:fixed; top:calc(26px + max(3px, env(safe-area-inset-top))); left:0; right:0; z-index:29;
            -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
            overflow:hidden; background:var(--chrome); border-bottom:0.5px solid var(--line); }
 .findbar[hidden] { display:none; }
@@ -375,7 +376,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    shortcut — tap it to open Go to page — so it gets an accent outline and is
    only tappable while visible (pointer-events:auto on .show). */
 .pgpill { position:fixed; left:50%; transform:translateX(-50%);
-          bottom:calc(58px + max(2px, calc(env(safe-area-inset-bottom) - 16px))); z-index:50;
+          bottom:calc(48px + max(2px, calc(env(safe-area-inset-bottom) - 18px))); z-index:50;
           background:var(--pill-bg); color:var(--pill-fg); font-size:12px; font-weight:600;
           padding:6px 13px; border-radius:15px; border:1px solid var(--accent);
           -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
