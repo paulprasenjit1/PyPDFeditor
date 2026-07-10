@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.10">
+<html lang="en" data-build="11.11">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -72,51 +72,66 @@
 <header>
   <h1>PyPDF</h1>
   <div class="meta" id="meta"><span class="meta-name" id="metaName">Loading engine…</span><span class="meta-info" id="metaInfo"></span></div>
+  <!-- v11.11: ✕ moved up here (iOS "Done" position); ID + handler unchanged -->
+  <button class="xbtn" id="closeBtn" aria-label="Close this PDF" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6l-12 12"/></svg>
+  </button>
 </header>
 
-<!-- Top toolbar: icon + label. Button IDs are unchanged so all app.js wiring
-     and the test harness keep working; only the inner markup gained an SVG
-     glyph above each label. SVGs are styled from styles.css (.ic) so no inline
-     style attribute is needed (CSP style-src 'self'). -->
+<!-- v11.11 toolbar diet: five core actions + Open (Preview style). Edit /
+     Select / Sign fold into a Markup popover (their IDs and handlers are
+     unchanged — the buttons just live in #mkMenu now); Unlock and Compress
+     keep their original buttons hidden below (the More sheet triggers them),
+     so the build guard and every test still find the same IDs. -->
 <div class="toolbar" id="toolbar">
   <button id="openBtn" class="tbtn" disabled>
     <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2z"/></svg>
     <span>Open</span>
   </button>
-  <div class="seg">
-    <button class="segbtn" id="textBtn" disabled>
-      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10 -10a2 2 0 0 0 -4 -4l-10 10z"/><path d="M13.5 6.5l4 4"/></svg>
-      <span>Edit</span>
-    </button>
-    <button class="segbtn" id="selectBtn" disabled>
-      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16"/><path d="M9 4h6"/><path d="M9 20h6"/><path d="M5 9v6"/><path d="M19 9v6"/></svg>
-      <span>Select</span>
-    </button>
-    <button class="segbtn" id="signBtn" disabled>
-      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18c3 0 5 -10 7 -10c1 0 1 4 2 4c1 0 2 -2 3 -2"/><path d="M4 21h16"/></svg>
-      <span>Sign</span>
-    </button>
-    <button class="segbtn" id="unlockBtn" disabled>
-      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11h10v8h-10z"/><path d="M9 11v-3a3 3 0 0 1 6 0"/></svg>
-      <span>Unlock</span>
-    </button>
-    <button class="segbtn" id="compBtn" disabled>
-      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h4v-4"/><path d="M3 3l6 6"/><path d="M5 15h4v4"/><path d="M3 21l6 -6"/><path d="M19 9h-4v-4"/><path d="M15 9l6 -6"/><path d="M19 15h-4v4"/><path d="M15 15l6 6"/></svg>
-      <span>Compress</span>
-    </button>
-    <button class="segbtn" id="moreBtn" disabled>
-      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h.01M12 12h.01M18 12h.01"/></svg>
-      <span>More</span>
-    </button>
-  </div>
+  <button id="pagesBtn" class="tbtn" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h5v5h-5z"/><path d="M14 5h5v5h-5z"/><path d="M5 14h5v5h-5z"/><path d="M14 14h5v5h-5z"/></svg>
+    <span>Pages</span>
+  </button>
+  <button id="markupBtn" class="tbtn" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10 -10a2 2 0 0 0 -4 -4l-10 10z"/><path d="M13.5 6.5l4 4"/></svg>
+    <span>Markup</span>
+  </button>
+  <button id="findBtn" class="tbtn" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4 -4"/></svg>
+    <span>Find</span>
+  </button>
   <button id="saveBtn" class="tbtn" disabled>
     <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h9l5 5v9a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2z"/><path d="M9 4v4h6"/><path d="M9 16h6"/></svg>
     <span>Save</span>
   </button>
-  <button class="xbtn tbtn" id="closeBtn" aria-label="Close this PDF" disabled>
-    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6l-12 12"/></svg>
+  <button id="moreBtn" class="tbtn" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h.01M12 12h.01M18 12h.01"/></svg>
+    <span>More</span>
   </button>
 </div>
+
+<!-- Markup popover: the three mode buttons, shown above the toolbar -->
+<div class="mkmenu" id="mkMenu" hidden>
+  <button class="segbtn" id="textBtn" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10 -10a2 2 0 0 0 -4 -4l-10 10z"/><path d="M13.5 6.5l4 4"/></svg>
+    <span>Edit text</span>
+  </button>
+  <button class="segbtn" id="selectBtn" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16"/><path d="M9 4h6"/><path d="M9 20h6"/><path d="M5 9v6"/><path d="M19 9v6"/></svg>
+    <span>Select</span>
+  </button>
+  <button class="segbtn" id="signBtn" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18c3 0 5 -10 7 -10c1 0 1 4 2 4c1 0 2 -2 3 -2"/><path d="M4 21h16"/></svg>
+    <span>Sign</span>
+  </button>
+</div>
+
+<!-- Legacy action buttons: hidden but kept in the DOM (build guard + tests +
+     handlers); the More sheet's Compress / Unlock tiles trigger them. -->
+<span hidden>
+  <button id="unlockBtn" disabled>Unlock</button>
+  <button id="compBtn" disabled>Compress</button>
+</span>
 
 <!-- Find-in-PDF bar. Hidden until opened from More → Find. Lives between the
      toolbar and the viewer so it never overlaps the pages. All wiring is in

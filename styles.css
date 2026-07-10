@@ -120,7 +120,26 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 .toolbar .tbtn, .toolbar .seg .segbtn {
   display:flex; flex-direction:column; align-items:center; justify-content:center;
   gap:2px; line-height:1; min-height:44px; }    /* 44pt vertical hit area (Apple HIG) */
-.toolbar .tbtn { padding:4px 5px; }
+.toolbar .tbtn { padding:4px 5px; flex:1 1 0; background:transparent; color:var(--txt); }
+.toolbar .tbtn:active:not(:disabled){ background:var(--panel); transform:none; filter:none; }
+.toolbar .tbtn.on { background:rgba(10,132,255,.26); }
+/* header ✕ (Done position): quiet icon button on the right of the title row */
+header .xbtn { background:transparent; border:0; color:var(--muted); padding:5px 6px;
+        flex:0 0 auto; border-radius:10px; }
+header .xbtn svg.ic { width:16px; height:16px; }
+/* v11.11 Markup popover: floats above the toolbar like the zoom pill */
+.mkmenu { position:fixed; left:50%; transform:translateX(-50%);
+        bottom:calc(64px + env(safe-area-inset-bottom)); z-index:56;
+        display:flex; gap:2px; padding:4px;
+        background:var(--chrome); border:0.5px solid var(--line); border-radius:18px;
+        -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
+        box-shadow:0 4px 14px var(--shadow); }
+.mkmenu[hidden] { display:none; }
+.mkmenu .segbtn { display:flex; flex-direction:column; align-items:center; gap:3px;
+        min-width:66px; padding:8px 10px; background:transparent; border:0;
+        color:var(--txt); border-radius:14px; font-size:10px; font-weight:600; }
+.mkmenu .segbtn.on { background:rgba(10,132,255,.26); }
+body.immersive .mkmenu { display:none; }
 /* labels can ellipsise so a tight row never forces a horizontal scroll */
 .toolbar .tbtn span, .toolbar .seg .segbtn span {
   font-size:9px; font-weight:600; letter-spacing:.01em;

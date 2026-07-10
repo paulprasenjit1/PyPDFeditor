@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.10";
+const APP_BUILD = "11.11";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -89,10 +89,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "10 Jul 2026";   // v11.10
+const BUILD_DATETIME = "10 Jul 2026";   // v11.11
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "a new home screen with document previews, full-screen reading (tap the page to hide or show the bars), and an All-pages thumbnail grid in More.";
+const WHATS_NEW = "a cleaner toolbar — Pages, Markup, Find, Save and More; Compress and Unlock now live in More, and ✕ moved to the top bar.";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -140,6 +140,7 @@ const ICONS = {
   sign:    '<path d="M4 18c3 0 5 -10 7 -10c1 0 1 4 2 4c1 0 2 -2 3 -2"/><path d="M4 21h16"/>',
   photo:   '<path d="M5 5h14v14h-14z"/><path d="M9 11a1.2 1.2 0 1 0 0 -2.4a1.2 1.2 0 0 0 0 2.4z"/><path d="M5 16l4 -4l3 3l3 -3l4 4"/>',
   unlock:  '<path d="M7 11h10v8h-10z"/><path d="M9 11v-3a3 3 0 0 1 6 0"/>',
+  compress:'<path d="M5 9h4v-4"/><path d="M3 3l6 6"/><path d="M5 15h4v4"/><path d="M3 21l6 -6"/><path d="M19 9h-4v-4"/><path d="M15 9l6 -6"/><path d="M19 15h-4v4"/><path d="M15 15l6 6"/>',
   download:'<path d="M12 4v10M8 11l4 4l4 -4"/><path d="M5 19h14"/>',
   info:    '<path d="M12 21a9 9 0 1 0 0 -18a9 9 0 0 0 0 18z"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
   search:  '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4 -4"/>'
@@ -195,6 +196,7 @@ let sheetLastFocus = null;     // element focused before the sheet opened (resto
 // full-screen overlay would sit on top and swallow the modal's taps.
 function openSheet(){
   showSpin(false);
+  try { $("mkMenu").hidden = true; } catch(e){}   // v11.11: popover never sits over a sheet
   sheetOnDismiss = null;                       // clear any stale pending-dismiss handler
   sheetLastFocus = document.activeElement;     // remember focus to restore on close
   $("sheetBg").classList.add("show");
@@ -507,7 +509,8 @@ function reopen(){
 }
 
 function enableDocButtons(has){
-  for (const id of ["textBtn","selectBtn","signBtn","compBtn","saveBtn","closeBtn"]) $(id).disabled = !has;
+  for (const id of ["textBtn","selectBtn","signBtn","compBtn","saveBtn","closeBtn","pagesBtn","markupBtn","findBtn"]) $(id).disabled = !has;
+  if (!has) $("mkMenu").hidden = true;         // v11.11: no doc → no markup popover
   refreshZoomButtons(); refreshUndo();
 }
 function refreshUndo(){
@@ -624,6 +627,13 @@ $("undoBtn").onclick = ()=> doUndo();
 $("closeBtn").onclick = ()=> confirmDiscard("close this PDF", closeFile);
 $("zoomOut").onclick = ()=> applyZoom(-25);
 $("zoomIn").onclick  = ()=> applyZoom(25);
+// v11.11 toolbar diet: the new core actions. Pages opens the thumbnail grid,
+// Find opens search, Markup toggles a popover holding the three mode buttons
+// (whose IDs and handlers are unchanged — tapping one also closes the popover).
+$("pagesBtn").onclick  = ()=> openPagesGrid();
+$("findBtn").onclick   = ()=> openFind();
+$("markupBtn").onclick = ()=>{ const m = $("mkMenu"); m.hidden = !m.hidden; };
+$("mkMenu").addEventListener("click", (e)=>{ if (e.target.closest("button")) $("mkMenu").hidden = true; });
 
 // ---------------- immersive reading (v11.10) ----------------
 // The header + toolbar float over the pages (translucent blur) and slide away
@@ -631,6 +641,7 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
 // tap again, or return to the top to bring them back — Books/Preview style.
 function setImmersive(on){
   if (on && (!workingBytes || mode || SEARCH.open)) on = false;
+  if (on) $("mkMenu").hidden = true;               // v11.11: popover follows the chrome
   document.body.classList.toggle("immersive", !!on);
 }
 let imLastY = 0, imAcc = 0, chromeTapT = 0;
@@ -1770,6 +1781,8 @@ function setMode(m){
   $("textBtn").classList.toggle("on", m==="text");
   $("selectBtn").classList.toggle("on", m==="select");
   $("signBtn").classList.toggle("on", m==="sign");
+  $("markupBtn").classList.toggle("on", !!m);    // v11.11: bar shows a mode is active
+  $("mkMenu").hidden = true;
   $("viewer").classList.toggle("textmode", m==="text");
   $("viewer").classList.toggle("selmode", m==="select");
   document.querySelectorAll(".stage").forEach(s=>s.classList.toggle("placing", m==="sign"));
@@ -1944,6 +1957,11 @@ $("moreBtn").onclick = ()=>{
       <button class="mtile" id="mExtract" ${d}>${ic("copy")}<span>Copy pages</span></button>
       <button class="mtile" id="mGoto" ${multi?"":"disabled"}>${ic("hash")}<span>Go to page</span></button>
     </div>
+    <div class="mgrp-l">Document</div>
+    <div class="mgrid">
+      <button class="mtile" id="mComp" ${d}>${ic("compress")}<span>Compress</span></button>
+      <button class="mtile" id="mUnlock">${ic("unlock")}<span>Unlock a PDF</span></button>
+    </div>
     <div class="mgrp-l">Export</div>
     <div class="mgrid">
       <button class="mtile" id="mPng" ${d}>${ic("download")}<span>Save image</span></button>
@@ -1958,6 +1976,14 @@ $("moreBtn").onclick = ()=>{
   $("mExtract").onclick = ()=>{ closeSheet(); openExtract(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
   $("mImg").onclick   = ()=>{ closeSheet(); confirmDiscard("turn photos into a new PDF", ()=>$("imgInput").click()); };
+  // v11.11: Compress and Unlock left the toolbar; their original (now hidden)
+  // buttons keep the handlers, so these tiles just forward to them
+  $("mComp").onclick  = ()=>{ closeSheet(); if (!$("compBtn").disabled) $("compBtn").onclick(); };
+  $("mUnlock").onclick= ()=>{
+    closeSheet();
+    if ($("unlockBtn").disabled){ setStatus("One moment — the engine is still loading.","warn"); return; }
+    $("unlockBtn").onclick();
+  };
   $("mPng").onclick   = ()=>{ closeSheet(); exportVisiblePng(); };
   $("mAbout").onclick = ()=>{ closeSheet(); openAbout(); };
   $("mClose").onclick = closeSheet;
@@ -3621,7 +3647,7 @@ document.addEventListener("keydown", e=>{ if(e.key==="Escape" && $("sheetBg").cl
 // (previously only pointer input was blocked, by the backdrop). inert is
 // supported on the app's iOS 16.4+ baseline; where it isn't, the attribute is
 // a harmless no-op and the focus trap below still contains keyboard users.
-const APP_CHROME_IDS = ["toolbar","findbar","viewer","pagePill","zoomctl","undoBtn"];
+const APP_CHROME_IDS = ["toolbar","findbar","viewer","pagePill","zoomctl","undoBtn","mkMenu"];
 function updateModalInert(){
   const sheetOpen = $("sheetBg").classList.contains("show");
   const camOpen   = $("scanCam").classList.contains("show");
