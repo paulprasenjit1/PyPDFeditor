@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.05";
+const APP_BUILD = "11.06";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -89,7 +89,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "10 Jul 2026";   // v11.05
+const BUILD_DATETIME = "10 Jul 2026";   // v11.06
+// One-line release note shown once after an update (keep in sync with APP_BUILD,
+// so the banner never describes an older release).
+const WHATS_NEW = "smoother zoom that always stays on your page, and rotation keeps your reading position.";
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -617,6 +620,10 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
     // it off to avoid a stray signature box
     if (e.touches.length===2 && workingBytes && mode!=="sign"){
       e.preventDefault();
+      // v11.06: a pinch that starts mid double-tap animation must not fight the
+      // cosmetic transform (or inherit the .dtzoom transition, which would make
+      // the live pinch rubber-band). Land the animation instantly first.
+      if (dtFinish) dtFinish();
       const cx=(e.touches[0].clientX+e.touches[1].clientX)/2;
       const cy=(e.touches[0].clientY+e.touches[1].clientY)/2;
       const wr=wrap.getBoundingClientRect();
@@ -633,7 +640,9 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
     k = Math.max(50/zoomPct, Math.min(300/zoomPct, k));     // clamp to 50–300%
     pinch.k = k;
     wrap.style.transform = "scale("+k+")";
-    $("zoomLbl").textContent = Math.round(zoomPct*k)+"%";
+    // v11.06: show the value setZoom will actually land on (multiples of 5),
+    // so the label doesn't tick to a different number when the fingers lift
+    $("zoomLbl").textContent = Math.max(50, Math.min(300, Math.round(zoomPct*k/5)*5))+"%";
   }, { passive:false });
 
   const endPinch = (e)=>{
@@ -662,6 +671,7 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
   const reduceMotion = (typeof window.matchMedia === "function") &&
                        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let dtAnimating = false;
+  let dtFinish = null;         // v11.06: lets a new gesture land the animation instantly
 
   // v11.04: render-truth-first, animate-second. The earlier version animated the
   // old bitmap and THEN re-rendered + repositioned, so the re-render was a visible
@@ -699,7 +709,9 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
       wrap.style.transform = "";
       wrap.style.transformOrigin = "";
       dtAnimating = false;
+      dtFinish = null;
     };
+    dtFinish = finish;
     wrap.addEventListener("transitionend", finish);
     const fallback = setTimeout(finish, 420);   // guard if transitionend never fires
   }
@@ -711,7 +723,9 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
     if (now-lastTap < 300 && Math.hypot(t.clientX-lastX, t.clientY-lastY) < 30){
       lastTap = 0;
       e.preventDefault();
-      smoothDoubleZoom(zoomPct===100 ? 150 : 100, t.clientX, t.clientY);
+      // v11.06: Preview-style direction — zoom IN unless already meaningfully
+      // zoomed (a light pinch to 110% then double-tap should go closer, not out)
+      smoothDoubleZoom(zoomPct < 125 ? 150 : 100, t.clientX, t.clientY);
     } else { lastTap = now; lastX = t.clientX; lastY = t.clientY; }
   });
 })();
@@ -3706,7 +3720,26 @@ let resizeT;
 window.addEventListener("resize", ()=>{
   if(!workingBytes) return;
   if($("viewer").clientWidth === lastViewerW) return;   // width unchanged → nothing to do
-  clearTimeout(resizeT); resizeT=setTimeout(render,300);
+  clearTimeout(resizeT);
+  // v11.06: keep the reading position through a rotation. Page heights change
+  // with the new width, so a raw pixel scrollTop lands on different content;
+  // anchor the page+fraction at the viewer centre (same trick as setZoom).
+  resizeT = setTimeout(async ()=>{
+    const v = $("viewer");
+    let r = v.getBoundingClientRect();
+    const anchor = anchorStage(r.left + r.width/2, r.top + r.height/2);
+    await render();
+    if (!anchor) return;
+    const stg = $("pageWrap").querySelector('.stage[data-page="'+anchor.page+'"]');
+    if (!stg) return;
+    r = v.getBoundingClientRect();                       // fresh centre after rotate
+    const px = r.left + r.width/2, py = r.top + r.height/2;
+    const rc = stg.getBoundingClientRect();
+    const maxL = Math.max(0, v.scrollWidth  - v.clientWidth);
+    const maxT = Math.max(0, v.scrollHeight - v.clientHeight);
+    v.scrollLeft = Math.max(0, Math.min(maxL, v.scrollLeft + (rc.left + anchor.fx*rc.width  - px)));
+    v.scrollTop  = Math.max(0, Math.min(maxT, v.scrollTop  + (rc.top  + anchor.fy*rc.height - py)));
+  }, 300);
 });
 
 // ---------------- battery: release everything when hidden / closed ----------------
@@ -3830,5 +3863,5 @@ try {
   const seen = localStorage.getItem("pypdf-seen-build");
   localStorage.setItem("pypdf-seen-build", APP_BUILD);
   if (seen && seen !== APP_BUILD)
-    setTimeout(()=>{ setStatus("Updated to v"+APP_BUILD+" — smoother camera permissions, VoiceOver-friendly dialogs, keyboard-safe sheets, and a home-screen Scan shortcut.","ok"); }, 3500);
+    setTimeout(()=>{ setStatus("Updated to v"+APP_BUILD+" — "+WHATS_NEW,"ok"); }, 3500);
 } catch(e){}
