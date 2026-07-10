@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.14";
+const APP_BUILD = "11.15";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -776,6 +776,10 @@ $("viewer").addEventListener("scroll", ()=>{
     if (e.touches.length===1){ t0x = e.touches[0].clientX; t0y = e.touches[0].clientY; }
   }, { passive:true });
 
+  // NOTE (deliberate): double-tap zoom and the single-tap chrome toggle are
+  // DISABLED while a mode (Edit/Select/Sign) is active — taps there place
+  // text boxes, select spans, or drop signatures, so they must never zoom.
+  // Pinch-zoom still works in Edit/Select. Not a bug.
   v.addEventListener("touchend", (e)=>{
     if (pinch || mode || !workingBytes) return;
     if (e.touches.length || e.changedTouches.length!==1) return;

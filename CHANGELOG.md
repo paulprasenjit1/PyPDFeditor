@@ -4,6 +4,86 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.15] — 2026-07-10 — iOS tab-bar tint for the toolbar
+
+- Idle items grey (#8e8e93), the ACTIVE item tinted blue with a bolder label
+  (no pill), icons 18px / labels 10px. Disabled items are a dimmer grey rather
+  than ghosted white, so the welcome screen reads calm instead of broken.
+- Save's glyph is now the iOS share icon (the action opens the share sheet).
+
+## [v11.14] — 2026-07-10 — Toolbar fixes: opaque bar, centred buttons, active highlights
+
+- **Bar no longer greys out over pages.** The header/toolbar/find bar used the
+  translucent `--chrome` material; with white pages scrolling beneath the now-
+  fixed bars they washed out to grey. All three use near-opaque
+  `rgba(16,16,18,.96)` (blur kept), so they stay dark over any content.
+- **Buttons centre vertically** in the ribbon (`align-items:center` + balanced
+  padding) and the ribbon is squeezed again (36px buttons).
+- **Active highlights:** Find lights up while search is open, Pages while the
+  thumbnail grid is open (Markup already lit while a mode is active).
+
+## [v11.13] — 2026-07-10 — Squeezed chrome (more page height)
+
+- Slimmer toolbar (smaller padding/icons) and header; viewer padding and all
+  floating pills (zoom, undo, markup popover, page pill) moved to match.
+
+## [v11.12] — 2026-07-10 — Toolbar sits at the bottom edge
+
+- The bar's bottom padding tucks into the home-indicator safe area instead of
+  reserving the full inset — no more dead strip under the labels.
+
+## [v11.11] — 2026-07-10 — Toolbar diet (Preview-style, UX revamp part 2)
+
+Backups: `backups/*_pre_toolbar_diet.*`.
+
+- **Bottom bar reduced to six quiet icons:** Open · Pages · Markup · Find ·
+  Save · More. Edit/Select/Sign fold into a floating **Markup popover** (same
+  buttons/IDs, relocated); ✕ moved to the top bar (iOS Done position).
+- **Compress and Unlock moved into More → Document.** Their original buttons
+  stay hidden in the DOM with their handlers, so the build guard, tests and
+  undo paths are untouched. Popover auto-closes on mode pick, sheet open,
+  immersive mode, or document close; it is in the modal-inert list.
+- Harness T5 updated: it asserted the OLD rule ("Unlock must not be in More"),
+  which this redesign deliberately reverses.
+
+## [v11.10] — 2026-07-10 — UX revamp part 1: home launcher, immersive reading, pages grid
+
+Backups: `backups/*_pre_ux_revamp.*`.
+
+- **Home screen:** action tiles side-by-side; recents are a two-column grid of
+  thumbnail cards (small first-page JPEG stored per entry, best-effort).
+- **Immersive reading:** header/toolbar float over pages as blurred bars and
+  slide away on scroll-down or a single stationary tap (Books/Preview style);
+  scroll-up, tap, or top-of-document brings them back. Modes/Find/close always
+  restore the chrome. Single-tap detection never fires on drags or double-taps.
+- **All pages grid:** near-full-height sheet, 3-across thumbnails; tap to jump,
+  Select mode for Rotate / Copy-to-new-PDF / Delete (all undoable). Organize
+  keeps the drag-reorder row UI; page pill still opens Go to page.
+
+## [v11.06] — 2026-07-10 — Zoom/gesture polish round
+
+- Pinch starting mid double-tap animation lands the animation instantly
+  (no transform fight / rubber-banding).
+- Double-tap zooms IN below 125% (Preview-like), out otherwise.
+- Live pinch label snaps to 5s so it matches where setZoom lands.
+- Rotation keeps the reading position (same page+fraction anchor as setZoom).
+- What's-new banner reads from a WHATS_NEW constant kept beside APP_BUILD
+  (the old one was hardcoded v10.97 text).
+- Service worker no longer runtime-caches query-string URLs.
+
+## [v11.05] — 2026-07-10 — Double-tap zoom page-jump fixed at the root
+
+Backups: `backups/*_pre_dtzoom_fix.*`.
+
+- **Root cause of "double-tap jumps to page 1":** `renderStage` swapped the
+  sized holder for an unsized, still-decoding `<img>`, so pages collapsed to
+  0px for a few frames and yanked the scroll upward AFTER setZoom had
+  positioned correctly. New bitmaps are decoded first and inserted at the
+  page's exact CSS size (footprint-neutral swap). Fixes pinch and −/+ too.
+- **No more white flash while zooming:** the render fast path keeps the old
+  bitmap on screen at the new size (briefly soft) instead of a blank holder;
+  the sharp raster swaps in seamlessly.
+
 ## [v11.00] — 2026-07-06 — Live Text on scanned pages (iOS 16+)
 
 Backups: `backups/*_pre_livetext.*`. **NEEDS ON-DEVICE VERIFICATION** —

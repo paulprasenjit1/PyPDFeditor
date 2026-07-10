@@ -124,10 +124,15 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 .toolbar .tbtn, .toolbar .seg .segbtn {
   display:flex; flex-direction:column; align-items:center; justify-content:center;
   gap:1px; line-height:1; min-height:36px; }    /* v11.14: squeezed; width keeps the 44pt hit area */
-.toolbar .tbtn { padding:2px 5px; flex:1 1 0; background:transparent; color:var(--txt); }
-.toolbar .tbtn svg.ic { width:17px; height:17px; }
-.toolbar .tbtn:active:not(:disabled){ background:var(--panel); transform:none; filter:none; }
-.toolbar .tbtn.on { background:rgba(10,132,255,.26); }
+/* v11.15 iOS tab-bar semantics: idle items grey, ACTIVE item tinted blue (no
+   pill), disabled items a dimmer grey instead of ghosted white. */
+.toolbar .tbtn { padding:2px 5px; flex:1 1 0; background:transparent; color:#8e8e93; }
+.toolbar .tbtn svg.ic { width:18px; height:18px; }
+.toolbar .tbtn span { font-size:10px; }
+.toolbar .tbtn:active:not(:disabled){ background:transparent; color:var(--txt); transform:none; filter:none; }
+.toolbar .tbtn.on { background:transparent; color:var(--accent); }
+.toolbar .tbtn.on span { font-weight:700; }
+.toolbar .tbtn:disabled { opacity:1; color:#48484a; }
 /* header ✕ (Done position): quiet icon button on the right of the title row */
 header .xbtn { background:transparent; border:0; color:var(--muted); padding:5px 6px;
         flex:0 0 auto; border-radius:10px; }
