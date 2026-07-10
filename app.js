@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.02";
+const APP_BUILD = "11.03";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -89,7 +89,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "10 Jul 2026";   // v11.02
+const BUILD_DATETIME = "10 Jul 2026";   // v11.03
 const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
 
 // ---------------- state ----------------
@@ -500,6 +500,25 @@ function refreshZoomButtons(){
 // set the zoom and re-render, keeping the content under the anchor point
 // (a pinch centre, a double-tap, or the viewer middle) visually in place
 let zooming = false;
+// v11.03: find the page under a screen point and the fractional position within
+// it. Anchoring on a real page (not a global scroll ratio) is exact regardless
+// of the fixed 10px gaps between pages, so a zoom can't drift to another page.
+function anchorStage(cx, cy){
+  const stages = $("pageWrap").querySelectorAll(".stage");
+  let contain = null, nearest = null, nd = Infinity;
+  for (const s of stages){
+    const rc = s.getBoundingClientRect();
+    if (cy >= rc.top && cy <= rc.bottom){ contain = { s, rc }; break; }
+    const d = cy < rc.top ? rc.top - cy : cy - rc.bottom;   // gap between pages
+    if (d < nd){ nd = d; nearest = { s, rc }; }
+  }
+  const hit = contain || nearest;
+  if (!hit) return null;
+  const rc = hit.rc;
+  const fx = rc.width  ? Math.max(0, Math.min(1, (cx - rc.left) / rc.width))  : 0.5;
+  const fy = rc.height ? Math.max(0, Math.min(1, (cy - rc.top)  / rc.height)) : 0.5;
+  return { page: +hit.s.dataset.page, fx, fy };
+}
 async function setZoom(newPct, anchorX, anchorY){
   newPct = Math.max(50, Math.min(300, Math.round(newPct/5)*5));
   if (newPct === zoomPct || !workingBytes || zooming){ refreshZoomButtons(); return; }
@@ -507,18 +526,29 @@ async function setZoom(newPct, anchorX, anchorY){
   const v = $("viewer"), r = v.getBoundingClientRect();
   const ax = (anchorX==null ? r.width/2  : anchorX - r.left);
   const ay = (anchorY==null ? r.height/2 : anchorY - r.top);
+  const px = r.left + ax, py = r.top + ay;      // anchor point in screen coords
+  const anchor = anchorStage(px, py);           // page + fraction under the anchor
   const ratio = newPct / zoomPct;
   const sx = v.scrollLeft, sy = v.scrollTop;
   zoomPct = newPct;
   $("zoomLbl").textContent = zoomPct + "%";
   refreshZoomButtons();
   await render();
-  // keep the anchored content point in place, but clamp to the scrollable
-  // range so a zoom never snaps the view to the first/previous page (v11.01)
   const maxL = Math.max(0, v.scrollWidth  - v.clientWidth);
   const maxT = Math.max(0, v.scrollHeight - v.clientHeight);
-  v.scrollLeft = Math.max(0, Math.min(maxL, (sx + ax) * ratio - ax));
-  v.scrollTop  = Math.max(0, Math.min(maxT, (sy + ay) * ratio - ay));
+  const stg = anchor && $("pageWrap").querySelector('.stage[data-page="'+anchor.page+'"]');
+  if (stg){
+    // exact: put the same fraction of the same page back under the anchor point
+    const rc = stg.getBoundingClientRect();
+    const curX = rc.left + anchor.fx * rc.width;
+    const curY = rc.top  + anchor.fy * rc.height;
+    v.scrollLeft = Math.max(0, Math.min(maxL, v.scrollLeft + (curX - px)));
+    v.scrollTop  = Math.max(0, Math.min(maxT, v.scrollTop  + (curY - py)));
+  } else {
+    // fallback: ratio math, clamped so it never snaps to the first page (v11.01)
+    v.scrollLeft = Math.max(0, Math.min(maxL, (sx + ax) * ratio - ax));
+    v.scrollTop  = Math.max(0, Math.min(maxT, (sy + ay) * ratio - ay));
+  }
   zooming = false;
   saveViewState();               // v10.91: remember zoom for this document
 }
