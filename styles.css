@@ -109,7 +109,7 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
    default and revealed (.show, added by refreshZoomButtons) only while a
    document is open. Moving it out of the toolbar fixed the long-standing issue
    where zoom disappeared entirely on every iPhone (<600px). */
-.zoomctl { position:fixed; right:12px; bottom:calc(44px + max(2px, calc(env(safe-area-inset-bottom) - 26px)));
+.zoomctl { position:fixed; right:12px; bottom:calc(52px + max(2px, calc(env(safe-area-inset-bottom) - 26px)));
            z-index:55; display:none; align-items:center; gap:2px;
            background:var(--chrome); border:0.5px solid var(--line); border-radius:18px;
            -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
@@ -123,12 +123,12 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
    behaviour are unchanged; this is purely the visual treatment. */
 .toolbar .tbtn, .toolbar .seg .segbtn {
   display:flex; flex-direction:column; align-items:center; justify-content:center;
-  gap:1px; line-height:1; min-height:36px; }    /* v11.14: squeezed; width keeps the 44pt hit area */
+  gap:2px; line-height:1; min-height:44px; }    /* v11.16: full 44pt touch target (Apple HIG) */
 /* v11.15 iOS tab-bar semantics: idle items grey, ACTIVE item tinted blue (no
    pill), disabled items a dimmer grey instead of ghosted white. */
 .toolbar .tbtn { padding:2px 5px; flex:1 1 0; background:transparent; color:#8e8e93; }
-.toolbar .tbtn svg.ic { width:18px; height:18px; }
-.toolbar .tbtn span { font-size:10px; }
+.toolbar .tbtn svg.ic { width:20px; height:20px; }
+.toolbar .tbtn span { font-size:11px; }
 .toolbar .tbtn:active:not(:disabled){ background:transparent; color:var(--txt); transform:none; filter:none; }
 .toolbar .tbtn.on { background:transparent; color:var(--accent); }
 .toolbar .tbtn.on span { font-weight:700; }
@@ -139,7 +139,7 @@ header .xbtn { background:transparent; border:0; color:var(--muted); padding:5px
 header .xbtn svg.ic { width:16px; height:16px; }
 /* v11.11 Markup popover: floats above the toolbar like the zoom pill */
 .mkmenu { position:fixed; left:50%; transform:translateX(-50%);
-        bottom:calc(44px + max(2px, calc(env(safe-area-inset-bottom) - 26px))); z-index:56;
+        bottom:calc(52px + max(2px, calc(env(safe-area-inset-bottom) - 26px))); z-index:56;
         display:flex; gap:2px; padding:4px;
         background:var(--chrome); border:0.5px solid var(--line); border-radius:18px;
         -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
@@ -162,7 +162,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 
 /* Floating Undo pill (bottom-left). Mirrors the zoom pill on the right; shown
    by refreshUndo() only while the undo stack is non-empty. */
-.undofab { position:fixed; left:12px; bottom:calc(44px + max(2px, calc(env(safe-area-inset-bottom) - 26px)));
+.undofab { position:fixed; left:12px; bottom:calc(52px + max(2px, calc(env(safe-area-inset-bottom) - 26px)));
            z-index:55; display:none; flex-direction:row; align-items:center; gap:6px;
            background:var(--chrome); border:0.5px solid var(--line); border-radius:18px;
            -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
@@ -199,7 +199,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    horizontally centred (align-items). */
 .viewer { flex:1; overflow:auto;
           padding:calc(32px + max(3px, env(safe-area-inset-top))) 4px
-                  calc(44px + max(2px, calc(env(safe-area-inset-bottom) - 26px)));
+                  calc(52px + max(2px, calc(env(safe-area-inset-bottom) - 26px)));
           display:flex; flex-direction:column; gap:10px; -webkit-overflow-scrolling:touch;
           align-items:safe center; touch-action:pan-x pan-y; }
 .pagewrap { display:flex; flex-direction:column; gap:10px; align-items:safe center; }
@@ -385,7 +385,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    shortcut — tap it to open Go to page — so it gets an accent outline and is
    only tappable while visible (pointer-events:auto on .show). */
 .pgpill { position:fixed; left:50%; transform:translateX(-50%);
-          bottom:calc(44px + max(2px, calc(env(safe-area-inset-bottom) - 26px))); z-index:50;
+          bottom:calc(52px + max(2px, calc(env(safe-area-inset-bottom) - 26px))); z-index:50;
           background:var(--pill-bg); color:var(--pill-fg); font-size:12px; font-weight:600;
           padding:6px 13px; border-radius:15px; border:1px solid var(--accent);
           -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);

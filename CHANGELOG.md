@@ -4,6 +4,12 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.16] — 2026-07-10 — Touch-friendly toolbar buttons
+
+- Buttons back to the full 44pt Apple HIG touch target (icons 20px, labels
+  11px); viewer padding and floating pills moved to match (~8px page height
+  traded for comfort).
+
 ## [v11.15] — 2026-07-10 — iOS tab-bar tint for the toolbar
 
 - Idle items grey (#8e8e93), the ACTIVE item tinted blue with a bolder label
