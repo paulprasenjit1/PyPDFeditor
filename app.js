@@ -17,7 +17,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.20";
+const APP_BUILD = "11.21";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -813,6 +813,9 @@ $("viewer").addEventListener("scroll", ()=>{
       clearTimeout(chromeTapT);
       if (Math.hypot(t.clientX-t0x, t.clientY-t0y) < 12){
         chromeTapT = setTimeout(()=>{
+          // v11.21: a long-press that selected text ends in a touchend too —
+          // never treat that as a chrome toggle
+          try { const s = window.getSelection(); if (s && String(s).length) return; } catch(err){}
           setImmersive(!document.body.classList.contains("immersive"));
         }, 330);
       }
@@ -1222,6 +1225,13 @@ async function renderStage(stage, i){
     delete stage.dataset.rtry;               // rendered fine — reset retry count
     if (mode === "text") await buildSpanBoxes(stage, i);
     else if (mode === "select") buildTextLayer(stage, i);
+    // v11.21: born-digital documents get a selectable text layer in VIEW mode
+    // too, so touch-and-hold selects real text (with the iOS Copy menu) instead
+    // of offering to save the page as an image. Scans keep the image callout —
+    // that's the Live Text path (Show Text / Look Up).
+    else if (docHasText()){
+      try { buildTextLayer(stage, i); stage.classList.add("hastext"); } catch(e){}
+    }
     if (SEARCH.open) paintPageHighlights(stage, i);
   } catch(e){
     // v10.98: a failed rasterisation is no longer a permanently blank page.
@@ -1837,7 +1847,16 @@ function setMode(m){
     });
     setStatus("Select any text, then copy it.","ok");
   } else if (m==="sign"){ setStatus("Drag a box where the signature should go.","ok"); }
-  else setStatus("");            // v11.17: exiting a mode just clears the toast — no "Ready." flash
+  else {
+    setStatus("");               // v11.17: exiting a mode just clears the toast — no "Ready." flash
+    // v11.21: back in view mode — rebuild the always-on text layer on pages
+    // that lost it (e.g. edit mode replaced it with span boxes)
+    if (workingBytes && MDOC && docHasText()){
+      document.querySelectorAll(".stage").forEach(s=>{
+        if (s.dataset.rendered) try { buildTextLayer(s, +s.dataset.page); s.classList.add("hastext"); } catch(e){}
+      });
+    }
+  }
 }
 
 $("textBtn").onclick = ()=> setMode(mode==="text" ? null : "text");

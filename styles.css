@@ -244,6 +244,13 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    in the app's own interaction modes so edit / select-overlay / sign-placing
    gestures aren't shadowed by the OS menu. */
 .viewer .stage img { -webkit-touch-callout:default; -webkit-user-select:auto; user-select:auto; }
+/* v11.21: view-mode text selection. Pages WITH a text layer (.hastext) select
+   real text on touch-and-hold — the invisible .txt layer takes the touch and
+   the image callout ("Save to Photos" etc.) is suppressed on those pages.
+   Scans have no .hastext, so they keep the Live Text image callout. */
+.viewer:not(.textmode) .stage:not(.placing) .txt { pointer-events:auto; touch-action:pan-x pan-y;
+        -webkit-user-select:text; user-select:text; -webkit-touch-callout:default; }
+.viewer .stage.hastext img { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
 .viewer.textmode .stage img, .viewer.selmode .stage img,
 .stage.placing img { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
 .stage .holder { background:#fff; }
