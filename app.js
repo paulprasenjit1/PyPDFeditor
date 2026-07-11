@@ -14,7 +14,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.16";
+const APP_BUILD = "11.17";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -196,7 +196,7 @@ let sheetLastFocus = null;     // element focused before the sheet opened (resto
 // full-screen overlay would sit on top and swallow the modal's taps.
 function openSheet(){
   showSpin(false);
-  try { $("mkMenu").hidden = true; } catch(e){}   // v11.11: popover never sits over a sheet
+  hideMkMenu();                                  // v11.11: popover never sits over a sheet
   sheetOnDismiss = null;                       // clear any stale pending-dismiss handler
   sheetLastFocus = document.activeElement;     // remember focus to restore on close
   $("sheetBg").classList.add("show");
@@ -510,7 +510,7 @@ function reopen(){
 
 function enableDocButtons(has){
   for (const id of ["textBtn","selectBtn","signBtn","compBtn","saveBtn","closeBtn","pagesBtn","markupBtn","findBtn"]) $(id).disabled = !has;
-  if (!has) $("mkMenu").hidden = true;         // v11.11: no doc → no markup popover
+  if (!has) hideMkMenu();                      // v11.11: no doc → no markup popover
   refreshZoomButtons(); refreshUndo();
 }
 function refreshUndo(){
@@ -632,8 +632,19 @@ $("zoomIn").onclick  = ()=> applyZoom(25);
 // (whose IDs and handlers are unchanged — tapping one also closes the popover).
 $("pagesBtn").onclick  = ()=> openPagesGrid();
 $("findBtn").onclick   = ()=> openFind();
-$("markupBtn").onclick = ()=>{ const m = $("mkMenu"); m.hidden = !m.hidden; };
-$("mkMenu").addEventListener("click", (e)=>{ if (e.target.closest("button")) $("mkMenu").hidden = true; });
+// v11.17: single place to hide the Markup popover and re-sync its bar highlight
+function hideMkMenu(){
+  try {
+    $("mkMenu").hidden = true;
+    $("markupBtn").classList.toggle("on", !!mode);
+  } catch(e){}
+}
+// v11.17: the bar item lights up while the popover is open OR a mode is active
+$("markupBtn").onclick = ()=>{
+  const m = $("mkMenu"); m.hidden = !m.hidden;
+  $("markupBtn").classList.toggle("on", !m.hidden || !!mode);
+};
+$("mkMenu").addEventListener("click", (e)=>{ if (e.target.closest("button")) hideMkMenu(); });
 
 // ---------------- immersive reading (v11.10) ----------------
 // The header + toolbar float over the pages (translucent blur) and slide away
@@ -641,7 +652,7 @@ $("mkMenu").addEventListener("click", (e)=>{ if (e.target.closest("button")) $("
 // tap again, or return to the top to bring them back — Books/Preview style.
 function setImmersive(on){
   if (on && (!workingBytes || mode || SEARCH.open)) on = false;
-  if (on) $("mkMenu").hidden = true;               // v11.11: popover follows the chrome
+  if (on) hideMkMenu();                            // v11.11: popover follows the chrome
   document.body.classList.toggle("immersive", !!on);
 }
 let imLastY = 0, imAcc = 0, chromeTapT = 0;
@@ -1397,7 +1408,7 @@ function closeFind(){
   const fc = $("findClear"); if (fc) fc.hidden = true;
   $("findCount").textContent = "";
   document.querySelectorAll(".stage .hl").forEach(hl=>{ hl.textContent = ""; });
-  setStatus("Ready.");
+  setStatus("");                 // v11.17: closing Find clears the toast — no "Ready." flash
 }
 
 // quads → point-space bounding boxes, grouped one entry per match (a match can
@@ -1808,7 +1819,7 @@ function setMode(m){
     });
     setStatus("Select any text, then copy it.","ok");
   } else if (m==="sign"){ setStatus("Drag a box where the signature should go.","ok"); }
-  else setStatus("Ready.");
+  else setStatus("");            // v11.17: exiting a mode just clears the toast — no "Ready." flash
 }
 
 $("textBtn").onclick = ()=> setMode(mode==="text" ? null : "text");

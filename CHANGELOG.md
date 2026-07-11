@@ -4,6 +4,18 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.17] — 2026-07-10 — Bigger glyphs (same bar height), Markup toggle polish, dark keyboard
+
+- Bar back to the slim v11.15 height; icons grew to 22px inside the same box
+  (each button is a sixth of the screen wide, so the touch target is ample).
+- Markup lights up while its popover is open, not just while a mode is active;
+  every close path re-syncs the highlight (hideMkMenu helper).
+- Exiting a mode or closing Find no longer flashes a "Ready." toast.
+- Dark iOS keyboard: `<meta name="color-scheme" content="dark">` plus explicit
+  color-scheme:dark on inputs (WebKit reads the meta before CSS, which is what
+  reliably flips the keyboard in a standalone PWA; iOS offers dark grey, not
+  true black — that's the system limit).
+
 ## [v11.16] — 2026-07-10 — Touch-friendly toolbar buttons
 
 - Buttons back to the full 44pt Apple HIG touch target (icons 20px, labels
