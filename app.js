@@ -17,7 +17,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.18";
+const APP_BUILD = "11.19";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -644,6 +644,7 @@ function hideMkMenu(){
 }
 // v11.17: the bar item lights up while the popover is open OR a mode is active
 $("markupBtn").onclick = ()=>{
+  if (SEARCH.open) closeFind();        // v11.19: markup and search are exclusive
   const m = $("mkMenu"); m.hidden = !m.hidden;
   $("markupBtn").classList.toggle("on", !m.hidden || !!mode);
 };
@@ -1386,6 +1387,19 @@ const SEARCH = {
   debounce: 0
 };
 
+// v11.19: when the keyboard opens for the find input, iOS scrolls the layout
+// viewport up, shoving the fixed header + find bar off the top of the screen —
+// you were typing into an invisible box. Pin the window to the top whenever
+// the visual viewport changes while search is open.
+(function pinChromeWhileFinding(){
+  const pin = ()=>{ if (SEARCH.open) window.scrollTo(0,0); };
+  if (typeof window.visualViewport !== "undefined" && window.visualViewport){
+    window.visualViewport.addEventListener("resize", pin);
+    window.visualViewport.addEventListener("scroll", pin);
+  }
+  window.addEventListener("scroll", pin);
+  $("findInput").addEventListener("focus", ()=>{ setTimeout(()=>window.scrollTo(0,0), 60); });
+})();
 function openFind(){
   if (!workingBytes || !MDOC){ setStatus("Open a PDF first, then search it.","warn"); return; }
   SEARCH.open = true;
@@ -1797,6 +1811,7 @@ function sanitizeForFont(t){ return t.replace(/[^\x09\x0A\x0D\x20-\xFF]/g, "?");
 // ---------------- modes ----------------
 function setMode(m){
   mode = m;
+  if (m && SEARCH.open) closeFind();   // v11.19: entering a mode closes search
   setImmersive(false);           // v11.10: entering any mode brings the chrome back
   $("textBtn").classList.toggle("on", m==="text");
   $("selectBtn").classList.toggle("on", m==="select");
