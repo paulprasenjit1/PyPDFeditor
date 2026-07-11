@@ -4,6 +4,18 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.18] — 2026-07-10 — Bigger centred icons, double-tap viewport zoom killed, keyboard hardening
+
+- Toolbar icons 24px, content vertically centred (balanced top/bottom padding
+  so the stack no longer hugs the top of the strip).
+- **Serious fix:** a fast double-tap on any toolbar button (e.g. Markup) was
+  triggering iOS's NATIVE double-tap smart-zoom of the whole viewport.
+  `touch-action:manipulation` on all app chrome removes that gesture while
+  keeping taps and pans (pages keep pan-x pan-y, so the app's own pinch and
+  double-tap zoom of the PDF are untouched).
+- Dark keyboard, second pass: added `supported-color-schemes` meta and a CSSOM
+  root color-scheme set at boot, alongside v11.17's meta + input rules.
+
 ## [v11.17] — 2026-07-10 — Bigger glyphs (same bar height), Markup toggle polish, dark keyboard
 
 - Bar back to the slim v11.15 height; icons grew to 22px inside the same box
