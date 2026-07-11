@@ -137,7 +137,11 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
   gap:2px; line-height:1; min-height:40px; }    /* v11.18: larger glyphs, content centred */
 /* v11.15 iOS tab-bar semantics: idle items grey, ACTIVE item tinted blue (no
    pill), disabled items a dimmer grey instead of ghosted white. */
-.toolbar .tbtn { padding:2px 5px; flex:1 1 0; background:transparent; color:#8e8e93; }
+.toolbar .tbtn { padding:2px 5px; flex:1 1 0; background:transparent; color:#8e8e93;
+                 position:relative; }   /* v11.26: anchors the unsaved-changes dot */
+/* v11.26: small iOS-style dot on Save while the document has unsaved changes */
+.toolbar .tbtn.dirty::after { content:""; position:absolute; top:3px; right:24%;
+                 width:7px; height:7px; border-radius:50%; background:var(--accent); }
 .toolbar .tbtn svg.ic { width:24px; height:24px; }
 .toolbar .tbtn span { font-size:11px; }
 .toolbar .tbtn:active:not(:disabled){ background:transparent; color:var(--txt); transform:none; filter:none; }
@@ -491,6 +495,8 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
         background:var(--panel); }
 .pgacts button { flex:1; }
 .pgacts .danger { color:var(--err); }
+/* v11.26: destructive actions in any sheet read red (e.g. Remove from Recents) */
+.sheet .danger { color:var(--err); }
 /* While the grabber is being dragged, app.js sets data-drag and an inline
    transform; suppress the transition so it tracks the finger 1:1. */
 .sheet[data-drag] { transition:none; }

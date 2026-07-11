@@ -17,7 +17,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.25";
+const APP_BUILD = "11.26";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -285,6 +285,12 @@ $("bigPhotos").onclick = ()=> $("imgInput").click();   // no confirm needed: wel
 const DB_NAME="pypdf-state", DB_STORE="kv";
 let docSensitive = false;     // true when the open doc came from a password unlock
 let dirty = false;            // true when the document has changes not yet Saved
+// v11.26: every dirty transition goes through here so the Save icon can show
+// a small "unsaved changes" dot (iOS-style) the moment there is work to save.
+function setDirty(v){
+  dirty = !!v;
+  try { $("saveBtn").classList.toggle("dirty", dirty && !!workingBytes); } catch(e){}
+}
 
 // Before any action that would REPLACE or close the open document, warn if
 // there are unsaved changes. Offers Save first / Continue / Cancel.
@@ -510,20 +516,26 @@ async function renderRecents(){
   // v11.22: star / unstar (max 3). stopPropagation so it never opens the file.
   box.querySelectorAll("[data-star]").forEach(b=>b.onclick = async (e)=>{
     e.stopPropagation(); e.preventDefault();
-    const id = b.dataset.star;
-    try {
-      const cur = await recentsGet();
-      const entry = cur.find(r=>r.id===id);
-      if (!entry) return;
-      if (!entry.pinned && cur.filter(r=>r.pinned).length >= RECENTS_PIN_MAX){
-        setStatus("You can star up to "+RECENTS_PIN_MAX+" documents.","warn"); return;
-      }
-      entry.pinned = !entry.pinned;
-      await idbSet("recents", cur);
-      renderRecents();
-    } catch(e2){}
+    recentsToggleStar(b.dataset.star);
+  });
+  // v11.26: long-press a card for Open / Star / Remove — so ONE document can
+  // be removed without wiping the whole list. Pointer-based: fires after
+  // 550ms unless the finger lifts or moves >12px (i.e. it was a tap/scroll).
+  box.querySelectorAll("[data-rc]").forEach(b=>{
+    let lpT = 0, sx = 0, sy = 0;
+    b.addEventListener("pointerdown", (e)=>{
+      sx = e.clientX; sy = e.clientY;
+      clearTimeout(lpT);
+      lpT = setTimeout(()=>{ b.dataset.lp = "1"; openRecentSheet(b.dataset.rc); }, 550);
+    });
+    b.addEventListener("pointermove", (e)=>{
+      if (Math.abs(e.clientX-sx) > 12 || Math.abs(e.clientY-sy) > 12) clearTimeout(lpT);
+    });
+    ["pointerup","pointercancel","pointerleave"].forEach(ev=>
+      b.addEventListener(ev, ()=>clearTimeout(lpT)));
   });
   box.querySelectorAll("[data-rc]").forEach(b=>b.onclick = async ()=>{
+    if (b.dataset.lp){ delete b.dataset.lp; return; }   // v11.26: long-press consumed this tap
     if ($("bigOpen").disabled){ setStatus("One moment — the engine is still loading.","warn"); return; }
     const id = b.dataset.rc;
     try {
@@ -543,6 +555,56 @@ async function renderRecents(){
     try { for (const r of await recentsGet()) idbDel(r.id).catch(()=>{}); await idbDel("recents"); } catch(e){}
     renderRecents();
   };
+}
+// v11.26: shared star toggle (star button + long-press sheet use the same path)
+async function recentsToggleStar(id){
+  try {
+    const cur = await recentsGet();
+    const entry = cur.find(r=>r.id===id);
+    if (!entry) return;
+    if (!entry.pinned && cur.filter(r=>r.pinned).length >= RECENTS_PIN_MAX){
+      setStatus("You can star up to "+RECENTS_PIN_MAX+" documents.","warn"); return;
+    }
+    entry.pinned = !entry.pinned;
+    await idbSet("recents", cur);
+    renderRecents();
+  } catch(e){}
+}
+// v11.26: remove ONE recent (entry + stored bytes) without clearing the rest
+async function recentsRemove(id){
+  try {
+    const list = (await recentsGet()).filter(r=>r.id!==id);
+    await idbSet("recents", list);
+    idbDel(id).catch(()=>{});
+    renderRecents();
+  } catch(e){}
+}
+// v11.26: long-press sheet for a recents card — Open / Star / Remove
+async function openRecentSheet(id){
+  const entry = (await recentsGet()).find(r=>r.id===id);
+  if (!entry) return;
+  $("sheet").innerHTML = h`
+    <h3>${entry.name}</h3>
+    <p class="hint">${fmtKB(entry.size)} · stays only on this phone.</p>
+    <div class="row"><button class="full" id="rsOpen">Open</button></div>
+    <div class="row"><button class="ghost full" id="rsStar">${entry.pinned ? "Remove star" : "Star"}</button></div>
+    <div class="row"><button class="ghost danger full" id="rsDel">Remove from Recents</button></div>
+    <div class="row"><button class="ghost full" id="rsCancel">Cancel</button></div>`;
+  $("rsOpen").onclick = async ()=>{
+    closeSheet();
+    if ($("bigOpen").disabled){ setStatus("One moment — the engine is still loading.","warn"); return; }
+    try {
+      const bytes = await idbGet(id);
+      if (!bytes || !bytes.length) throw new Error("no longer stored on this device");
+      showSpin(true,"Opening…");
+      await openBytes(bytes, entry.name || "document.pdf");
+    } catch(e){ setStatus("Could not open it: "+friendly(e),"err"); }
+    showSpin(false);
+  };
+  $("rsStar").onclick = ()=>{ closeSheet(); recentsToggleStar(id); };
+  $("rsDel").onclick  = ()=>{ closeSheet(); recentsRemove(id); setStatus("Removed from Recents.","ok"); };
+  $("rsCancel").onclick = closeSheet;
+  openSheet();
 }
 
 // ---------------- mupdf doc lifecycle ----------------
@@ -978,7 +1040,7 @@ async function openBytes(bytes, name){
   workingBytes = bytes;
   if (name) fileName = name;
   docSensitive = wasEncrypted;     // decrypted copies are never persisted
-  dirty = false;                   // freshly opened = nothing to lose yet
+  setDirty(false);                 // freshly opened = nothing to lose yet
   reopen();
   setMode(null);
   // v11.24: adopt the remembered zoom BEFORE the first render. It used to
@@ -1085,7 +1147,7 @@ async function unlockPdfFile(f){
     const prev = workingBytes;
     await openBytes(bytes, f.name);
     if (workingBytes && workingBytes !== prev){
-      dirty = true;
+      setDirty(true);
       setStatus("Password removed — “"+fileName+"” is open at the original quality. Tap Save to keep it.","ok");
     }
   } catch(err){
@@ -1501,8 +1563,12 @@ const SEARCH = {
 // Measured via CSSOM (CSP-safe) on open and on every viewport resize.
 function placeFindBar(){
   try {
-    const hb = document.querySelector("header").getBoundingClientRect().bottom;
-    $("findbar").style.top = Math.max(0, Math.round(hb)) + "px";
+    // offsetHeight, not getBoundingClientRect: the header slides via a CSS
+    // transform (immersive mode), and gBCR mid-animation would place the bar
+    // too high. The layout box is transform-immune; header is fixed at top:0,
+    // so its bottom edge is exactly its offsetHeight.
+    const hb = document.querySelector("header").offsetHeight;
+    if (hb > 0) $("findbar").style.top = Math.round(hb) + "px";
   } catch(e){}
 }
 window.addEventListener("resize", ()=>{ if (SEARCH.open) placeFindBar(); });
@@ -2175,7 +2241,7 @@ function closeFile(){
   closeDoc();                       // destroy the mupdf doc -> frees WASM memory
   workingBytes = null;
   docSensitive = false;
-  dirty = false;
+  setDirty(false);
   try{ idbDel("doc").catch(()=>{}); }catch(e){}   // closed on purpose: forget it
   fileName = "document.pdf";
   undoStack = [];
@@ -2581,7 +2647,7 @@ $("imgInput").onchange = async e=>{
       +" "+String(d.getHours()).padStart(2,"0")+"."+String(d.getMinutes()).padStart(2,"0")+".pdf";
     undoStack = [];
     setMode(null);
-    reopen(); dirty = true; await render(); enableDocButtons(true);
+    reopen(); setDirty(true); await render(); enableDocButtons(true);
     setStatus("Done — your photos are now a PDF ("+fmtKB(workingBytes.length)+"). Tap Save to keep it.","ok");
   } catch(err){ setStatus("Could not turn the photos into a PDF: "+friendly(err),"err"); }
   showSpin(false);
@@ -3467,7 +3533,7 @@ async function createScanPdf(){
     fileName="Scan "+d.getDate()+" "+d.toLocaleString("en",{month:"short"})+" "+d.getFullYear()
       +" "+String(d.getHours()).padStart(2,"0")+"."+String(d.getMinutes()).padStart(2,"0")+".pdf";
     undoStack=[]; setMode(null);
-    reopen(); dirty = true; await render(); enableDocButtons(true);
+    reopen(); setDirty(true); await render(); enableDocButtons(true);
     setStatus("Scanned "+pages.length+" page(s) — tap Save to keep it as “"+fileName+"”.","ok");
   } catch(err){ setStatus("Could not create the PDF: "+friendly(err),"err"); }
   showSpin(false);
@@ -3561,7 +3627,7 @@ function openSaveSheet(after){
     closeSheet();
     const ok = await saveOrShare(workingBytes, nm);
     if (!ok){ setStatus("Save cancelled.","ok"); return; }   // share sheet dismissed
-    dirty = false;                 // saved — nothing unsaved any more
+    setDirty(false);               // saved — nothing unsaved any more
     if (MDOC) setMeta(nm, fmtKB(workingBytes.length));
     schedulePersistDoc();
     recentsRemember();             // saved under its final name
@@ -3737,7 +3803,7 @@ function pushUndo(){
   // point, so undoing back to the originally-opened document also restores
   // dirty=false (rather than always leaving a spurious "unsaved changes" flag).
   undoStack.push({ bytes: workingBytes ? workingBytes.slice(0) : null, dirty });
-  dirty = true;                              // every mutation passes through here
+  setDirty(true);                            // every mutation passes through here
   const budget = undoBudget();
   while (undoStack.length > budget.steps) undoStack.shift();
   // large documents: keep undo memory bounded by dropping the oldest steps
@@ -3755,7 +3821,7 @@ function pushUndo(){
 const UNDO_SNAPSHOT_MAX = 48*1024*1024;
 function pushUndoGuarded(){
   if (workingBytes && workingBytes.length > UNDO_SNAPSHOT_MAX){
-    dirty = true; refreshUndo();      // still a change, just without a costly copy
+    setDirty(true); refreshUndo();    // still a change, just without a costly copy
     return false;
   }
   pushUndo();
@@ -3766,8 +3832,8 @@ async function doUndo(){
   const snap = undoStack.pop();
   workingBytes = snap.bytes;
   showSpin(true,"Undoing…");
-  if (workingBytes){ dirty = snap.dirty; reopen(); await render(); }
-  else { closeDoc(); dirty = snap.dirty; try{ idbDel("doc").catch(()=>{}); }catch(e){} await render(); }
+  if (workingBytes){ setDirty(snap.dirty); reopen(); await render(); }
+  else { closeDoc(); setDirty(snap.dirty); try{ idbDel("doc").catch(()=>{}); }catch(e){} await render(); }
   enableDocButtons(!!workingBytes);
   showSpin(false); setStatus("Undone.","ok");
 }
@@ -4152,7 +4218,7 @@ window.addEventListener("pageshow", (e)=>{
     // removes the right per-page keys
     if (hasScan){ scanPages = scanSaved; scanPersistPrev = scanSaved.slice(); }
     showSpin(true,"Restoring document…");
-    try { await openBytes(doc.bytes, doc.name); dirty = doc.dirty !== false; }
+    try { await openBytes(doc.bytes, doc.name); setDirty(doc.dirty !== false); }
     catch(e){ setStatus("Could not restore it: "+friendly(e),"err"); }
     showSpin(false);
   };

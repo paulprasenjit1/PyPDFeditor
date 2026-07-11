@@ -4,6 +4,21 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.26] — 2026-07-12 — Unsaved-changes dot + per-card Recents menu
+
+Backup: `backups/pypdf-pwa-v11.25-pre-v1126-ux-restore-point.zip`.
+
+- **Unsaved-changes dot:** the Save toolbar icon shows a small blue dot while
+  the document has changes you haven't saved (every dirty transition now goes
+  through one setDirty() helper, so the dot can never go stale).
+- **Long-press a Recents card** for Open · Star · Remove — a single document
+  can now be removed from Recents (entry + stored bytes) without clearing the
+  whole list. A tap still just opens; the long-press fires after 550ms and is
+  cancelled by lifting or moving the finger (scrolling).
+- placeFindBar hardened: header height read from the layout box
+  (offsetHeight) instead of getBoundingClientRect, which included the
+  immersive-mode slide transform mid-animation.
+
 ## [v11.25] — 2026-07-11 — Recents cards are uniform blocks
 
 - The two recents columns rendered at different widths (and so the 3:4
