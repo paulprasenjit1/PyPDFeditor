@@ -17,7 +17,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.21";
+const APP_BUILD = "11.22";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -92,7 +92,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "10 Jul 2026";   // v11.11
+const BUILD_DATETIME = "11 Jul 2026";   // v11.22
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
 const WHATS_NEW = "a cleaner toolbar — Pages, Markup, Find, Save and More; Compress and Unlock now live in More, and ✕ moved to the top bar.";
@@ -107,6 +107,9 @@ let zoomPct = 100;             // 50–300, 25% steps; 100% = fit to viewer widt
 let mergeSources = null;       // staged docs awaiting a chosen merge order
 let signImgDataUrl = null;     // processed signature PNG dataURL
 let mode = null;               // null | "sign" | "text" | "select"
+// v11.22: remember the last markup tool used this session (until the PDF is
+// closed) so reopening the Markup popover highlights it as the preferred tool.
+let lastMarkupMode = null;
 const spanCache = new Map();   // key `${epoch}:${page}` -> spans[]
 let pageObserver = null;       // single lazy-render observer (disconnected on hide/close)
 const liveURLs = new Set();    // outstanding object URLs, revoked on teardown
@@ -407,7 +410,8 @@ function dropScanStorage(count){
 // A small MRU list so the app opens to your work, not a blank screen. Bytes are
 // stored per entry under their own key; sensitive (password-unlocked) documents
 // and very large files are never remembered, same rule as session persistence.
-const RECENTS_MAX = 5;
+const RECENTS_MAX = 6;         // v11.22: fills the 2-col grid (3 rows)
+const RECENTS_PIN_MAX = 3;     // v11.22: at most 3 starred/pinned documents
 // v10.99: also cap TOTAL recents bytes — five 25MB documents pinned ~125MB of
 // IndexedDB, which hastened the storage-full warning and iOS eviction. The
 // newest entry always survives even if it alone exceeds the budget.
@@ -434,15 +438,22 @@ function recentsRemember(){
   const thumb = recentFirstThumb();
   (async ()=>{ try {
     let list = await recentsGet();
+    const wasPinned = list.some(r=>r.name===name && r.pinned);   // v11.22: keep the star
     for (const r of list.filter(r=>r.name===name)) idbDel(r.id).catch(()=>{});
     list = list.filter(r=>r.name!==name);
     const id = "recent:"+Date.now();
-    list.unshift({ id, name, size:bytes.length, ts:Date.now(), thumb });
-    for (const r of list.slice(RECENTS_MAX)) idbDel(r.id).catch(()=>{});
-    list = list.slice(0, RECENTS_MAX);
+    list.unshift({ id, name, size:bytes.length, ts:Date.now(), thumb, pinned:wasPinned });
+    // v11.22: cap the count but never evict a starred entry; starred float first
+    const pinned = list.filter(r=>r.pinned);
+    const unpinned = list.filter(r=>!r.pinned);
+    const slots = Math.max(0, RECENTS_MAX - pinned.length);
+    for (const r of unpinned.slice(slots)) idbDel(r.id).catch(()=>{});
+    list = pinned.concat(unpinned.slice(0, slots));
+    // byte cap: always keep starred + the just-opened file, then fill by recency
     let tot = 0; const keep = [];
     for (const r of list){
-      if (!keep.length || tot + r.size <= RECENTS_MAX_BYTES){ keep.push(r); tot += r.size; }
+      const mustKeep = r.pinned || r.id === id;
+      if (mustKeep || !keep.length || tot + r.size <= RECENTS_MAX_BYTES){ keep.push(r); tot += r.size; }
       else idbDel(r.id).catch(()=>{});
     }
     list = keep;
@@ -455,22 +466,49 @@ async function renderRecents(){
   const box = $("recents"); if (!box) return;
   const list = await recentsGet();
   if (!list.length){ box.hidden = true; box.innerHTML = ""; return; }
-  const rows = list.map(r=>{
+  // v11.22: starred documents float to the front, each group newest-first
+  const ordered = list.slice().sort((a,b)=>
+    (b.pinned?1:0)-(a.pinned?1:0) || (b.ts||0)-(a.ts||0));
+  const rows = ordered.map(r=>{
     const d = new Date(r.ts);
     const when = d.toLocaleDateString(undefined, { day:"numeric", month:"short" });
     // v11.10: thumbnail card (first page) instead of a text row
     const img = (r.thumb && /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(r.thumb))
       ? h`<img class="rcthumb" src="${r.thumb}" alt="">`
       : h`<span class="rcthumb rcph" aria-hidden="true"></span>`;
-    return h`<button class="rccard" data-rc="${r.id}" aria-label="Open ${r.name}">
-      ${raw(img)}
-      <span class="rcname">${r.name}</span>
-      <span class="rcinfo">${fmtKB(r.size)} · ${when}</span>
-    </button>`;
+    // v11.22: star overlay lives beside the open button (buttons can't nest)
+    const star = h`<button class="rcstar ${r.pinned?"on":""}" data-star="${r.id}"
+        aria-pressed="${r.pinned?"true":"false"}" aria-label="${r.pinned?"Unstar":"Star"} ${r.name}">
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.9 5.9l6.5 .9l-4.7 4.6l1.1 6.5l-5.8 -3.1l-5.8 3.1l1.1 -6.5l-4.7 -4.6l6.5 -.9z"/></svg>
+      </button>`;
+    return h`<div class="rccell">
+      <button class="rccard" data-rc="${r.id}" aria-label="Open ${r.name}">
+        ${raw(img)}
+        <span class="rcname">${r.name}</span>
+        <span class="rcinfo">${fmtKB(r.size)} · ${when}</span>
+      </button>
+      ${raw(star)}
+    </div>`;
   }).join("");
   box.innerHTML = h`<p class="rctitle">Recent</p><div class="rcgrid">${raw(rows)}</div>
     <button class="rcclear" id="rcClear">Clear recents</button>`;
   box.hidden = false;
+  // v11.22: star / unstar (max 3). stopPropagation so it never opens the file.
+  box.querySelectorAll("[data-star]").forEach(b=>b.onclick = async (e)=>{
+    e.stopPropagation(); e.preventDefault();
+    const id = b.dataset.star;
+    try {
+      const cur = await recentsGet();
+      const entry = cur.find(r=>r.id===id);
+      if (!entry) return;
+      if (!entry.pinned && cur.filter(r=>r.pinned).length >= RECENTS_PIN_MAX){
+        setStatus("You can star up to "+RECENTS_PIN_MAX+" documents.","warn"); return;
+      }
+      entry.pinned = !entry.pinned;
+      await idbSet("recents", cur);
+      renderRecents();
+    } catch(e2){}
+  });
   box.querySelectorAll("[data-rc]").forEach(b=>b.onclick = async ()=>{
     if ($("bigOpen").disabled){ setStatus("One moment — the engine is still loading.","warn"); return; }
     const id = b.dataset.rc;
@@ -647,6 +685,15 @@ $("markupBtn").onclick = ()=>{
   if (SEARCH.open) closeFind();        // v11.19: markup and search are exclusive
   const m = $("mkMenu"); m.hidden = !m.hidden;
   $("markupBtn").classList.toggle("on", !m.hidden || !!mode);
+  if (!m.hidden){
+    // v11.22: when no tool is active, hint the last-used tool as the preferred one
+    ["textBtn","selectBtn","signBtn"].forEach(id=>$(id).classList.remove("pref"));
+    if (!mode && lastMarkupMode){
+      const id = lastMarkupMode==="text" ? "textBtn"
+               : lastMarkupMode==="select" ? "selectBtn" : "signBtn";
+      $(id).classList.add("pref");
+    }
+  }
 };
 $("mkMenu").addEventListener("click", (e)=>{ if (e.target.closest("button")) hideMkMenu(); });
 
@@ -1105,7 +1152,7 @@ async function render(){
       stage.style.width = dispW+"px";
       stage.style.containIntrinsicSize = dispW+"px "+dispH+"px";
       stage.dataset.dh = dispH;
-      // v11.05: keep the existing bitmap on screen, just resized (momentarily
+      // v11.22: keep the existing bitmap on screen, just resized (momentarily
       // soft), instead of swapping in a blank white holder. The lazy observer
       // re-rasterises it sharp at the same size, so a zoom never flashes white
       // and the page's height never changes under the scroll position.
@@ -1209,7 +1256,7 @@ async function renderStage(stage, i){
     img.decoding = "async";
     img.onload = ()=> setTimeout(()=>{ URL.revokeObjectURL(url); liveURLs.delete(url); }, 1000);
     img.src = url;
-    // v11.05 (root cause of the double-tap page jump): decode BEFORE inserting,
+    // v11.22 (root cause of the double-tap page jump): decode BEFORE inserting,
     // and give the img the page's exact CSS size. Previously an unsized img
     // replaced the sized holder while still decoding, so the page collapsed to
     // 0px for a few frames, pulling the scroll position up towards page 1 right
@@ -1821,11 +1868,13 @@ function sanitizeForFont(t){ return t.replace(/[^\x09\x0A\x0D\x20-\xFF]/g, "?");
 // ---------------- modes ----------------
 function setMode(m){
   mode = m;
+  if (m) lastMarkupMode = m;           // v11.22: remember preferred tool for the session
   if (m && SEARCH.open) closeFind();   // v11.19: entering a mode closes search
   setImmersive(false);           // v11.10: entering any mode brings the chrome back
   $("textBtn").classList.toggle("on", m==="text");
   $("selectBtn").classList.toggle("on", m==="select");
   $("signBtn").classList.toggle("on", m==="sign");
+  ["textBtn","selectBtn","signBtn"].forEach(id=>$(id).classList.remove("pref"));  // v11.22
   $("markupBtn").classList.toggle("on", !!m);    // v11.11: bar shows a mode is active
   $("mkMenu").hidden = true;
   $("viewer").classList.toggle("textmode", m==="text");
@@ -1992,12 +2041,10 @@ function openJumpToPage(){
 $("moreBtn").onclick = ()=>{
   const has = !!workingBytes, d = has?"":"disabled";
   const multi = has && MDOC && MDOC.countPages() > 1;
+  // v11.22: Find removed (it lives on the toolbar); "All pages" removed (it is
+  // the toolbar Pages button). Groups ordered by use; About moved to the footer.
   $("sheet").innerHTML = h`
     <h3>More actions</h3>
-    <div class="mgrp-l">Find</div>
-    <div class="mgrid">
-      <button class="mtile" id="mFind" ${d}>${ic("search")}<span>Find in document</span></button>
-    </div>
     <div class="mgrp-l">Create</div>
     <div class="mgrid">
       <button class="mtile" id="mScan">${ic("camera")}<span>Scan</span></button>
@@ -2005,7 +2052,6 @@ $("moreBtn").onclick = ()=>{
     </div>
     <div class="mgrp-l">Pages</div>
     <div class="mgrid">
-      <button class="mtile" id="mPages" ${d}>${ic("grid")}<span>All pages</span></button>
       <button class="mtile" id="mMerge" ${d}>${ic("combine")}<span>Combine</span></button>
       <button class="mtile" id="mOrg" ${d}>${ic("grid")}<span>Organize</span></button>
       <button class="mtile" id="mExtract" ${d}>${ic("copy")}<span>Copy pages</span></button>
@@ -2015,17 +2061,12 @@ $("moreBtn").onclick = ()=>{
     <div class="mgrid">
       <button class="mtile" id="mComp" ${d}>${ic("compress")}<span>Compress</span></button>
       <button class="mtile" id="mUnlock">${ic("unlock")}<span>Unlock a PDF</span></button>
-    </div>
-    <div class="mgrp-l">Export</div>
-    <div class="mgrid">
       <button class="mtile" id="mPng" ${d}>${ic("download")}<span>Save image</span></button>
-      <button class="mtile" id="mAbout">${ic("info")}<span>About</span></button>
     </div>
-    <div class="row mt12"><button class="ghost full" id="mClose">Cancel</button></div>`;
-  $("mFind").onclick  = ()=>{ closeSheet(); openFind(); };
+    <div class="row mt12"><button class="ghost full" id="mAbout">${ic("info")} About</button></div>
+    <div class="row mt8"><button class="ghost full" id="mClose">Cancel</button></div>`;
   $("mGoto").onclick  = ()=>{ closeSheet(); openJumpToPage(); };
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
-  $("mPages").onclick = ()=>{ closeSheet(); openPagesGrid(); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mExtract").onclick = ()=>{ closeSheet(); openExtract(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
@@ -2090,6 +2131,7 @@ function closeFile(){
   undoStack = [];
   spanCache.clear();
   thumbCache.clear();
+  lastMarkupMode = null;           // v11.22: forget the preferred tool on close
   setMode(null);
   zoomPct = 100; $("zoomLbl").textContent = "100%";
   $("pagePill").classList.remove("show"); $("pagePill").tabIndex = -1;

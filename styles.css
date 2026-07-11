@@ -157,6 +157,8 @@ header .xbtn svg.ic { width:16px; height:16px; }
         min-width:66px; padding:8px 10px; background:transparent; border:0;
         color:var(--txt); border-radius:14px; font-size:10px; font-weight:600; }
 .mkmenu .segbtn.on { background:rgba(10,132,255,.26); }
+/* v11.22: preferred (last-used this session) tool — a hint ring, not active */
+.mkmenu .segbtn.pref { box-shadow:inset 0 0 0 1.5px var(--accent); color:var(--accent); }
 body.immersive .mkmenu { display:none; }
 /* labels can ellipsise so a tight row never forces a horizontal scroll */
 .toolbar .tbtn span, .toolbar .seg .segbtn span {
@@ -210,6 +212,19 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
                   calc(48px + max(2px, calc(env(safe-area-inset-bottom) - 30px)));
           display:flex; flex-direction:column; gap:10px; -webkit-overflow-scrolling:touch;
           align-items:safe center; touch-action:pan-x pan-y; }
+/* v11.22: iPhone 16 Pro Max / Plus-class (≈6.7–6.9", ≥428pt wide). Give the
+   larger canvas more generous margins and toolbar spacing, and let the home
+   indicator breathe, without touching the compact layout smaller phones rely on.
+   Floating controls (zoom, undo, markup popover) track the taller toolbar. */
+@media (min-width:428px){
+  .viewer { padding-left:10px; padding-right:10px;
+            padding-bottom:calc(54px + max(6px, calc(env(safe-area-inset-bottom) - 18px))); }
+  .toolbar { gap:6px; padding:5px 14px max(8px, calc(env(safe-area-inset-bottom) - 18px)); }
+  .toolbar .tbtn span { font-size:11.5px; }
+  .toolbar .tbtn svg.ic { width:25px; height:25px; }
+  .zoomctl, .undofab,
+  .mkmenu { bottom:calc(54px + max(6px, calc(env(safe-area-inset-bottom) - 18px))); }
+}
 .pagewrap { display:flex; flex-direction:column; gap:10px; align-items:safe center; }
 /* GPU promotion ONLY during an active pinch — a permanently promoted wrapper
    the height of a 500-page book exhausts compositor memory (black screen) */
@@ -297,15 +312,22 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    iPhone's width with no horizontal scroll (the close ✕ was being clipped).
    nowrap + overflow:hidden guarantees nothing spills past the screen edge;
    the input is the only flexible element so it absorbs whatever width is left. */
-.findbar { display:flex; flex-wrap:nowrap; align-items:center; gap:4px; padding:5px 6px;
-           position:fixed; top:calc(26px + max(3px, env(safe-area-inset-top))); left:0; right:0; z-index:29;
+/* v11.22: z-index 31 sits the bar ABOVE the header (30) and the removed
+   overflow:hidden + a little more top room stop the input's focus ring being
+   clipped/hidden at the top. flex nowrap + min-width:0 already prevent spill. */
+.findbar { display:flex; flex-wrap:nowrap; align-items:center; gap:4px; padding:8px 6px 7px;
+           position:fixed; top:calc(30px + max(3px, env(safe-area-inset-top))); left:0; right:0; z-index:31;
            -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
-           overflow:hidden; background:rgba(16,16,18,.96); border-bottom:0.5px solid var(--line); }
+           background:rgba(16,16,18,.96); border-bottom:0.5px solid var(--line); }
 .findbar[hidden] { display:none; }
 .findbar .fic { width:16px; height:16px; color:var(--muted); flex:0 0 auto; }
 /* font-size:16px keeps iOS from zooming the page (and hiding the toolbar) on focus */
 .findbar input { flex:1 1 auto; min-width:0; width:0; background:var(--panel2); color:var(--txt);
            border:0.5px solid var(--line); border-radius:8px; padding:6px 9px; font-size:16px; }
+/* v11.22: a defined, fully-contained focus ring (native ring was clipped at the
+   top). box-shadow keeps it inside the bar and it renders above the header. */
+.findbar input:focus { outline:none; border-color:var(--accent);
+           box-shadow:0 0 0 2px var(--accent); background:var(--panel); }
 .findbar .fcount { flex:0 0 auto; font-size:11px; color:var(--muted); min-width:30px;
            text-align:center; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .findbar .fnav { flex:0 0 auto; background:var(--panel2); border:0.5px solid var(--line);
@@ -366,6 +388,17 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .recents .rcname { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
         font-size:13px; color:var(--txt); }
 .recents .rcinfo { font-size:11px; color:var(--muted); }
+/* v11.22: star/pin overlay. The cell wraps the open button + the star so the
+   two never nest (invalid HTML) and the star sits over the thumbnail corner. */
+.recents .rccell { position:relative; min-width:0; }
+.recents .rcstar { position:absolute; top:6px; right:6px; z-index:2;
+        width:30px; height:30px; display:flex; align-items:center; justify-content:center;
+        border:0; border-radius:50%; background:rgba(0,0,0,.42); color:#fff;
+        -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+.recents .rcstar svg.ic { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:2; }
+.recents .rcstar.on { color:#ffcf3f; }
+.recents .rcstar.on svg.ic { fill:#ffcf3f; stroke:#ffcf3f; }
+.recents .rcstar:active { transform:scale(.9); }
 .recents .rcclear { display:block; margin:2px auto 0; padding:8px 12px; background:none;
         border:none; font-size:12px; color:var(--muted); text-decoration:underline; }
 /* engine download progress bar — inserted by engine-watchdog.js on first launch
