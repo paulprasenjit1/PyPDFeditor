@@ -17,7 +17,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.22";
+const APP_BUILD = "11.23";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -92,7 +92,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "11 Jul 2026";   // v11.22
+const BUILD_DATETIME = "11 Jul 2026";   // v11.23
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
 const WHATS_NEW = "a cleaner toolbar — Pages, Markup, Find, Save and More; Compress and Unlock now live in More, and ✕ moved to the top bar.";
@@ -1069,7 +1069,17 @@ $("unlockInput").onchange = e=>{ const f=e.target.files[0]; e.target.value=""; i
 
 // ---------------- render (mupdf -> JPEG -> <img>) ----------------
 function viewerCssWidth(){
-  const avail = $("viewer").clientWidth - 8;   // hairline gutter (4px each side) for an edge-to-edge fit
+  // v11.23: read the REAL side padding instead of assuming 8px total. The
+  // v11.22 large-phone media query widened the gutters, so the hardcoded 8
+  // made 100% pages 12px wider than the pane — the document slid sideways on
+  // every touch. Computed style keeps this correct for any future padding.
+  const v = $("viewer");
+  let gutters = 8;
+  try {
+    const cs = getComputedStyle(v);
+    gutters = (parseFloat(cs.paddingLeft)||4) + (parseFloat(cs.paddingRight)||4);
+  } catch(e){}
+  const avail = v.clientWidth - gutters;
   return Math.max(280, Math.min(1100, avail)) * (zoomPct/100);
 }
 // Render at the TRUE device pixel ratio (modern iPhones are 3×). The old cap
@@ -1457,11 +1467,23 @@ const SEARCH = {
   window.addEventListener("scroll", pin);
   $("findInput").addEventListener("focus", ()=>{ setTimeout(()=>window.scrollTo(0,0), 60); });
 })();
+// v11.23: position the find bar EXACTLY below the real header instead of the
+// old hardcoded 30px guess — on large phones the header ran taller than the
+// guess and covered the bar's top edge, hiding the input's blue focus border.
+// Measured via CSSOM (CSP-safe) on open and on every viewport resize.
+function placeFindBar(){
+  try {
+    const hb = document.querySelector("header").getBoundingClientRect().bottom;
+    $("findbar").style.top = Math.max(0, Math.round(hb)) + "px";
+  } catch(e){}
+}
+window.addEventListener("resize", ()=>{ if (SEARCH.open) placeFindBar(); });
 function openFind(){
   if (!workingBytes || !MDOC){ setStatus("Open a PDF first, then search it.","warn"); return; }
   SEARCH.open = true;
   setImmersive(false);           // v11.10: search needs the chrome visible
   $("findBtn").classList.add("on");   // v11.14: bar shows Find is active
+  placeFindBar();                // v11.23: sit flush under the measured header
   const bar = $("findbar"); bar.hidden = false;
   const inp = $("findInput");
   inp.focus(); inp.select();
@@ -2040,7 +2062,9 @@ function openJumpToPage(){
 // ---------------- More ▾ sheet ----------------
 $("moreBtn").onclick = ()=>{
   const has = !!workingBytes, d = has?"":"disabled";
-  const multi = has && MDOC && MDOC.countPages() > 1;
+  // v11.23 dedupe pass 2: "Copy pages" and "Go to page" removed — both already
+  // live in the toolbar's Pages grid (Select → Copy; tap a thumbnail to jump).
+  // openJumpToPage/openExtract stay wired to the grid, so nothing is lost.
   // v11.22: Find removed (it lives on the toolbar); "All pages" removed (it is
   // the toolbar Pages button). Groups ordered by use; About moved to the footer.
   $("sheet").innerHTML = h`
@@ -2052,10 +2076,8 @@ $("moreBtn").onclick = ()=>{
     </div>
     <div class="mgrp-l">Pages</div>
     <div class="mgrid">
-      <button class="mtile" id="mMerge" ${d}>${ic("combine")}<span>Combine</span></button>
       <button class="mtile" id="mOrg" ${d}>${ic("grid")}<span>Organize</span></button>
-      <button class="mtile" id="mExtract" ${d}>${ic("copy")}<span>Copy pages</span></button>
-      <button class="mtile" id="mGoto" ${multi?"":"disabled"}>${ic("hash")}<span>Go to page</span></button>
+      <button class="mtile" id="mMerge" ${d}>${ic("combine")}<span>Combine</span></button>
     </div>
     <div class="mgrp-l">Document</div>
     <div class="mgrid">
@@ -2065,10 +2087,8 @@ $("moreBtn").onclick = ()=>{
     </div>
     <div class="row mt12"><button class="ghost full" id="mAbout">${ic("info")} About</button></div>
     <div class="row mt8"><button class="ghost full" id="mClose">Cancel</button></div>`;
-  $("mGoto").onclick  = ()=>{ closeSheet(); openJumpToPage(); };
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
-  $("mExtract").onclick = ()=>{ closeSheet(); openExtract(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
   $("mImg").onclick   = ()=>{ closeSheet(); confirmDiscard("turn photos into a new PDF", ()=>$("imgInput").click()); };
   // v11.11: Compress and Unlock left the toolbar; their original (now hidden)

@@ -4,6 +4,53 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.23] — 2026-07-11 — Fix pass over the v11.22 UI batch
+
+Backup: `backups/pypdf-pwa-v11.22-pre-v1123-fixes-restore-point.zip`.
+
+- **100% zoom no longer slides sideways (root cause).** `viewerCssWidth()`
+  assumed the viewer's side gutters were 8px total, but the v11.22 large-phone
+  media query set them to 20px — every page rendered 12px wider than the pane,
+  so a fit-width document was horizontally scrollable and drifted on any touch.
+  Page width is now computed from the viewer's REAL computed padding, and the
+  viewer gets `overscroll-behavior:none` so it cannot rubber-band.
+- **Toolbar bottom spacing reduced** on Pro Max-class phones (the v11.22 media
+  query had increased it): the bar tucks into the home-indicator inset again;
+  side gutters return to the 4px edge-to-edge hairline. Bigger icons/labels
+  stay. Zoom/undo/markup pills track the new offsets.
+- **Find bar sits flush under the measured header.** Its top offset was a
+  hardcoded 30px guess that ran under the taller large-phone header, hiding the
+  input's blue top border. `placeFindBar()` measures the header's actual bottom
+  edge on open and on resize; the focus ring is now a solid accent border plus
+  a 1px halo, on all four sides.
+- **Markup preference is now obvious:** the last-used tool (e.g. Sign) shows
+  the same blue-tinted fill as an active tool when the popover reopens, with a
+  hairline ring to distinguish it from a live mode. Still session-only —
+  cleared when the PDF is closed.
+- **More sheet dedupe, pass 2:** "Copy pages" and "Go to page" removed — both
+  already live in the toolbar's Pages grid (Select → Copy; tap a thumbnail to
+  jump; the floating page pill also opens Go to page). Sheet is now Create
+  (Scan, Photos → PDF) · Pages (Organize, Combine) · Document (Compress,
+  Unlock, Save image) · About. Harness T5/T37c updated.
+- Changelog backfilled for the undocumented v11.19–v11.22 builds (below).
+
+## [v11.19–v11.22] — 2026-07-10/11 — (backfilled) find/markup exclusivity, view-mode text selection, recents grid
+
+These builds shipped without changelog entries; reconstructed from source:
+
+- **v11.19:** Find and Markup are mutually exclusive (opening one closes the
+  other); the fixed chrome is pinned while the find keyboard is open so the
+  header/find bar can't be scrolled off-screen.
+- **v11.20:** minor/cache-bump release (no annotated changes in source).
+- **v11.21:** born-digital documents get an always-on selectable text layer in
+  VIEW mode (long-press to select/copy without entering Select); long-press
+  selection no longer mis-fires the tap-to-hide-chrome path.
+- **v11.22:** Recents grew to a 6-card grid with star/pin (max 3; starred float
+  first and are never evicted); last-used markup tool hinted in the popover;
+  find-input focus ring reworked; Find and "All pages" removed from the More
+  sheet; first cut of the ≥428px (Pro Max) spacing media query — partially
+  reworked in v11.23 above.
+
 ## [v11.18] — 2026-07-10 — Bigger centred icons, double-tap viewport zoom killed, keyboard hardening
 
 - Toolbar icons 24px, content vertically centred (balanced top/bottom padding

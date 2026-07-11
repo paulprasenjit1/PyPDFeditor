@@ -157,8 +157,11 @@ header .xbtn svg.ic { width:16px; height:16px; }
         min-width:66px; padding:8px 10px; background:transparent; border:0;
         color:var(--txt); border-radius:14px; font-size:10px; font-weight:600; }
 .mkmenu .segbtn.on { background:rgba(10,132,255,.26); }
-/* v11.22: preferred (last-used this session) tool — a hint ring, not active */
-.mkmenu .segbtn.pref { box-shadow:inset 0 0 0 1.5px var(--accent); color:var(--accent); }
+/* v11.23: preferred (last-used this session) tool — same blue-tinted fill as
+   the active state so e.g. Sign clearly reads as "your tool" when the popover
+   reopens; a hairline accent ring still distinguishes it from a LIVE mode. */
+.mkmenu .segbtn.pref { background:rgba(10,132,255,.26); color:var(--accent);
+        box-shadow:inset 0 0 0 1px var(--accent); }
 body.immersive .mkmenu { display:none; }
 /* labels can ellipsise so a tight row never forces a horizontal scroll */
 .toolbar .tbtn span, .toolbar .seg .segbtn span {
@@ -211,19 +214,21 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
           padding:calc(32px + max(3px, env(safe-area-inset-top))) 4px
                   calc(48px + max(2px, calc(env(safe-area-inset-bottom) - 30px)));
           display:flex; flex-direction:column; gap:10px; -webkit-overflow-scrolling:touch;
-          align-items:safe center; touch-action:pan-x pan-y; }
-/* v11.22: iPhone 16 Pro Max / Plus-class (≈6.7–6.9", ≥428pt wide). Give the
-   larger canvas more generous margins and toolbar spacing, and let the home
-   indicator breathe, without touching the compact layout smaller phones rely on.
-   Floating controls (zoom, undo, markup popover) track the taller toolbar. */
+          align-items:safe center; touch-action:pan-x pan-y;
+          overscroll-behavior:none; }   /* v11.23: no rubber-band drift on touch */
+/* v11.23: iPhone 16 Pro Max / Plus-class (≈6.7–6.9", ≥428pt wide). Bigger
+   glyphs/labels for the larger canvas, but gutters stay the 4px hairline
+   (edge-to-edge pages — the v11.22 10px gutters made 100% pages overflow the
+   pane sideways) and the toolbar tucks TIGHTER into the home-indicator inset
+   than before (user asked for less bottom spacing, not more). Floating
+   controls (zoom, undo, markup popover) track the toolbar height. */
 @media (min-width:428px){
-  .viewer { padding-left:10px; padding-right:10px;
-            padding-bottom:calc(54px + max(6px, calc(env(safe-area-inset-bottom) - 18px))); }
-  .toolbar { gap:6px; padding:5px 14px max(8px, calc(env(safe-area-inset-bottom) - 18px)); }
+  .viewer { padding-bottom:calc(50px + max(2px, calc(env(safe-area-inset-bottom) - 28px))); }
+  .toolbar { gap:6px; padding:4px 10px max(2px, calc(env(safe-area-inset-bottom) - 28px)); }
   .toolbar .tbtn span { font-size:11.5px; }
   .toolbar .tbtn svg.ic { width:25px; height:25px; }
   .zoomctl, .undofab,
-  .mkmenu { bottom:calc(54px + max(6px, calc(env(safe-area-inset-bottom) - 18px))); }
+  .mkmenu { bottom:calc(50px + max(2px, calc(env(safe-area-inset-bottom) - 28px))); }
 }
 .pagewrap { display:flex; flex-direction:column; gap:10px; align-items:safe center; }
 /* GPU promotion ONLY during an active pinch — a permanently promoted wrapper
@@ -312,10 +317,12 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    iPhone's width with no horizontal scroll (the close ✕ was being clipped).
    nowrap + overflow:hidden guarantees nothing spills past the screen edge;
    the input is the only flexible element so it absorbs whatever width is left. */
-/* v11.22: z-index 31 sits the bar ABOVE the header (30) and the removed
-   overflow:hidden + a little more top room stop the input's focus ring being
-   clipped/hidden at the top. flex nowrap + min-width:0 already prevent spill. */
-.findbar { display:flex; flex-wrap:nowrap; align-items:center; gap:4px; padding:8px 6px 7px;
+/* v11.23: the bar's top is set by JS (placeFindBar) to the header's MEASURED
+   bottom edge — the old hardcoded 30px guess ran under the taller large-phone
+   header, which is why the input's blue top border never showed. The calc()
+   below is only the pre-measure fallback. z-index 31 keeps it above the
+   header (30); extra top padding gives the focus ring room to render. */
+.findbar { display:flex; flex-wrap:nowrap; align-items:center; gap:4px; padding:10px 6px 8px;
            position:fixed; top:calc(30px + max(3px, env(safe-area-inset-top))); left:0; right:0; z-index:31;
            -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
            background:rgba(16,16,18,.96); border-bottom:0.5px solid var(--line); }
@@ -323,11 +330,12 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .findbar .fic { width:16px; height:16px; color:var(--muted); flex:0 0 auto; }
 /* font-size:16px keeps iOS from zooming the page (and hiding the toolbar) on focus */
 .findbar input { flex:1 1 auto; min-width:0; width:0; background:var(--panel2); color:var(--txt);
-           border:0.5px solid var(--line); border-radius:8px; padding:6px 9px; font-size:16px; }
-/* v11.22: a defined, fully-contained focus ring (native ring was clipped at the
-   top). box-shadow keeps it inside the bar and it renders above the header. */
-.findbar input:focus { outline:none; border-color:var(--accent);
-           box-shadow:0 0 0 2px var(--accent); background:var(--panel); }
+           border:1px solid var(--line); border-radius:8px; padding:6px 9px; font-size:16px; }
+/* v11.23: a solid accent border (all four sides, incl. the top) + a 1px shadow
+   halo. The border is part of the element so it can never be occluded by the
+   header; the bar now also sits fully below the measured header. */
+.findbar input:focus, .findbar input:focus-visible { outline:none; border-color:var(--accent);
+           box-shadow:0 0 0 1px var(--accent); background:var(--panel); }
 .findbar .fcount { flex:0 0 auto; font-size:11px; color:var(--muted); min-width:30px;
            text-align:center; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .findbar .fnav { flex:0 0 auto; background:var(--panel2); border:0.5px solid var(--line);
