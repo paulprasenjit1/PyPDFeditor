@@ -4,6 +4,38 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.25] — 2026-07-11 — Recents cards are uniform blocks
+
+- The two recents columns rendered at different widths (and so the 3:4
+  thumbnails at different heights): a long no-wrap filename pushed its `1fr`
+  column out to min-content width. Columns are now `minmax(0,1fr)` — always
+  exactly equal — names ellipsise, and each card fills its grid row so the
+  blocks match in both dimensions.
+
+## [v11.24] — 2026-07-11 — Performance pass + More-sheet footer tiles
+
+Backup: `backups/pypdf-pwa-v11.23-pre-v1124-perf-restore-point.zip`.
+
+- **Scroll CPU (biggest win):** the "Page x of n" pill measured EVERY page with
+  `getBoundingClientRect` on every scroll frame — 300 forced layout reads per
+  frame on a 300-page book. Page geometry is now measured once per
+  render/zoom/rotate and each scroll frame answers with a binary search over
+  cached positions.
+- **Recents byte rewrite skipped:** opening a file Recents already stores
+  (same name + size — e.g. opened FROM the Recents grid) used to rewrite up to
+  25MB into IndexedDB every time. The stored bytes are reused; only the
+  timestamp/thumbnail/star refresh.
+- **Double render on reopen fixed:** the saved zoom is adopted BEFORE the
+  first render (it used to build every page at 100%, then rebuild the whole
+  document at the remembered zoom). A new document also no longer inherits the
+  previous document's zoom — it opens at a clean 100%.
+- **Thumbnail cache trimmed** 400 → 150 entries (the grid lazy-loads near the
+  viewport; the old cap could pin ~10–20MB of dataURLs on long documents).
+- **Zoom reset UX:** the % readout in the zoom pill is now a button — tap it
+  to snap straight back to fit-width 100%.
+- **More sheet footer:** About and Cancel are tiles like every other action
+  (icon over label, half-width pair) instead of stretched full-width rows.
+
 ## [v11.23] — 2026-07-11 — Fix pass over the v11.22 UI batch
 
 Backup: `backups/pypdf-pwa-v11.22-pre-v1123-fixes-restore-point.zip`.

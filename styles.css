@@ -125,7 +125,10 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 .zoomctl.show { display:flex; }
 .zoomctl button { padding:7px 9px; background:transparent; border:0; color:var(--txt); border-radius:14px; }
 .zoomctl button:active:not(:disabled){ background:var(--panel2); transform:none; filter:none; }
-.zlbl { font-size:12px; color:var(--txt); min-width:40px; text-align:center; }
+/* v11.24: the readout is a quiet button — tap snaps zoom back to 100% */
+.zlbl { font-size:12px; color:var(--txt); min-width:40px; text-align:center;
+        background:transparent; border:0; padding:7px 2px; border-radius:14px; }
+.zlbl:active { background:var(--panel2); transform:none; filter:none; }
 
 /* icon + label toolbar buttons: a glyph stacked over a small caption. IDs and
    behaviour are unchanged; this is purely the visual treatment. */
@@ -386,9 +389,14 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .recents { width:min(340px,92vw); margin-top:6px; text-align:left; }
 .recents .rctitle { margin:0 0 6px 2px; font-size:12px; font-weight:600; letter-spacing:.06em;
         text-transform:uppercase; color:var(--muted); }
-.recents .rcgrid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+/* v11.25: minmax(0,1fr) — plain 1fr lets a long nowrap filename push its
+   column to min-content width, so the two columns (and therefore the 3:4
+   thumbnails) rendered at different sizes. 0-floor columns are always exactly
+   equal; names ellipsise. Cards fill the row so blocks match height too. */
+.recents .rcgrid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr));
+        gap:10px; align-items:stretch; }
 .recents .rccard { display:flex; flex-direction:column; align-items:stretch; gap:2px;
-        min-width:0; padding:8px 8px 9px; border-radius:14px;
+        min-width:0; width:100%; height:100%; padding:8px 8px 9px; border-radius:14px;
         background:var(--panel); border:0.5px solid var(--line); text-align:left; }
 .recents .rcthumb { display:block; width:100%; aspect-ratio:3/4; object-fit:cover;
         object-position:top; border-radius:8px; background:#fff; margin-bottom:5px; }
@@ -634,5 +642,8 @@ input[type=file] { display:none; }
 .mtile svg.ic { width:22px; height:22px; }
 .mtile span { font-size:10px; font-weight:600; text-align:center; line-height:1.15; }
 .mtile:active:not(:disabled){ background:var(--panel); }
+/* v11.24: About + Cancel are tiles like everything else (they used to be
+   stretched full-width rows) — a two-column footer row of the same .mtile. */
+.mgrid.mgrid2 { grid-template-columns:repeat(2,1fr); }
 /* narrow phones (SE / mini): 3 across keeps labels from truncating */
-@media (max-width: 360px){ .mgrid { grid-template-columns:repeat(3,1fr); } }
+@media (max-width: 360px){ .mgrid:not(.mgrid2) { grid-template-columns:repeat(3,1fr); } }

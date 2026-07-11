@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.23">
+<html lang="en" data-build="11.25">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -274,7 +274,8 @@
   <button class="ghost" id="zoomOut" aria-label="Zoom out" disabled>
     <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg>
   </button>
-  <span class="zlbl" id="zoomLbl">100%</span>
+  <!-- v11.24: the % readout is a button — tapping it snaps back to 100% -->
+  <button class="zlbl" id="zoomLbl" aria-label="Reset zoom to 100%">100%</button>
   <button class="ghost" id="zoomIn" aria-label="Zoom in" disabled>
     <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg>
   </button>

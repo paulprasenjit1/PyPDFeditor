@@ -17,7 +17,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.23";
+const APP_BUILD = "11.25";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -92,7 +92,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "11 Jul 2026";   // v11.23
+const BUILD_DATETIME = "11 Jul 2026";   // v11.24
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
 const WHATS_NEW = "a cleaner toolbar — Pages, Markup, Find, Save and More; Compress and Unlock now live in More, and ✕ moved to the top bar.";
@@ -149,7 +149,8 @@ const ICONS = {
   compress:'<path d="M5 9h4v-4"/><path d="M3 3l6 6"/><path d="M5 15h4v4"/><path d="M3 21l6 -6"/><path d="M19 9h-4v-4"/><path d="M15 9l6 -6"/><path d="M19 15h-4v4"/><path d="M15 15l6 6"/>',
   download:'<path d="M12 4v10M8 11l4 4l4 -4"/><path d="M5 19h14"/>',
   info:    '<path d="M12 21a9 9 0 1 0 0 -18a9 9 0 0 0 0 18z"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
-  search:  '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4 -4"/>'
+  search:  '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4 -4"/>',
+  close:   '<path d="M6 6l12 12M18 6l-12 12"/>'
 };
 function ic(name){
   return raw('<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[name]||"") + '</svg>');
@@ -439,6 +440,19 @@ function recentsRemember(){
   (async ()=>{ try {
     let list = await recentsGet();
     const wasPinned = list.some(r=>r.name===name && r.pinned);   // v11.22: keep the star
+    // v11.24: opening a file that Recents ALREADY stores (same name + size —
+    // e.g. reopened from the Recents grid itself) used to rewrite the full
+    // 25MB into IndexedDB every time. Reuse the stored bytes: refresh the
+    // timestamp/thumb/star on the existing entry and skip the byte write.
+    const same = list.find(r=>r.name===name && r.size===bytes.length);
+    if (same){
+      same.ts = Date.now(); same.pinned = wasPinned;
+      if (thumb) same.thumb = thumb;
+      list = [same, ...list.filter(r=>r!==same)];
+      await idbSet("recents", list);
+      renderRecents();
+      return;
+    }
     for (const r of list.filter(r=>r.name===name)) idbDel(r.id).catch(()=>{});
     list = list.filter(r=>r.name!==name);
     const id = "recent:"+Date.now();
@@ -668,6 +682,8 @@ $("undoBtn").onclick = ()=> doUndo();
 $("closeBtn").onclick = ()=> confirmDiscard("close this PDF", closeFile);
 $("zoomOut").onclick = ()=> applyZoom(-25);
 $("zoomIn").onclick  = ()=> applyZoom(25);
+// v11.24: tapping the % readout snaps straight back to fit-width (100%)
+$("zoomLbl").onclick = ()=>{ if (workingBytes && zoomPct !== 100) setZoom(100); };
 // v11.11 toolbar diet: the new core actions. Pages opens the thumbnail grid,
 // Find opens search, Markup toggles a popover holding the three mode buttons
 // (whose IDs and handlers are unchanged — tapping one also closes the popover).
@@ -965,6 +981,18 @@ async function openBytes(bytes, name){
   dirty = false;                   // freshly opened = nothing to lose yet
   reopen();
   setMode(null);
+  // v11.24: adopt the remembered zoom BEFORE the first render. It used to
+  // render every page at 100% and then restoreViewState re-rendered the whole
+  // document at the saved zoom — two full builds on every reopen.
+  try {
+    const views = await idbGet("views");
+    const st = views && views[fileName];
+    // saved zoom for this document, else a clean 100% (a doc opened straight
+    // after zooming another no longer inherits the previous doc's zoom)
+    zoomPct = (st && st.zoom && st.zoom >= 50 && st.zoom <= 300)
+            ? Math.round(st.zoom/5)*5 : 100;
+    $("zoomLbl").textContent = zoomPct + "%";
+  } catch(e){}
   await render();
   enableDocButtons(true);
   recentsRemember();               // welcome screen shows it next launch
@@ -2085,8 +2113,10 @@ $("moreBtn").onclick = ()=>{
       <button class="mtile" id="mUnlock">${ic("unlock")}<span>Unlock a PDF</span></button>
       <button class="mtile" id="mPng" ${d}>${ic("download")}<span>Save image</span></button>
     </div>
-    <div class="row mt12"><button class="ghost full" id="mAbout">${ic("info")} About</button></div>
-    <div class="row mt8"><button class="ghost full" id="mClose">Cancel</button></div>`;
+    <div class="mgrid mgrid2 mt12">
+      <button class="mtile" id="mAbout">${ic("info")}<span>About</span></button>
+      <button class="mtile" id="mClose">${ic("close")}<span>Cancel</span></button>
+    </div>`;
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
@@ -2179,7 +2209,9 @@ function pageThumb(i){
   let bin=""; for (let k=0;k<jpg.length;k+=8192) bin += String.fromCharCode.apply(null, jpg.subarray(k,k+8192));
   const url = "data:image/jpeg;base64,"+btoa(bin);
   thumbCache.set(key, url);
-  if (thumbCache.size > 400){ thumbCache.delete(thumbCache.keys().next().value); }
+  // v11.24: 150 (was 400) — the grid lazy-loads thumbnails near the viewport,
+  // so a big cap only pinned ~10-20MB of dataURLs on long documents.
+  if (thumbCache.size > 150){ thumbCache.delete(thumbCache.keys().next().value); }
   return url;
 }
 let sheetThumbObs = null;
@@ -3955,6 +3987,23 @@ $("pagePill").addEventListener("keydown", (e)=>{
     if (workingBytes && MDOC && MDOC.countPages() > 1) openJumpToPage();
   }
 });
+// v11.24: the pill used to measure EVERY page with getBoundingClientRect on
+// every scroll frame — 300 forced layout reads per frame on a 300-page book,
+// on the hottest path in the app. Page geometry only changes on render/zoom/
+// rotate, so measure ONCE per geometry (one pass, content-space coordinates)
+// and answer each scroll frame with pure arithmetic + binary search.
+let pillGeo = null;            // { key, tops:[], mids:[], pages:[] }
+function pillGeoKey(v){ return epoch+":"+zoomPct+":"+lastViewerW+":"+$("pageWrap").childElementCount; }
+function pillMeasure(v){
+  const vr = v.getBoundingClientRect(), base = v.scrollTop - vr.top;
+  const tops=[], mids=[], pages=[];
+  v.querySelectorAll(".stage").forEach(s=>{
+    const r = s.getBoundingClientRect();          // one pass, then cached
+    tops.push(r.top + base); mids.push((r.top+r.bottom)/2 + base);
+    pages.push(+s.dataset.page);
+  });
+  pillGeo = { key: pillGeoKey(v), tops, mids, pages };
+}
 $("viewer").addEventListener("scroll", ()=>{
   if (!workingBytes || !MDOC || pillPending) return;
   pillPending = true;
@@ -3963,13 +4012,15 @@ $("viewer").addEventListener("scroll", ()=>{
     try {
       const n = MDOC.countPages();
       if (n < 2) return;
-      const v = $("viewer"), vr = v.getBoundingClientRect(), mid = vr.top + vr.height/2;
-      let best = 0, bd = 1e9;
-      v.querySelectorAll(".stage").forEach(s=>{
-        const r = s.getBoundingClientRect();
-        const d = Math.abs((r.top + r.bottom)/2 - mid);
-        if (d < bd){ bd = d; best = +s.dataset.page; }
-      });
+      const v = $("viewer");
+      if (!pillGeo || pillGeo.key !== pillGeoKey(v) || !pillGeo.pages.length) pillMeasure(v);
+      const mid = v.scrollTop + v.clientHeight/2;
+      // binary search the page whose centre is nearest the viewport centre
+      const { mids, pages } = pillGeo;
+      let lo = 0, hi = mids.length-1;
+      while (lo < hi){ const m = (lo+hi)>>1; (mids[m] < mid) ? lo = m+1 : hi = m; }
+      const best = (lo > 0 && Math.abs(mids[lo-1]-mid) < Math.abs(mids[lo]-mid))
+                 ? pages[lo-1] : pages[lo];
       const p = $("pagePill");
       p.textContent = (best+1)+" of "+n;                  // compact, e-reader style
       p.setAttribute("aria-label", "Go to page — currently page "+(best+1)+" of "+n);
