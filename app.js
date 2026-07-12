@@ -17,7 +17,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.26";
+const APP_BUILD = "11.27";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -579,17 +579,29 @@ async function recentsRemove(id){
     renderRecents();
   } catch(e){}
 }
-// v11.26: long-press sheet for a recents card — Open / Star / Remove
+// v11.26: long-press sheet for a recents card — Open / Share / Star / Remove
 async function openRecentSheet(id){
   const entry = (await recentsGet()).find(r=>r.id===id);
   if (!entry) return;
+  // v11.27: pre-load the stored bytes NOW (sheet open is itself a user
+  // gesture), so tapping Share calls navigator.share with no async gap —
+  // iOS voids the share sheet if user activation has expired by then.
+  let shareBytes = null;
+  try { shareBytes = await idbGet(id); } catch(e){}
   $("sheet").innerHTML = h`
     <h3>${entry.name}</h3>
     <p class="hint">${fmtKB(entry.size)} · stays only on this phone.</p>
     <div class="row"><button class="full" id="rsOpen">Open</button></div>
+    <div class="row"><button class="ghost full" id="rsShare" ${shareBytes && shareBytes.length ? "" : "disabled"}>Share… (WhatsApp, Mail, AirDrop)</button></div>
     <div class="row"><button class="ghost full" id="rsStar">${entry.pinned ? "Remove star" : "Star"}</button></div>
     <div class="row"><button class="ghost danger full" id="rsDel">Remove from Recents</button></div>
     <div class="row"><button class="ghost full" id="rsCancel">Cancel</button></div>`;
+  $("rsShare").onclick = async ()=>{
+    closeSheet();
+    // native iOS share sheet — WhatsApp, Mail, AirDrop, Save to Files…
+    try { await saveOrShare(shareBytes, entry.name || "document.pdf"); }
+    catch(e){ setStatus("Could not share it: "+friendly(e),"err"); }
+  };
   $("rsOpen").onclick = async ()=>{
     closeSheet();
     if ($("bigOpen").disabled){ setStatus("One moment — the engine is still loading.","warn"); return; }

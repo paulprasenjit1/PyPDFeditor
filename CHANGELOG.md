@@ -4,6 +4,18 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.27] — 2026-07-12 — Share from the Recents long-press menu
+
+Backup: `backups/pypdf-pwa-v11.26-pre-v1127-share-restore-point.zip`.
+
+- The long-press card menu gains **Share… (WhatsApp, Mail, AirDrop)** — opens
+  the native iOS share sheet via the existing saveOrShare path, without having
+  to open the document first. The stored bytes are pre-loaded when the sheet
+  opens so navigator.share still runs inside iOS's user-activation window
+  (an async gap there silently voids the share sheet). Falls back to a normal
+  download where file sharing is unsupported; disabled if the bytes are no
+  longer stored on the device.
+
 ## [v11.26] — 2026-07-12 — Unsaved-changes dot + per-card Recents menu
 
 Backup: `backups/pypdf-pwa-v11.25-pre-v1126-ux-restore-point.zip`.
