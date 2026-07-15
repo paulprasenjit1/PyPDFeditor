@@ -241,35 +241,98 @@ export function documentEnhance(d, w, h){
 // For "Photo ID" mode the goal is the OPPOSITE of the document pipeline: keep the
 // portrait LIGHT and the colours TRUE to what the camera saw (no ink-deepen, no
 // contrast crush, no paper-flatten). Three gentle, colour-faithful steps:
-//   1) Partial grey-world white balance (blended at 55%, low gain cap) — removes a
-//      room/light cast for accuracy WITHOUT forcing the card fully neutral, so the
-//      real card tint is preserved.
+//   1) White balance from NEUTRAL pixels (v11.28). The old grey-world average over
+//      ALL bright pixels was poisoned by big coloured subjects — a blue cheque or a
+//      colourful card body cancelled a warm room cast in the mean (or tripped the
+//      off-axis guard), so the yellow tint was never removed. Now the sample is
+//      bright + unclipped + LOW-CHROMA pixels only (true paper/laminate white), so
+//      the card's own colour cannot skew the estimate — which also makes a strong
+//      90% blend safe. Falls back to the old partial grey-world when too few
+//      neutral pixels exist (e.g. card fills the frame edge-to-edge).
+//   1b) Paper-whiten (v11.28): gentle desaturation of bright near-neutral pixels
+//      only, feathered by luminance and chroma, to clear residual cast off the
+//      paper. Anything with real colour (skin, flags, security print) has chroma
+//      above the gate and is untouched.
 //   2) Midtone LIFT via a gentle gamma (0.85) applied as a hue-preserving
 //      luminance gain — brightens the face and mid-tones while leaving bright
 //      laminate/highlights alone, so the portrait no longer reads dark.
 //   3) A light 1px unsharp for crisp card text. No darkening anywhere.
 export function idCardEnhance(d, w, h){
   const n = w*h;
-  // 1) partial white balance for colour accuracy
-  const hl=new Uint32Array(256);
-  for (let i=0;i<n;i++){ const j=i*4; hl[(d[j]*77+d[j+1]*151+d[j+2]*28)>>8]++; }
-  let acc=0, thr=0;
-  for (let t=0;t<256;t++){ acc+=hl[t]; if (acc>=n*0.60){ thr=t; break; } }
-  if (thr<110) thr=110;
-  let sR=0,sG=0,sB=0,c=0;
-  for (let i=0;i<n;i++){ const j=i*4; const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
-    if (L>=thr){ sR+=d[j]; sG+=d[j+1]; sB+=d[j+2]; c++; } }
-  if (c>0){
-    const mR=sR/c, mG=sG/c, mB=sB/c, mean=(mR+mG+mB)/3;
+  // 1) white balance from bright NEUTRAL pixels (v11.28) — immune to the card's
+  //    own colour. Neutral = bright, not clipped, and max-min channel spread
+  //    under 10% of the max channel (real paper/laminate white).
+  let nR=0,nG=0,nB=0,nc=0;
+  // cool-tint protection mask for the paper-whiten pass, taken BEFORE any WB:
+  // a warm light cast always reads R>B, so a pixel that is B>R with visible
+  // chroma is a GENUINE cool card tint (PAN blue wash, cheque security print,
+  // passport guilloché) — never cast — and must survive even if a later WB
+  // step happens to pull it near-neutral.
+  const coolTint=new Uint8Array(n);
+  for (let i=0;i<n;i++){ const j=i*4; const r=d[j], g=d[j+1], b=d[j+2];
+    const mx=r>g?(r>b?r:b):(g>b?g:b), mn=r<g?(r<b?r:b):(g<b?g:b);
+    if (b>r && (mx-mn)*20 >= mx) coolTint[i]=1;
+    const L=(r*77+g*151+b*28)>>8;
+    if (L<110 || L>=250) continue;
+    if ((mx-mn)*10 < mx){ nR+=r; nG+=g; nB+=b; nc++; }
+  }
+  let wbDone=false;
+  if (nc >= n*0.02){
+    const mR=nR/nc, mG=nG/nc, mB=nB/nc, mean=(mR+mG+mB)/3;
     const offAxis = Math.abs(mG-(mR+mB)/2)/Math.max(1,mean);
-    if (offAxis < 0.12){
-      const TGT=248, GMAX=1.6, BLEND=0.55;
+    if (offAxis < 0.20){                          // wide guard: sample is neutral by construction
+      const TGT=248, GMAX=1.6, BLEND=0.90;
       const mk=(m)=>{ let g=Math.min(GMAX, Math.max(1, TGT/Math.max(1,m))); return 1+(g-1)*BLEND; };
       const gr=mk(mR), gg=mk(mG), gb=mk(mB);
       const lr=new Uint8Array(256), lg=new Uint8Array(256), lb=new Uint8Array(256);
       for (let t=0;t<256;t++){ lr[t]=Math.min(255,Math.round(t*gr)); lg[t]=Math.min(255,Math.round(t*gg)); lb[t]=Math.min(255,Math.round(t*gb)); }
       for (let i=0;i<n;i++){ const j=i*4; d[j]=lr[d[j]]; d[j+1]=lg[d[j+1]]; d[j+2]=lb[d[j+2]]; }
+      wbDone=true;
     }
+  }
+  if (!wbDone){
+    // fallback: old partial grey-world over all bright pixels (pre-v11.28)
+    const hl=new Uint32Array(256);
+    for (let i=0;i<n;i++){ const j=i*4; hl[(d[j]*77+d[j+1]*151+d[j+2]*28)>>8]++; }
+    let acc=0, thr=0;
+    for (let t=0;t<256;t++){ acc+=hl[t]; if (acc>=n*0.60){ thr=t; break; } }
+    if (thr<110) thr=110;
+    let sR=0,sG=0,sB=0,c=0;
+    for (let i=0;i<n;i++){ const j=i*4; const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+      if (L>=thr){ sR+=d[j]; sG+=d[j+1]; sB+=d[j+2]; c++; } }
+    if (c>0){
+      const mR=sR/c, mG=sG/c, mB=sB/c, mean=(mR+mG+mB)/3;
+      const offAxis = Math.abs(mG-(mR+mB)/2)/Math.max(1,mean);
+      if (offAxis < 0.12){
+        const TGT=248, GMAX=1.6, BLEND=0.55;
+        const mk=(m)=>{ let g=Math.min(GMAX, Math.max(1, TGT/Math.max(1,m))); return 1+(g-1)*BLEND; };
+        const gr=mk(mR), gg=mk(mG), gb=mk(mB);
+        const lr=new Uint8Array(256), lg=new Uint8Array(256), lb=new Uint8Array(256);
+        for (let t=0;t<256;t++){ lr[t]=Math.min(255,Math.round(t*gr)); lg[t]=Math.min(255,Math.round(t*gg)); lb[t]=Math.min(255,Math.round(t*gb)); }
+        for (let i=0;i<n;i++){ const j=i*4; d[j]=lr[d[j]]; d[j+1]=lg[d[j+1]]; d[j+2]=lb[d[j+2]]; }
+      }
+    }
+  }
+  // 1b) paper-whiten (v11.28): pull residual cast off bright near-neutral pixels.
+  //     Strength feathers in with luminance (185→225) and out with chroma: FULL
+  //     below 5% relative chroma (unambiguously cast-on-white), fading to ZERO at
+  //     10%, so genuine pale card tints — PAN's blue wash, passport guilloché —
+  //     sit above the gate and are untouched, as are skin tones and strong colours.
+  //     Pixels flagged as cool tints BEFORE white balance are skipped outright.
+  for (let i=0;i<n;i++){
+    if (coolTint[i]) continue;
+    const j=i*4; const r=d[j], g=d[j+1], b=d[j+2];
+    const L=(r*77+g*151+b*28)>>8;
+    if (L<=185) continue;
+    const mx=r>g?(r>b?r:b):(g>b?g:b), mn=r<g?(r<b?r:b):(g<b?g:b);
+    const rel=(mx-mn)/Math.max(1,mx);
+    if (rel>=0.10) continue;
+    const tL=Math.min(1,(L-185)/40);
+    const tC=rel<=0.05 ? 1 : (0.10-rel)/0.05;
+    const k=0.85*tL*tC;
+    d[j]  =Math.round(r+(L-r)*k);
+    d[j+1]=Math.round(g+(L-g)*k);
+    d[j+2]=Math.round(b+(L-b)*k);
   }
   // 2) BRIGHTNESS-ADAPTIVE shadow lift (v10.82). The old flat gamma (0.72) lifted
   //    the WHOLE image, which on a card shot on a DARK surface — where the camera

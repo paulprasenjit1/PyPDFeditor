@@ -4,6 +4,31 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.28] — 2026-07-15 — Photo ID mode: yellow-cast fix (neutral-pixel white balance)
+
+Backup: `backups/pypdf-pwa-v11.27-pre-v1128-idcard-tint-restore-point.zip`.
+
+- **Fixed the yellowish tint on Photo ID scans of coloured cards/cheques.** The
+  ID-mode white balance averaged ALL bright pixels (grey-world), so a large
+  coloured subject — e.g. a blue bank cheque — cancelled a warm room cast in the
+  average (or tripped the off-axis guard) and the yellow tint survived to the
+  final page. The sample is now restricted to bright, unclipped, LOW-CHROMA
+  pixels (true paper/laminate white), which the card's own colour cannot skew;
+  that also makes a stronger 90% cast-removal blend safe (was 55%). Falls back
+  to the old grey-world path when fewer than 2% of pixels are neutral.
+- **New paper-whiten pass in ID mode:** bright near-neutral pixels are gently
+  desaturated (feathered by luminance 185→225; full below 5% relative chroma,
+  off at 10%), clearing residual cast off the paper while leaving real colour —
+  skin tones, flags, security print — untouched. Pixels that were COOL-tinted
+  (B>R with ≥5% chroma) before white balance are exempted outright: a warm cast
+  always reads R>B, so B>R chroma is genuine card colour (PAN's blue wash,
+  cheque security print, passport guilloché) and must survive even if WB pulls
+  it near-neutral. Verified against the cancelled-cheque scan (warm margin RGB
+  244/230/212 → 248/246/238, blue pattern hue intact) and a synthetic
+  Aadhaar / PAN / passport / driving-licence / voter-card suite under both warm
+  cast and neutral light: cast cut ~2.5-3x everywhere, skin-tone and card-colour
+  hues stable within 1-5°, no pale-tint wash-out in good light.
+
 ## [v11.27] — 2026-07-12 — Share from the Recents long-press menu
 
 Backup: `backups/pypdf-pwa-v11.26-pre-v1127-share-restore-point.zip`.
