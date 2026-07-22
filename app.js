@@ -17,7 +17,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.28";
+const APP_BUILD = "11.29";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -92,11 +92,13 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "11 Jul 2026";   // v11.24
+const BUILD_DATETIME = "22 Jul 2026";   // v11.29
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "a cleaner toolbar — Pages, Markup, Find, Save and More; Compress and Unlock now live in More, and ✕ moved to the top bar.";
-const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
+const WHATS_NEW = "edited text now keeps the document's own font and size — no more Times-Roman substitution or shrinking when you correct a name or date.";
+// PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
+// used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
+const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
 
 // ---------------- state ----------------
 let workingBytes = null;       // Uint8Array — single source of truth
@@ -1825,7 +1827,18 @@ $("findClear").onclick = ()=>{
   scheduleFind(); inp.focus();
 };
 
-// ---------------- font matching (mirrors the macOS pick_font) ----------------
+// ---------------- font matching ----------------
+// Two tiers, best first:
+//   1. drawWithPdfFont — redraw using the PDF's OWN font resource (the exact
+//      embedded face, e.g. Cambria), so an edited field is visually identical
+//      to its neighbours. Used whenever the font can be located and every
+//      character of the replacement is present in the embedded subset.
+//   2. pickFont — the old base-14 substitution (Helvetica/Times/Courier). Still
+//      the fallback for image-only fonts, exotic encodings and missing glyphs.
+// Before v11.29 tier 2 was the only path, so a Cambria 10pt name field came
+// back as Times-Roman AND shrank (Times is wider, so it failed the fit check).
+
+// pickFont mirrors the macOS pick_font.
 function pickFont(name){
   const n = (name||"").toLowerCase();
   const bold   = /bold|black|heavy|semibold|demi/.test(n);
@@ -1836,6 +1849,162 @@ function pickFont(name){
   if (mono)  return bold&&italic?F.CourierBoldOblique : bold?F.CourierBold : italic?F.CourierOblique : F.Courier;
   if (serif) return bold&&italic?F.TimesRomanBoldItalic : bold?F.TimesRomanBold : italic?F.TimesRomanItalic : F.TimesRoman;
   return bold&&italic?F.HelveticaBoldOblique : bold?F.HelveticaBold : italic?F.HelveticaOblique : F.Helvetica;
+}
+
+// ---- v11.29: reuse the PDF's own embedded font for replacement text ----------
+// A /ToUnicode CMap maps character CODES (what goes in the content stream) to
+// Unicode. Inverting it gives us Unicode -> code, i.e. how to type a character
+// in this font. A character missing from the map is missing from the embedded
+// SUBSET too, so the inverse map doubles as an exact coverage test.
+function invertToUnicode(txt){
+  const map = new Map();
+  const put = (code, uniHex)=>{
+    if (uniHex.length !== 4) return;                // surrogate pairs / ligatures: skip
+    const u = parseInt(uniHex,16);
+    if (!u || map.has(u)) return;
+    map.set(u, code);
+  };
+  let m;
+  const bf = /beginbfchar([\s\S]*?)endbfchar/g;
+  while ((m = bf.exec(txt))){
+    const re = /<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]*)>/g; let p;
+    while ((p = re.exec(m[1]))) put(p[1].toLowerCase(), p[2].toLowerCase());
+  }
+  const br = /beginbfrange([\s\S]*?)endbfrange/g;
+  while ((m = br.exec(txt))){
+    const re = /<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/g; let p;
+    while ((p = re.exec(m[1]))){
+      const lo = parseInt(p[1],16), hi = parseInt(p[2],16), u0 = parseInt(p[3],16), w = p[1].length;
+      for (let c = lo; c <= hi && c-lo < 1024; c++)
+        put(c.toString(16).padStart(w,"0"), (u0 + (c-lo)).toString(16).padStart(4,"0"));
+    }
+  }
+  return map;
+}
+// /W of a CIDFont: [ cFirst [w w w…] ] and/or [ cFirst cLast w ], mixed freely.
+function parseCidWidths(wObj){
+  const W = new Map();
+  if (!wObj || (wObj.isNull && wObj.isNull())) return W;
+  let arr = null;
+  try { arr = wObj.asJS({}); } catch(e){ return W; }
+  if (!Array.isArray(arr)) return W;
+  let i = 0;
+  while (i < arr.length){
+    const a = arr[i];
+    if (Array.isArray(arr[i+1])){ arr[i+1].forEach((w,k)=>W.set(a+k, w)); i += 2; }
+    else { const b = arr[i+1], w = arr[i+2];
+           for (let c=a; c<=b && c-a<65536; c++) W.set(c, w);
+           i += 3; }
+  }
+  return W;
+}
+// Locate the span's font in the page resources and gather everything needed to
+// type with it. MUST run BEFORE the redaction, because saving with "garbage"
+// can renumber (or drop) objects. Returns null whenever anything is unusual —
+// every caller then falls back to the base-14 path.
+function capturePdfFont(pageIndex, fontName){
+  try {
+    if (!MDOC || !MDOC.findPage || !fontName) return null;
+    const base = String(fontName).replace(/^\//,"");
+    const res = MDOC.findPage(pageIndex).get("Resources");
+    if (!res || res.isNull()) return null;
+    const fonts = res.get("Font");
+    if (!fonts || fonts.isNull()) return null;
+    let hit = null;
+    fonts.forEach((v,k)=>{
+      if (hit) return;
+      const bf = String(v.get("BaseFont")||"").replace(/^\//,"");
+      if (bf && bf === base) hit = { key:k, obj:v };
+    });
+    if (!hit) return null;
+    const subtype = String(hit.obj.get("Subtype")||"").replace(/^\//,"");
+    const info = { key:hit.key, type0:(subtype==="Type0"), uni:null, W:null, dw:1000, widths:null, firstChar:0 };
+    const tu = hit.obj.get("ToUnicode");
+    if (tu && !tu.isNull() && tu.isStream())
+      info.uni = invertToUnicode(new TextDecoder().decode(tu.readStream().asUint8Array()));
+    if (info.type0){
+      // only Identity-H, where the 2-byte code IS the CID; any other CMap needs
+      // a lookup we don't carry
+      if (String(hit.obj.get("Encoding")||"").replace(/^\//,"") !== "Identity-H") return null;
+      if (!info.uni || !info.uni.size) return null;
+      const df = hit.obj.get("DescendantFonts").get(0);
+      if (!df || df.isNull()) return null;
+      const dw = df.get("DW");
+      info.dw = (dw && !dw.isNull()) ? dw.asNumber() : 1000;
+      info.W  = parseCidWidths(df.get("W"));
+    } else {
+      if (subtype !== "Type1" && subtype !== "TrueType" && subtype !== "MMType1") return null;
+      // a /Differences encoding remaps codes, so a plain byte would type the
+      // wrong glyph — hand those to the fallback
+      const enc = hit.obj.get("Encoding");
+      if (enc && !enc.isNull()){
+        if (enc.isDictionary()){
+          const d = enc.get("Differences");
+          if (d && !d.isNull()) return null;
+        } else {
+          const en = String(enc).replace(/^\//,"");
+          if (en !== "WinAnsiEncoding" && en !== "MacRomanEncoding" && en !== "StandardEncoding") return null;
+        }
+      }
+      const wid = hit.obj.get("Widths"), fc = hit.obj.get("FirstChar");
+      if (wid && !wid.isNull()) { try { info.widths = wid.asJS({}); } catch(e){} }
+      if (fc && !fc.isNull()) info.firstChar = fc.asNumber();
+    }
+    return info;
+  } catch(e){ return null; }
+}
+// Encode text in that font. Returns null the moment a character has no glyph in
+// the embedded subset — better to fall back for the whole string than to emit
+// one blank box in the middle of a name.
+function encodeWithPdfFont(info, text){
+  if (!info || !text) return null;
+  const codes = []; let w = 0;
+  for (const ch of text){
+    const u = ch.codePointAt(0);
+    if (info.type0){
+      const hex = info.uni.get(u);
+      if (hex === undefined) return null;
+      const cid = parseInt(hex,16);
+      codes.push(hex.padStart(4,"0"));
+      w += info.W.has(cid) ? info.W.get(cid) : info.dw;
+    } else {
+      if (u > 255) return null;                      // simple fonts are single-byte
+      if (info.uni && info.uni.size && !info.uni.has(u)) return null;
+      codes.push(u.toString(16).padStart(2,"0"));
+      const idx = u - info.firstChar;
+      const known = info.widths && idx >= 0 && idx < info.widths.length;
+      if (!known) return null;                       // no metric: can't check the fit
+      w += info.widths[idx];
+    }
+  }
+  return { hex: codes.join("").toUpperCase(), width: w/1000 };   // width is per 1pt of size
+}
+// Emit the text as raw content-stream operators against the page's existing
+// font resource. pdf-lib appends to the page content stream, so /key resolves
+// through the page's own (or inherited) /Resources — the same dictionary the
+// original text used.
+function drawWithPdfFont(pg, info, hex, x, y, size, colour){
+  const O = PDFOperator.of.bind(PDFOperator), N = PDFNumber.of.bind(PDFNumber);
+  pg.pushOperators(
+    O("q",  []),
+    O("BT", []),
+    O("rg", [N(colour[0]), N(colour[1]), N(colour[2])]),
+    O("Tf", [PDFName.of(info.key), N(size)]),
+    O("Tm", [N(1), N(0), N(0), N(1), N(x), N(y)]),
+    O("Tj", [PDFHexString.of(hex)]),
+    O("ET", []),
+    O("Q",  [])
+  );
+}
+// Does the captured resource still exist on the page after the redact + save?
+// ("garbage" collection drops a font whose only user was the text we erased.)
+function pdfFontStillOnPage(pg, key){
+  try {
+    const res = pg.node.Resources();
+    if (!res) return false;
+    const fonts = res.lookup(PDFName.of("Font"));
+    return !!(fonts && fonts.lookup && fonts.lookup(PDFName.of(key)));
+  } catch(e){ return false; }
 }
 
 // ---------------- in-place text edit (redact original glyphs, reinsert text) ----------------
@@ -1924,7 +2093,28 @@ function sampleSpanBg(pageIndex, sp){
   } catch(e){ return null; }
   finally { try{ if(pix) pix.destroy(); }catch(e){} try{ if(page) page.destroy(); }catch(e){} }
 }
-// Shrink the draw size so a one-line replacement fits the original span width
+// How much room the replacement actually has: from the start of this span to
+// whatever sits next on the same line, or the page edge.
+//
+// v11.29 — this used to be the span's OWN ink width, which was wrong twice
+// over. A substitute font with different metrics needs more room for the very
+// same words (Times renders "Dr. SANDIPAN PAUL" ~8% wider than Cambria), so
+// re-typing unchanged text silently shrank it; and a field with clear space to
+// its right was never allowed to use it. Measure the real gap instead, so the
+// size only drops when the text would genuinely collide with something.
+function availWidthFor(pageIndex, sp, pageW){
+  const own = sp.x1 - sp.x0;
+  let right = (pageW > 0 ? pageW : sp.x1 + own) - 4;      // keep a small page margin
+  try {
+    for (const o of getSpans(pageIndex)){
+      if (o === sp) continue;
+      if (o.y1 <= sp.y0 + 1 || o.y0 >= sp.y1 - 1) continue;   // not on this line
+      if (o.x0 >= sp.x1 - 0.5 && o.x0 - 2 < right) right = o.x0 - 2;   // nearest neighbour, 2pt gutter
+    }
+  } catch(e){}
+  return Math.max(right - sp.origin[0], own);            // never tighter than the original box
+}
+// Shrink the draw size so a one-line replacement fits the space available
 // (pdf-lib doesn't wrap). Never shrink below half — better a slight overflow
 // than illegible text. Only shrinks; never enlarges.
 function fitFontSize(font, text, size, avail){
@@ -1934,6 +2124,13 @@ function fitFontSize(font, text, size, avail){
   } catch(e){}
   return size;
 }
+// Same rule for the embedded-font path, where the width comes from the PDF's
+// own /W or /Widths metrics (already normalised to 1pt of font size).
+function fitFontSizeWidth(width1pt, size, avail){
+  if (!(avail>1) || !(width1pt>0)) return size;
+  const wAt = width1pt * size;
+  return wAt > avail ? Math.max(size*0.5, size*avail/wAt) : size;
+}
 
 async function applyTextEdit(pageIndex, sp, newText){
   showSpin(true,"Editing text…");
@@ -1941,6 +2138,13 @@ async function applyTextEdit(pageIndex, sp, newText){
     pushUndo();
     // sample the original background colour BEFORE redaction erases the area
     const bg = sampleSpanBg(pageIndex, sp);
+    // v11.29: and grab the span's real font BEFORE the save renumbers objects,
+    // plus the room it has on the line (getSpans is cache-backed; after the
+    // redaction the cache is stale, so both have to be read now)
+    const fres = capturePdfFont(pageIndex, sp.font);
+    let pageW = 0;
+    try { const mp = MDOC.loadPage(pageIndex); const b = mp.getBounds(); pageW = b[2]-b[0]; mp.destroy(); } catch(e){}
+    const avail = availWidthFor(pageIndex, sp, pageW);
     // 1) remove the original glyphs with a MuPDF redaction (no black box)
     const page = MDOC.loadPage(pageIndex);
     const an = page.createAnnotation("Redact");
@@ -1972,13 +2176,25 @@ async function applyTextEdit(pageIndex, sp, newText){
     const text = (newText||"").replace(/[\r\n]+/g, " ");
     let substituted = false;
     if (text.trim() !== ""){
-      const font = await doc.embedFont(pickFont(sp.font));
-      const safe = sanitizeForFont(text);
-      substituted = safe !== text;     // some glyphs fell outside the base font
       const baseSize = sp.size || 11;
-      const drawSize = fitFontSize(font, safe, baseSize, sp.x1 - sp.x0);   // shrink to fit width
-      pg.drawText(safe, { x:sp.origin[0], y:H-sp.origin[1], size:drawSize,
-                          font, color:rgb(sp.color[0],sp.color[1],sp.color[2]), lineHeight:drawSize*1.15 });
+      const x = sp.origin[0], y = H - sp.origin[1];
+      // TIER 1 (v11.29): type it in the document's own embedded font, so the
+      // edited field is indistinguishable from the text around it. Silently
+      // declines (returns null) for exotic encodings or a character the
+      // embedded subset doesn't carry.
+      const enc = fres && pdfFontStillOnPage(pg, fres.key) ? encodeWithPdfFont(fres, text) : null;
+      if (enc){
+        const drawSize = fitFontSizeWidth(enc.width, baseSize, avail);
+        drawWithPdfFont(pg, fres, enc.hex, x, y, drawSize, sp.color);
+      } else {
+        // TIER 2: base-14 substitution, as before
+        const font = await doc.embedFont(pickFont(sp.font));
+        const safe = sanitizeForFont(text);
+        substituted = safe !== text;     // some glyphs fell outside the base font
+        const drawSize = fitFontSize(font, safe, baseSize, avail);   // shrink only if it would collide
+        pg.drawText(safe, { x, y, size:drawSize,
+                            font, color:rgb(sp.color[0],sp.color[1],sp.color[2]), lineHeight:drawSize*1.15 });
+      }
     }
     workingBytes = new Uint8Array(await doc.save());
     reopen();

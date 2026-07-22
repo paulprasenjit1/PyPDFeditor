@@ -4,6 +4,47 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.29] — 2026-07-22 — Text edit keeps the document's own font and size
+
+Backup: `backups/pypdf-pwa-v11.28-pre-v1129-fontmatch-restore-point.zip`.
+
+Reported against a pathology report whose doctor-name field is Cambria 10pt:
+after editing it came back in a different face and visibly smaller. Two separate
+defects, both in `applyTextEdit`.
+
+- **Replacement text now reuses the PDF's OWN embedded font.** Every edit was
+  redrawn with a pdf-lib base-14 face (Helvetica / Times / Courier) picked by
+  regex on the font name, so Cambria became Times-Roman and the edited field no
+  longer matched the line above it. The editor now looks the span's font up in
+  the page's `/Resources /Font`, inverts its `/ToUnicode` CMap to get
+  Unicode → character-code, and emits the replacement as raw content-stream
+  operators (`BT … Tf … Tm … Tj … ET`) against that same resource. No new bytes
+  are embedded and the result stays real, selectable, searchable text. Verified
+  on the report: the edited name re-extracts as `Cambria 10.0`, byte-identical
+  in face and size to the original.
+- **Safe fallback, unchanged behaviour where it can't help.** The embedded path
+  declines — and the old base-14 path runs exactly as before — when the font
+  can't be found in the page resources, when a Type0 font isn't `Identity-H`,
+  when a simple font carries an `/Encoding /Differences` array, when metrics are
+  missing, or when *any* character of the replacement is absent from the
+  embedded subset. That last check is what stops a name typed with an accented
+  or non-Latin letter from rendering as a blank box: the whole string falls back
+  instead. Standard base-14 fonts (a plain `Times-Roman` resource) keep using
+  substitution, which for them is already an exact match.
+- **Fixed the silent font-size reduction.** `fitFontSize` measured the space
+  available as the original text's own ink width, so a substitute font with
+  different metrics failed the check on the *same words* — re-typing
+  "Dr. SANDIPAN PAUL" unchanged shrank it from 10pt to 9.25pt (Times sets it
+  ~8% wider than Cambria). The available width is now the real gap on that line:
+  from the span's origin to the nearest neighbouring span to its right, or the
+  page edge less a 4pt margin, and never tighter than the original box. Size now
+  only drops when the text would genuinely collide with something — a 33-char
+  name in an 85pt field still shrinks (to 8.6pt), a same-length correction does
+  not.
+- Tests: full suite green (91 passed). Verified end-to-end in Node against the
+  real `app.js` helpers on the source PDF, comparing rendered crops of original
+  / v11.28 / v11.29 output.
+
 ## [v11.28] — 2026-07-15 — Photo ID mode: yellow-cast fix (neutral-pixel white balance)
 
 Backup: `backups/pypdf-pwa-v11.27-pre-v1128-idcard-tint-restore-point.zip`.
