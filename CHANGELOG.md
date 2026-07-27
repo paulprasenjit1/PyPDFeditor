@@ -4,6 +4,173 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.47] — 2026-07-27 — Phase 5: fill real forms (AcroForm)
+
+The feature that most often sends people back to Acrobat. Until now a
+fillable form could only be drawn on top of; this fills the ACTUAL fields, so
+the values are readable by Acrobat, Preview and whatever system the form is
+submitted to.
+
+- **Form** joins the Markup tools. It finds every fillable field and overlays
+  a dashed tap target on it: a text field opens a keyboard sheet, a checkbox
+  toggles with one tap (no sheet — like a real form), radio groups and
+  dropdowns list their options. Values are written through pdf-lib's form API
+  and appearances are regenerated with an embedded font, so the filled value
+  is visible in every viewer, not only ones that honour NeedAppearances.
+  A document with no fields says so and points at Edit text / Sign instead.
+  Buttons and signature fields are explained as not fillable here.
+- **More → Flatten form** bakes every value into permanent page content and
+  removes the fields — a separate, confirmed action (never a side effect),
+  reversible with Undo while the document is open.
+- Field TYPE detection is by capability (duck typing) because the vendored
+  pdf-lib is minified — constructor names are meaningless. That detector is
+  sliced from the shipped app.js and pinned by tests.
+
+New suite: form-tests (14) — generates a real form at test time, classifies,
+fills, flattens, and verifies through MuPDF (a different engine) that the
+flattened text is extractable and the filled file parses cleanly. A
+`SEED-form.pdf` joined the corpus; its compressed output passes qpdf.
+
+## [v11.46] — 2026-07-27 — Phase 4: compress to a target size
+
+The iLovePDF move people actually make — "get it under 2 MB for the portal" —
+plus font subsetting, plus a real result report.
+
+- **Reach a size…** in the Compress sheet: presets (10/5/2/1 MB) or a typed
+  limit. The search runs over the machinery that already exists, most-careful
+  first: lossless clean-up, then per-image recompression at 200 → 150 → 110 dpi,
+  **stopping at the first setting that fits** so quality is never given up
+  without need. Rasterising stays the last resort and still asks first when
+  the document has real text. Never-grow and undo guarantees unchanged. A
+  target the file already meets is reported honestly, not "compressed".
+- **Result report**: a before/after sheet — sizes, whether the limit was met,
+  what changed, and whether text is still selectable. When the limit is not
+  reachable, it says so and suggests deleting unneeded pages instead of
+  pretending.
+- **Font subsetting** (`subset-fonts`) joined every compress save path:
+  embedded fonts are trimmed to the glyphs actually used. Verified a no-op on
+  already-subset fonts (byte-identical) and text-preserving via MuPDF
+  round-trip; a new `SEED-embedfont.pdf` (full DejaVu TTF) keeps it honest in
+  the corpus, where output passes qpdf's structural check.
+
+Tests: compress-tests 67 → 76. All eleven suites green; corpus 35/35 + 12/12
+external.
+
+## [v11.45] — 2026-07-27 — Phase 3: remove restrictions, not just passwords
+
+A PDF can be locked WITHOUT a password: encrypted with an owner password
+only, it opens with no prompt but forbids editing, printing and copying —
+bank and telco invoices are the classic case, and removing these locks is an
+Acrobat paid feature. `needsPassword()` is false for such files, so until now
+"Unlock a PDF" told their owners there was "nothing to remove".
+
+- **Unlock a PDF** now detects owner-locked files via the encryption metadata
+  and removes the locks losslessly (MuPDF `decrypt` save: no image
+  re-compression, original quality and size), opening the result as
+  `name_unlocked.pdf`, marked unsaved.
+- **Opening** such a file directly (which already auto-decrypted the working
+  copy since v11.11-era plumbing) now SAYS so: "it had editing/printing
+  restrictions (no password), and this working copy has them removed."
+- A file with no password AND no restrictions gets the accurate message.
+
+New suite: unlock-tests (11) — generates an owner-locked fixture at test time
+with the shipped MuPDF (AES-128, permissions -3904), then proves it opens
+passwordless, decrypts to `encryption: None`, keeps its content, and is freely
+editable afterwards. A matching `SEED-ownerlocked.pdf` joined the corpus.
+
+**The corpus caught its first real bug within minutes of that seed landing:**
+the in-app self-test (and the corpus C4 check) fed still-encrypted bytes
+straight to pdf-lib, which corrupts owner-locked files on save — the exact
+historical failure the open path's decrypt exists to prevent. Both harnesses
+now mirror the app's open path (decrypt first), which is the correct model of
+what the app really does. Working exactly as designed.
+
+## [v11.44] — 2026-07-27 — Phase 2: duplicate pages, insert blank
+
+Page organisation, completed. Reorder, rotate, delete, Combine and
+copy-to-new-PDF (extract/split) already existed; the two missing everyday
+moves land in All pages → Select:
+
+- **Duplicate** copies every selected page in place, each copy directly after
+  its original. Uses the same `graftPage` primitive as Combine, from a copy of
+  the document into the live one, so fonts and images carry across intact —
+  never re-rasterised. Grafts run in reverse index order so insertion points
+  stay valid.
+- **+ Blank** inserts an empty page after the single selected page, matching
+  that page's size, so an A4 document stays all-A4. (Enabled only with exactly
+  one page selected — an insertion point has to be unambiguous.)
+
+Both are one Undo away from reversal. Tests: editor-tests 56 → 65, including
+an end-to-end that duplicates and inserts with the same primitives and reads
+the result back through MuPDF (copy carries content; blank is empty and
+size-matched; following pages intact).
+
+## [v11.43] — 2026-07-27 — Phase 1: add text anywhere, whiteout, place pictures
+
+The Acrobat edit gap, closed for the everyday cases. All three tools ride on
+plumbing that already existed, which is what keeps this release small enough
+to trust.
+
+- **Add new text.** In Edit text mode, tapping EMPTY page space opens an
+  "Add text" sheet: multi-line text, size (default 12pt), colour and typeface
+  (the same controls the editor uses), placed with its first line just under
+  the tap. Inserted with pdf-lib exactly like an edit's replacement text, so
+  Save, Undo and Compress treat it identically. Taps on existing text still
+  edit that text — the span buttons capture their own clicks.
+- **Whiteout.** New Markup tool: drag a box, it is painted opaque white.
+  Deliberately a COVER, not a removal, and the status message says so plainly
+  (text underneath is still selectable). True redaction is a separate future
+  feature so the two are never confused.
+- **Place a picture.** New Markup tool: pick from Photos, drag a box, done —
+  the exact placement flow signatures use (aspect preserved, fitted inside the
+  box), with the image capped at 2000px. The status and confirmation say
+  "Picture", not "Signature".
+
+Wiring: `mkMenu` gains Whiteout + Image buttons; both enable/disable with the
+document like every other tool; the sign-mode overlay routes white-mode boxes
+to `applyWhiteout`. Tests: editor-tests 46 → 56, including an end-to-end that
+draws two lines the way `addNewText` does and reads their baselines back
+through MuPDF (first line one em under the tap, second one leading below).
+
+## [v11.42] — 2026-07-27 — Phase 0: real-document verification (corpus + self-test)
+
+The first roadmap phase, and deliberately not a feature: the machinery to stop
+"406 green assertions, broken on the first real document" from ever happening
+again.
+
+### corpus/ — real files as the test suite
+
+`corpus/` now holds the documents the app must never break — meant for the
+user's real invoices, statements, forms and scans (git-ignored; see
+corpus/README.md). Seeded with four synthetic PDFs from three producers the
+app itself does not use (reportlab, PIL, standalone pdf-lib), including an
+Indexed-colourspace image, a near-bilevel 200 dpi scan, and 6-megapixel photos
+drawn small. `npm run corpus` runs every file through open → render → text →
+pdf-lib round-trip → redact-edit plumbing → per-image compression, then
+re-validates every output with decoders that share no code with the app:
+**qpdf** (`--check`, structural) and **Pillow/libtiff** (decodes every JPEG
+and CCITT G4 stream and checks polarity). First run: 23/23 Node checks and
+10/10 external checks green — the compressor's first-ever validation outside
+MuPDF, including the from-scratch G4 encoder (881→152 KB on the scan seed,
+4.9 MB→571 KB on the photo seed, zero text characters lost anywhere).
+
+### In-app: About → "Run self-test on this document"
+
+The same pipeline, runnable on the phone against the exact file that
+misbehaves: parse, render page 1, extract text, pdf-lib save round-trip,
+redaction edit on a copy, lossless compress — every step on a copy, touching
+nothing (no undo entry, no dirty flag). Skips content steps on
+password-protected files and refuses >60 MB files rather than risk the tab.
+`selfTestCore` is pure (bytes in, results out) and `tests/selftest-tests.mjs`
+slices it from the shipped app.js and runs it over the corpus in Node, so the
+button and the desktop harness are provably the same code.
+
+### Suite
+
+New: selftest-tests (6). scan-tests unchanged (78). All eleven jobs green.
+Phase 0 exit criterion: the corpus holds real user documents and stays green —
+then Phase 1 (new text boxes, images, whiteout) begins.
+
 ## [v11.41] — 2026-07-27 — Sharper capture source + receipts keep their shape
 
 Independent review of the v11.32–v11.40 session, prompted by "it broke my app"

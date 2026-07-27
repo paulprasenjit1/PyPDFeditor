@@ -20,13 +20,14 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.41";
+const APP_BUILD = "11.47";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","idToggle","cropReset","cropRetake","cropUse",
     "autoBtn","paperBtn","idBothToggle",
+    "whiteBtn","imgPlaceBtn","insImgInput","formBtn",
     "ge0","ge1","ge2","ge3","he0","he1","he2","he3"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
@@ -96,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.41
+const BUILD_DATETIME = "27 Jul 2026";   // v11.47
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "sharper scans: the camera now uses its full-height sensor mode (up to 40% more detail on a page) and auto capture demands better framing before it fires. Narrow captures like receipts keep their own page shape instead of shrinking inside an A4 letterbox.";
+const WHATS_NEW = "fill real forms: the new Form tool in Markup finds the document’s actual fillable fields — text boxes, checkboxes, choices, dropdowns — and writes your answers into them, readable by any PDF app. More → Flatten form makes the answers permanent.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -112,7 +113,8 @@ let fileName = "document.pdf";
 let zoomPct = 100;             // 50–300, 25% steps; 100% = fit to viewer width
 let mergeSources = null;       // staged docs awaiting a chosen merge order
 let signImgDataUrl = null;     // processed signature PNG dataURL
-let mode = null;               // null | "sign" | "text" | "select"
+let mode = null;               // null | "sign" | "text" | "select" | "white" (v11.43)
+let insImgPlacing = false;     // v11.43: sign flow is placing a PICTURE, not a signature
 // v11.22: remember the last markup tool used this session (until the PDF is
 // closed) so reopening the Markup popover highlights it as the preferred tool.
 let lastMarkupMode = null;
@@ -662,7 +664,7 @@ function reopen(){
 }
 
 function enableDocButtons(has){
-  for (const id of ["textBtn","selectBtn","signBtn","compBtn","saveBtn","closeBtn","pagesBtn","markupBtn","findBtn"]) $(id).disabled = !has;
+  for (const id of ["textBtn","selectBtn","signBtn","whiteBtn","imgPlaceBtn","formBtn","compBtn","saveBtn","closeBtn","pagesBtn","markupBtn","findBtn"]) $(id).disabled = !has;
   if (!has) hideMkMenu();                      // v11.11: no doc → no markup popover
   refreshZoomButtons(); refreshUndo();
 }
@@ -1014,7 +1016,7 @@ async function openPickedFile(f){
 }
 
 async function openBytes(bytes, name){
-  let wasEncrypted = false;
+  let wasEncrypted = false, ownerOnly = false;
   // probe for encryption first
   let probe = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
   // mupdf can open other formats (e.g. HTML) through their own handlers —
@@ -1042,6 +1044,7 @@ async function openBytes(bytes, name){
       showSpin(true, "Preparing a secured PDF…");
       bytes = new Uint8Array(pdfp.saveToBuffer("decrypt,garbage").asUint8Array());
       wasEncrypted = true;
+      ownerOnly = true;    // v11.45: no password was needed — restrictions only
     }
   }
   if (probe.needsPassword()){
@@ -1100,6 +1103,12 @@ async function openBytes(bytes, name){
   // killing the app for memory.
   if (workingBytes.length > 24*1024*1024 || MDOC.countPages() > 150)
     setStatus("Opened "+fileName+" — large document, so undo history is shortened and rendering is lightened to keep things smooth.","ok");
+  else if (ownerOnly)
+    // v11.45: say what actually happened. These files (bank/telco invoices are
+    // the classic case) open without a password but carry owner-set locks on
+    // editing/printing/copying. The working copy has had those removed; Save
+    // writes the unrestricted copy.
+    setStatus("Opened "+fileName+" — it had editing/printing restrictions (no password), and this working copy has them removed. Tap Save to keep an unrestricted copy.","ok");
   else
   setStatus("Opened "+fileName+". "+zoomTip(),"ok");
   maybeLiveTextHint();
@@ -1172,9 +1181,29 @@ async function unlockPdfFile(f){
     const probe = mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
     const isProtected = probe.needsPassword();
     const isPdf = isProtected || !!probe.asPDF();
+    // v11.45: a file can be locked WITHOUT a password — encrypted with an
+    // owner password only, so it opens fine but forbids editing, printing or
+    // copying. Acrobat charges for removing exactly this. needsPassword() is
+    // false for these, so check the encryption metadata too.
+    const ownerLocked = !isProtected && isPdf &&
+      (()=>{ try { const e = probe.getMetaData("encryption"); return !!e && e !== "None"; } catch(_){ return false; } })();
     probe.destroy();
     if (!isPdf){ showSpin(false); setStatus("That file isn’t a PDF, so it can’t be unlocked.","err"); return; }
-    if (!isProtected){ showSpin(false); setStatus("“"+f.name+"” isn’t password-protected — there’s nothing to remove.","warn"); return; }
+    if (!isProtected && !ownerLocked){ showSpin(false); setStatus("“"+f.name+"” has no password and no restrictions — there’s nothing to remove.","warn"); return; }
+    if (ownerLocked){
+      // No password to ask for: decrypt losslessly and open the clean copy.
+      const d = mupdf.Document.openDocument(bytes.slice(0), "application/pdf").asPDF();
+      const clean = new Uint8Array(d.saveToBuffer("decrypt,garbage").asUint8Array());
+      d.destroy();
+      const prev2 = workingBytes;
+      await openBytes(clean, baseFrom(f.name)+"_unlocked.pdf");
+      if (workingBytes && workingBytes !== prev2){
+        setDirty(true);
+        setStatus("Restrictions removed — “"+f.name+"” had editing/printing locks but no password. Tap Save to keep the unrestricted copy at the original quality.","ok");
+      }
+      showSpin(false);
+      return;
+    }
     // Protected → use the normal open path: it asks for the password (with up to
     // 3 inline retries), decrypts LOSSLESSLY (no image re-compression, original
     // quality & size), and renders the result into the viewer. We then mark it
@@ -1408,6 +1437,7 @@ async function renderStage(stage, i){
     delete stage.dataset.rtry;               // rendered fine — reset retry count
     if (mode === "text") await buildSpanBoxes(stage, i);
     else if (mode === "select") buildTextLayer(stage, i);
+    else if (mode === "form") buildFormBoxes(stage, i).catch(()=>{});
     // v11.21: born-digital documents get a selectable text layer in VIEW mode
     // too, so touch-and-hold selects real text (with the iOS Copy menu) instead
     // of offering to save the page as an image. Scans keep the image callout —
@@ -2804,21 +2834,208 @@ async function applyTextEdit(pageIndex, sp, newText, opts){
 // stray glyph never aborts the whole edit.
 function sanitizeForFont(t){ return t.replace(/[^\x09\x0A\x0D\x20-\xFF]/g, "?"); }
 
+// ---- v11.47 (Phase 5): fill real form fields (AcroForm) --------------------
+// Until now a fillable form could only be drawn on top of. This fills the
+// ACTUAL fields via pdf-lib's form API, so the values are readable by
+// Acrobat, Preview, and every system the form gets submitted to. Field types
+// covered: text, checkbox, radio group, dropdown / option list. Push buttons
+// and signature fields are shown but reported as not fillable here.
+//
+// The vendored pdf-lib is minified, so field TYPE is detected by capability
+// (duck typing), never by constructor name.
+let formFields = null, formFieldsEpoch = -1;
+function formKindOf(f){
+  if (typeof f.setText === "function" && typeof f.getText === "function") return "text";
+  if (typeof f.check === "function" && typeof f.isChecked === "function") return "checkbox";
+  if (typeof f.select === "function" && typeof f.getOptions === "function")
+    return (typeof f.isEditable === "function" || typeof f.isMultiselect === "function") ? "dropdown" : "radio";
+  return "other";
+}
+async function collectFormFields(){
+  if (formFields && formFieldsEpoch === epoch) return formFields;
+  formFields = []; formFieldsEpoch = epoch;
+  if (!workingBytes) return formFields;
+  try {
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    const pages = doc.getPages();
+    const refTag = r => r ? String(r) : "";
+    const pageIdxOf = ref=>{
+      const t = refTag(ref);
+      for (let i=0;i<pages.length;i++) if (refTag(pages[i].ref) === t) return i;
+      return 0;
+    };
+    let form = null;
+    try { form = doc.getForm(); } catch(e){ return formFields; }
+    for (const f of form.getFields()){
+      const kind = formKindOf(f);
+      let value = "", options = null;
+      try {
+        if (kind === "text") value = f.getText() || "";
+        else if (kind === "checkbox") value = f.isChecked() ? "on" : "";
+        else if (kind === "radio"){ value = f.getSelected() || ""; options = f.getOptions(); }
+        else if (kind === "dropdown"){
+          const s = f.getSelected(); value = Array.isArray(s) ? (s[0]||"") : (s||"");
+          options = f.getOptions();
+        }
+      } catch(e){}
+      let widgets = [];
+      try { widgets = f.acroField.getWidgets(); } catch(e){}
+      widgets.forEach((w, wi)=>{
+        try {
+          const r = w.getRectangle();
+          let pg = 0;
+          try { pg = pageIdxOf(w.P()); } catch(e){}
+          const pageH = pages[pg].getHeight();
+          formFields.push({
+            name: f.getName(), kind, value, options,
+            // radio: each widget is one option; exported value comes from the
+            // widget's appearance states so the right option can be shown
+            widget: wi, page: pg,
+            x: r.x, w: r.width, h: r.height,
+            yTop: pageH - (r.y + r.height),      // top-based, like css
+          });
+        } catch(e){}
+      });
+    }
+  } catch(e){ /* an unreadable form reads as no fields */ }
+  return formFields;
+}
+async function enterFormMode(){
+  const ff = await collectFormFields();
+  if (mode !== "form") return;                       // user already left
+  if (!ff.length){
+    setStatus("No fillable form fields in this document. (Use Edit text to add text, or Sign to place a signature.)","warn");
+    return;
+  }
+  document.querySelectorAll(".stage").forEach(s=>{
+    if (s.dataset.rendered) buildFormBoxes(s, +s.dataset.page).catch(()=>{});
+  });
+  setStatus(ff.length+" form field"+(ff.length>1?"s":"")+" — tap one to fill it. Values are saved into the real field, readable by any PDF app.","ok");
+}
+async function buildFormBoxes(stage, pageIndex){
+  const ff = await collectFormFields();
+  const ovl = stage.querySelector(".ovl");
+  if (!ovl) return;
+  ovl.querySelectorAll(".fbox").forEach(b=>b.remove());
+  const wPt = +stage.dataset.wpt, dispW = parseFloat(stage.style.width);
+  if (!wPt || !dispW) return;
+  const s = dispW / wPt;
+  for (const fd of ff){
+    if (fd.page !== pageIndex) continue;
+    const b = document.createElement("button");
+    b.className = "fbox";
+    b.setAttribute("aria-label", "Fill field: "+fd.name);
+    b.style.left = (fd.x*s)+"px";
+    b.style.top  = (fd.yTop*s)+"px";
+    b.style.width  = Math.max(14, fd.w*s)+"px";
+    b.style.height = Math.max(14, fd.h*s)+"px";
+    b.onclick = (ev)=>{ ev.stopPropagation(); openFormFieldSheet(fd); };
+    ovl.appendChild(b);
+  }
+}
+function openFormFieldSheet(fd){
+  if (fd.kind === "checkbox"){
+    // a checkbox is one tap — no sheet, exactly like a real form
+    applyFormFill(fd, fd.value ? "" : "on");
+    return;
+  }
+  if (fd.kind === "other"){
+    setStatus("“"+fd.name+"” is a button or signature field — it holds no fillable value. Use Sign to place a signature image.","warn");
+    return;
+  }
+  if (fd.kind === "text"){
+    $("sheet").innerHTML = h`
+      <h3>Fill: ${fd.name}</h3>
+      <p class="hint">Typed into the real form field — any PDF app will read it.</p>
+      <div class="row"><textarea id="ffIn"></textarea></div>
+      <div class="row"><button class="full" id="ffOk">Save into the form</button></div>
+      <div class="row"><button class="ghost full" id="ffCancel">Cancel</button></div>`;
+    $("ffIn").value = fd.value || "";
+    $("ffOk").onclick = ()=>{ const v=$("ffIn").value; closeSheet(); applyFormFill(fd, v); };
+    $("ffCancel").onclick = closeSheet;
+    openSheet();
+    setTimeout(()=>{ try{ $("ffIn").focus(); }catch(e){} }, 100);
+    return;
+  }
+  // radio / dropdown: pick one option. Option strings come from the document,
+  // so they are escaped before being placed in markup.
+  const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  const opts = (fd.options||[]).map(o=>
+    `<div class="row"><button class="${o===fd.value?"":"ghost "}full" data-o="${esc(o)}">${o===fd.value?"✓ ":""}${esc(o)}</button></div>`).join("");
+  $("sheet").innerHTML = h`
+    <h3>Choose: ${fd.name}</h3>
+    ${raw(opts || '<p class="hint">This field lists no options.</p>')}
+    <div class="row"><button class="ghost full" id="ffCancel">Cancel</button></div>`;
+  $("sheet").querySelectorAll("[data-o]").forEach(b=>
+    b.onclick = ()=>{ const v=b.dataset.o; closeSheet(); applyFormFill(fd, v); });
+  $("ffCancel").onclick = closeSheet;
+  openSheet();
+}
+async function applyFormFill(fd, value){
+  showSpin(true,"Saving into the form…");
+  try {
+    pushUndo();
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    const form = doc.getForm();
+    const f = form.getFields().find(x=>x.getName() === fd.name);
+    if (!f) throw new Error("field not found: "+fd.name);
+    const kind = formKindOf(f);
+    if (kind === "text") f.setText(String(value||""));
+    else if (kind === "checkbox"){ value ? f.check() : f.uncheck(); }
+    else if (kind === "radio" || kind === "dropdown"){ if (value) f.select(value); }
+    // regenerate appearances so the value is VISIBLE everywhere, not only in
+    // apps that honour NeedAppearances
+    try { form.updateFieldAppearances(await doc.embedFont(StandardFonts.Helvetica)); } catch(e){}
+    workingBytes = new Uint8Array(await doc.save());
+    formFields = null;                       // reparse next build
+    reopen(); setMode("form"); await render();
+    setStatus("Saved “"+fd.name+"” — tap more fields, or Save the document when done.","ok");
+  } catch(e){ setStatus("Could not fill that field: "+friendly(e),"err"); }
+  showSpin(false);
+}
+// Flatten: fields become permanent page content. The one-way door is stated,
+// and it is a separate deliberate action, never a side effect.
+async function flattenForm(){
+  showSpin(true,"Flattening the form…");
+  try {
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    let form = null;
+    try { form = doc.getForm(); } catch(e){}
+    if (!form || !form.getFields().length){
+      showSpin(false); setStatus("No form fields to flatten in this document.","warn"); return;
+    }
+    pushUndo();
+    try { form.updateFieldAppearances(await doc.embedFont(StandardFonts.Helvetica)); } catch(e){}
+    form.flatten();
+    workingBytes = new Uint8Array(await doc.save());
+    formFields = null;
+    reopen(); setMode(null); await render();
+    setStatus("Form flattened — the values are now permanent page content and the fields are gone. Undo reverses it.","ok");
+  } catch(e){ setStatus("Could not flatten the form: "+friendly(e),"err"); }
+  showSpin(false);
+}
+$("formBtn").onclick = ()=> setMode(mode==="form" ? null : "form");
+
 // ---------------- modes ----------------
 function setMode(m){
   mode = m;
+  if (m !== "sign") insImgPlacing = false;   // v11.43: picture placement ends with the mode
   if (m) lastMarkupMode = m;           // v11.22: remember preferred tool for the session
   if (m && SEARCH.open) closeFind();   // v11.19: entering a mode closes search
   setImmersive(false);           // v11.10: entering any mode brings the chrome back
   $("textBtn").classList.toggle("on", m==="text");
   $("selectBtn").classList.toggle("on", m==="select");
   $("signBtn").classList.toggle("on", m==="sign");
+  $("whiteBtn").classList.toggle("on", m==="white");           // v11.43
+  $("formBtn").classList.toggle("on", m==="form");             // v11.47
   ["textBtn","selectBtn","signBtn"].forEach(id=>$(id).classList.remove("pref"));  // v11.22
   $("markupBtn").classList.toggle("on", !!m);    // v11.11: bar shows a mode is active
   $("mkMenu").hidden = true;
   $("viewer").classList.toggle("textmode", m==="text");
   $("viewer").classList.toggle("selmode", m==="select");
-  document.querySelectorAll(".stage").forEach(s=>s.classList.toggle("placing", m==="sign"));
+  $("viewer").classList.toggle("formmode", m==="form");        // v11.47
+  // "white" (v11.43) shares the sign placement affordance: drag a box on a page
+  document.querySelectorAll(".stage").forEach(s=>s.classList.toggle("placing", m==="sign" || m==="white"));
   if (m==="text"){
     // buildSpanBoxes is async; contain any rejection (e.g. a page that mupdf
     // can't read in a malformed PDF) so it never escapes as an uncaught
@@ -2834,7 +3051,14 @@ function setMode(m){
       if (s.dataset.rendered) try { buildTextLayer(s, +s.dataset.page); } catch(e){}
     });
     setStatus("Select any text, then copy it.","ok");
-  } else if (m==="sign"){ setStatus("Drag a box where the signature should go.","ok"); }
+  } else if (m==="sign"){ setStatus(insImgPlacing
+      ? "Drag a box where the picture should go."
+      : "Drag a box where the signature should go.","ok"); }
+  else if (m==="white"){ setStatus("Drag a box over what you want covered — it is painted solid white.","ok"); }
+  else if (m==="form"){
+    // async: the field list is parsed on first entry (cached per epoch)
+    enterFormMode().catch(()=>{ setStatus("Could not read the form fields.","err"); });
+  }
   else {
     setStatus("");               // v11.17: exiting a mode just clears the toast — no "Ready." flash
     // v11.21: back in view mode — rebuild the always-on text layer on pages
@@ -2849,6 +3073,28 @@ function setMode(m){
 
 $("textBtn").onclick = ()=> setMode(mode==="text" ? null : "text");
 $("selectBtn").onclick = ()=> setMode(mode==="select" ? null : "select");
+// v11.43: whiteout mode + insert image (image reuses the sign placement flow)
+$("whiteBtn").onclick = ()=> setMode(mode==="white" ? null : "white");
+$("imgPlaceBtn").onclick = ()=>{ if (!$("imgPlaceBtn").disabled) $("insImgInput").click(); };
+$("insImgInput").onchange = async e=>{
+  const f = e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  showSpin(true,"Loading picture…");
+  try {
+    const im = await loadImage(await fileToDataURL(f));
+    // cap the placed image at 2000px on its long side — plenty for a photo
+    // drawn on a page, and keeps the saved file reasonable
+    const s = Math.min(1, 2000/Math.max(im.naturalWidth, im.naturalHeight));
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(im.naturalWidth*s));
+    c.height = Math.max(1, Math.round(im.naturalHeight*s));
+    c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+    signImgDataUrl = c.toDataURL("image/png");
+    insImgPlacing = true;
+    setMode("sign");
+  } catch(err){ setStatus("Could not load that picture: "+friendly(err),"err"); }
+  showSpin(false);
+};
 // Sign and Unlock were promoted from the More menu to the toolbar (v10.52).
 // Handlers are identical to the old menu items so behaviour is unchanged.
 $("signBtn").onclick = ()=> startSign();
@@ -3015,7 +3261,7 @@ function attachOverlay(stage, pageIndex){
   const ovl = stage.querySelector(".ovl");
   let start=null, rectEl=null;
   ovl.addEventListener("pointerdown", e=>{
-    if (mode!=="sign") return;
+    if (mode!=="sign" && mode!=="white") return;
     start={x:e.offsetX,y:e.offsetY};
     rectEl=document.createElement("div"); rectEl.className="selrect"; ovl.appendChild(rectEl);
     ovl.setPointerCapture(e.pointerId);
@@ -3033,8 +3279,127 @@ function attachOverlay(stage, pageIndex){
     start=null; rectEl.remove(); rectEl=null;
     if (pw<10||ph<10) return;
     const wPt=+stage.dataset.wpt, dispW=parseFloat(stage.style.width), s=dispW/wPt;
-    await placeSignature(pageIndex, px/s, py/s, pw/s, ph/s);
+    if (mode==="white") await applyWhiteout(pageIndex, px/s, py/s, pw/s, ph/s);
+    else await placeSignature(pageIndex, px/s, py/s, pw/s, ph/s);
   });
+  // v11.43: in Edit text mode, tapping EMPTY page space adds a new text box
+  // there. Taps on existing text land on the .span buttons (which stop
+  // propagation), so a click that reaches the overlay itself is empty space.
+  ovl.addEventListener("click", e=>{
+    if (mode!=="text" || e.target!==ovl) return;
+    const wPt=+stage.dataset.wpt, dispW=parseFloat(stage.style.width), s=dispW/wPt;
+    if (!wPt || !dispW) return;
+    openNewTextSheet(pageIndex, e.offsetX/s, e.offsetY/s);
+  });
+}
+
+// ---- v11.43: whiteout ------------------------------------------------------
+// Paints an opaque white rectangle over the drawn box. Deliberately a COVER,
+// not a removal: the content underneath is untouched (and on a text PDF is
+// still selectable), which is why the status says so. True removal of text is
+// what Edit text does; true redaction (content destroyed) is a later,
+// deliberately separate feature so nobody mistakes one for the other.
+async function applyWhiteout(pageIndex, xPt, yTopPt, wPt, hPt){
+  showSpin(true,"Covering…");
+  try {
+    pushUndo();
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    const pg = doc.getPage(pageIndex);
+    const H = pg.getHeight();
+    pg.drawRectangle({ x:xPt, y:H-(yTopPt+hPt), width:wPt, height:hPt, color:rgb(1,1,1) });
+    workingBytes = new Uint8Array(await doc.save());
+    reopen(); await render();
+    setStatus("Covered with white on page "+(pageIndex+1)+" — note it is painted over, not removed: "
+      +"text underneath can still be selected or extracted. Use Edit text to truly change text. Undo reverses it.","ok");
+  } catch(e){ setStatus("Could not cover that area: "+friendly(e),"err"); }
+  showSpin(false);
+}
+
+// ---- v11.43: add a new text box -------------------------------------------
+// The one Acrobat edit feature the app lacked entirely: putting text where the
+// document has none (filling an unlabelled gap, adding a note, completing a
+// flat form). Multi-line, size/colour/typeface from the same controls the
+// editor uses. The text is inserted with pdf-lib exactly like an edit's
+// replacement text, so Save/undo/compress treat it identically.
+async function addNewText(pageIndex, xPt, yTopPt, text, opts){
+  const t = String(text == null ? "" : text).replace(/\r\n?/g, "\n").split("\n");
+  while (t.length && !t[t.length-1].trim()) t.pop();
+  if (!t.length || !t.join("").trim()) return false;
+  showSpin(true,"Adding text…");
+  try {
+    pushUndo();
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    const pg = doc.getPage(pageIndex);
+    const H = pg.getHeight();
+    const size = opts && opts.size ? opts.size : 12;
+    const colour = (opts && opts.colour) || [0,0,0];
+    const font = await doc.embedFont(pickFontKeyed("", (opts && opts.font) || "sans"));
+    const lead = size * 1.25;
+    let substituted = false;
+    t.forEach((line, i)=>{
+      const safe = sanitizeForFont(line);
+      if (safe !== line) substituted = true;
+      if (!safe.trim()) return;
+      // yTopPt is where the finger tapped; treat it as the TOP of the first
+      // line, so the text appears just under the tap instead of straddling it.
+      pg.drawText(safe, { x:xPt, y:H-(yTopPt + size + i*lead), size,
+                          font, color:rgb(colour[0],colour[1],colour[2]) });
+    });
+    workingBytes = new Uint8Array(await doc.save());
+    reopen();
+    setMode("text");                      // stay in edit mode; boxes rebuild
+    await render();
+    setStatus("Text added on page "+(pageIndex+1)+"."
+      + (substituted ? " Some characters aren't available in that typeface and were shown as “?”." : ""),"ok");
+    return true;
+  } catch(e){ setStatus("Could not add the text: "+friendly(e),"err"); return false; }
+  finally { showSpin(false); }
+}
+function openNewTextSheet(pageIndex, xPt, yTopPt){
+  let size = 12, colour = "black", fontK = "sans";
+  const draw = ()=>{
+    $("sheet").innerHTML = h`
+      <h3>Add text · page ${pageIndex+1}</h3>
+      <p class="hint">New text is placed where you tapped. Use Return for more lines.</p>
+      <div class="row"><textarea id="ntIn" placeholder="Type here…"></textarea></div>
+      <div class="row telbl">Size</div>
+      <div class="row teseg" id="ntSize">
+        <button class="segb" data-d="-1">A −</button>
+        <button class="segb" id="ntSizeNow">${size.toFixed(1)} pt</button>
+        <button class="segb" data-d="1">A +</button>
+      </div>
+      <div class="row telbl">Colour</div>
+      <div class="row teseg tewrap" id="ntCol">
+        ${raw(TE_COLOURS.filter(c=>c.k!=="keep").map(c=>`<button class="segb${colour===c.k?" on":""}" data-k="${c.k}">${c.label}</button>`).join(""))}
+      </div>
+      <div class="row telbl">Typeface</div>
+      <div class="row teseg" id="ntFont">
+        ${raw(TE_FONTS.filter(f=>f.k!=="keep").map(f=>`<button class="segb${fontK===f.k?" on":""}" data-k="${f.k}">${f.label}</button>`).join(""))}
+      </div>
+      <div class="row"><button class="full" id="ntOk">Add text</button></div>
+      <div class="row"><button class="ghost full" id="ntCancel">Cancel</button></div>`;
+    $("ntSize").querySelectorAll("[data-d]").forEach(b=>
+      b.onclick = ()=>{
+        size = Math.min(96, Math.max(4, Math.round((size + (+b.dataset.d)*0.5)*2)/2));
+        $("ntSizeNow").textContent = size.toFixed(1)+" pt";
+      });
+    $("ntCol").querySelectorAll("[data-k]").forEach(b=>
+      b.onclick = ()=>{ colour = b.dataset.k;
+        $("ntCol").querySelectorAll("[data-k]").forEach(o=>o.classList.toggle("on", o===b)); });
+    $("ntFont").querySelectorAll("[data-k]").forEach(b=>
+      b.onclick = ()=>{ fontK = b.dataset.k;
+        $("ntFont").querySelectorAll("[data-k]").forEach(o=>o.classList.toggle("on", o===b)); });
+    $("ntOk").onclick = async ()=>{
+      const t = $("ntIn").value;
+      closeSheet();
+      await addNewText(pageIndex, xPt, yTopPt, t,
+        { size, colour:(TE_COLOURS.find(c=>c.k===colour)||{}).rgb, font: fontK });
+    };
+    $("ntCancel").onclick = closeSheet;
+  };
+  draw();
+  openSheet();
+  setTimeout(()=>{ const i=$("ntIn"); if(i) i.focus(); }, 100);
 }
 
 // Signature placement assumes an upright (0°) page, exactly like text editing.
@@ -3078,8 +3443,9 @@ async function placeSignature(pageIndex, xPt, yTopPt, wPt, hPt){
     const xPt2 = xPt + (wPt-dw)/2;
     pg.drawImage(img, { x:xPt2, y:yPt, width:dw, height:dh });
     workingBytes = new Uint8Array(await doc.save());
+    const wasPicture = insImgPlacing;           // v11.43: same flow places pictures
     reopen(); setMode(null); await render();
-    setStatus("Signature placed on page "+(pageIndex+1)+".","ok");
+    setStatus((wasPicture ? "Picture" : "Signature")+" placed on page "+(pageIndex+1)+".","ok");
   } catch(e){ setStatus("Could not place the signature: "+friendly(e),"err"); }
   showSpin(false);
 }
@@ -3142,6 +3508,7 @@ $("moreBtn").onclick = ()=>{
     <div class="mgrid">
       <button class="mtile" id="mComp" ${d}>${ic("compress")}<span>Compress</span></button>
       <button class="mtile" id="mUnlock">${ic("unlock")}<span>Unlock a PDF</span></button>
+      <button class="mtile" id="mFlat" ${d}>${ic("grid")}<span>Flatten form</span></button>
       <button class="mtile" id="mPng" ${d}>${ic("download")}<span>Save image</span></button>
     </div>
     <div class="mgrid mgrid2 mt12">
@@ -3162,6 +3529,18 @@ $("moreBtn").onclick = ()=>{
     $("unlockBtn").onclick();
   };
   $("mPng").onclick   = ()=>{ closeSheet(); exportVisiblePng(); };
+  // v11.47: flatten asks first — it is a one-way door (undo aside)
+  $("mFlat").onclick  = ()=>{
+    if (!workingBytes) return;
+    $("sheet").innerHTML = h`
+      <h3>Flatten this form?</h3>
+      <p class="hint">Every filled value becomes permanent page content and the fields stop being editable — useful before sending to systems that can't read form fields. Undo can reverse it while the document is open.</p>
+      <div class="row"><button class="full" id="flGo">Flatten</button></div>
+      <div class="row"><button class="ghost full" id="flNo">Cancel</button></div>`;
+    $("flGo").onclick = ()=>{ closeSheet(); flattenForm(); };
+    $("flNo").onclick = closeSheet;
+    openSheet();
+  };
   $("mAbout").onclick = ()=>{ closeSheet(); openAbout(); };
   $("mClose").onclick = closeSheet;
   openSheet();
@@ -3192,10 +3571,159 @@ function openAbout(){
       If the version above doesn't match your latest upload, fully close and
       reopen the app so it fetches the new build.
     </p>
-    <div class="row mt8"><button class="ghost full" id="abClose">Close</button></div>`;
+    <div class="row mt8"><button class="full" id="abSelfTest" ${workingBytes ? "" : "disabled"}>Run self-test on this document</button></div>
+    <div class="row"><button class="ghost full" id="abClose">Close</button></div>`;
+  $("abSelfTest").onclick = ()=> runSelfTest();
   $("abClose").onclick = closeSheet;
   openSheet();
 }
+
+// ---------------- v11.42 (Phase 0): self-test on the open document ----------
+// The whole pipeline — parse, render, text, edit plumbing, save round-trip,
+// lossless compress — run against the CURRENTLY OPEN document, on copies, so
+// real files can be verified on the real phone in one tap. Nothing the test
+// does can touch the document: workingBytes, MDOC, undo and the dirty flag are
+// never written. This exists because the v11.32–v11.40 regressions all passed
+// a green fixture suite and failed on the first real document: the corpus
+// harness (tests/corpus-tests.mjs) covers real files on the desktop, and this
+// covers them on the device itself.
+//
+// selfTestCore is pure on purpose (bytes in, results out, engines injected) so
+// tests/selftest-tests.mjs can run the SAME code in Node against corpus files.
+async function selfTestCore(bytes, eng, onStep){
+  const res = [];
+  const step = async (name, fn)=>{
+    if (onStep) await onStep(name);
+    try { const info = await fn(); res.push({ name, ok:true, info:String(info==null?"":info) }); }
+    catch(e){ res.push({ name, ok:false, info:String(e && e.message || e).slice(0,120) }); }
+  };
+  const open = b => eng.mupdf.Document.openDocument(b.slice(0), "application/pdf").asPDF();
+  let pages = 0, chars = 0;
+  await step("Opens and parses", ()=>{
+    const raw = eng.mupdf.Document.openDocument(bytes.slice(0), "application/pdf");
+    if (raw.needsPassword && raw.needsPassword()) { raw.destroy(); throw new Error("password-protected (open it unlocked to test)"); }
+    // Mirror the app's open path exactly: an owner-locked file (encrypted, no
+    // password) is decrypted up front, because every later stage — pdf-lib
+    // edits above all — must never see still-encrypted bytes. The first
+    // corpus run of an owner-locked seed caught precisely this.
+    let note = "";
+    try {
+      const enc = raw.getMetaData("encryption");
+      if (enc && enc !== "None"){
+        bytes = new Uint8Array(raw.asPDF().saveToBuffer("decrypt,garbage").asUint8Array());
+        note = ", owner restrictions removed on open";
+      }
+    } catch(e){}
+    raw.destroy();
+    const d = open(bytes);
+    pages = d.countPages(); d.destroy();
+    if (!(pages > 0)) throw new Error("no pages");
+    return pages + " page" + (pages>1?"s":"") + note;
+  });
+  if (!pages) return res;
+  await step("Page 1 renders", ()=>{
+    const d = open(bytes);
+    const p = d.loadPage(0);
+    const [x0,y0,x1,y1] = p.getBounds();
+    const pix = p.toPixmap(eng.mupdf.Matrix.scale(300/(x1-x0), 300/(x1-x0)), eng.mupdf.ColorSpace.DeviceRGB, false);
+    const ok = pix.getWidth() > 0 && pix.getHeight() > 0;
+    const wh = pix.getWidth()+"×"+pix.getHeight();
+    pix.destroy(); p.destroy(); d.destroy();
+    if (!ok) throw new Error("empty raster");
+    return wh;
+  });
+  await step("Text extraction", ()=>{
+    const d = open(bytes);
+    for (let i=0; i<Math.min(3, pages); i++){
+      const p = d.loadPage(i);
+      const st = p.toStructuredText("preserve-spans");
+      st.walk({ onChar(c){ if (c && c.trim()) chars++; } });
+      st.destroy(); p.destroy();
+    }
+    d.destroy();
+    return chars ? chars + " characters found" : "no text (scanned pages)";
+  });
+  await step("Edit/save round-trip", async ()=>{
+    const lib = await eng.PDFDocument.load(bytes, { ignoreEncryption:true });
+    const out = new Uint8Array(await lib.save());
+    const d = open(out);
+    const same = d.countPages() === pages; d.destroy();
+    if (!same) throw new Error("page count changed on save");
+    return "reopened, " + pages + " page" + (pages>1?"s":"");
+  });
+  if (chars > 0) await step("Text-edit plumbing (on a copy)", ()=>{
+    const d = open(bytes);
+    let band = null, bp = 0;
+    for (let i=0; i<Math.min(3, pages) && !band; i++){
+      const p = d.loadPage(i);
+      const st = p.toStructuredText("preserve-spans");
+      st.walk({ onChar(c, origin, font, size, quad){
+        if (band || !c || !c.trim()) return;
+        band = [quad[0]-1, quad[1]-1, quad[4]+1, quad[5]+1]; bp = i;
+      }});
+      st.destroy(); p.destroy();
+    }
+    if (!band){ d.destroy(); return "no editable span found"; }
+    const p = d.loadPage(bp);
+    const an = p.createAnnotation("Redact");
+    an.setRect(band); an.update();
+    p.applyRedactions(false);
+    p.destroy();
+    const out = u8(d.saveToBuffer("compress-images,garbage").asUint8Array());
+    d.destroy();
+    const d2 = open(out);
+    const same = d2.countPages() === pages; d2.destroy();
+    if (!same) throw new Error("pages lost in redaction save");
+    return "redact + save + reopen OK";
+  });
+  await step("Lossless compress pass", ()=>{
+    const d = open(bytes);
+    const out = u8(d.saveToBuffer("compress,compress-images,compress-fonts,subset-fonts,garbage").asUint8Array());
+    d.destroy();
+    const d2 = open(out);
+    const n2 = d2.countPages();
+    d2.destroy();
+    if (n2 !== pages) throw new Error("page count changed");
+    return (bytes.length/1024|0) + " → " + (out.length/1024|0) + " KB";
+  });
+  return res;
+}
+async function runSelfTest(){
+  if (!workingBytes || selfTestBusy) return;
+  selfTestBusy = true;
+  const big = workingBytes.length > 60*1024*1024;
+  const paint = (lines, running)=>{
+    $("sheet").innerHTML = h`
+      <h3>Self-test · ${fileName}</h3>
+      <p class="hint">Runs the whole pipeline on a COPY of this document — nothing is changed, saved or kept.</p>
+      <div class="about">${raw(lines.join(""))}</div>
+      ${raw(running ? "" : '<div class="row mt8"><button class="ghost full" id="stClose">Close</button></div>')}`;
+    const c = $("stClose"); if (c) c.onclick = closeSheet;
+  };
+  const row = (name, ok, info) =>
+    h`<div class="abrow"><span>${name}</span><b>${ok===null ? "…" : (ok ? "✓" : "✗")} ${info||""}</b></div>`;
+  try {
+    if (big){
+      paint([row("Self-test", false, "document too large to test in memory on a phone")], false);
+      return;
+    }
+    const done = [];
+    await selfTestCore(workingBytes, { mupdf, PDFDocument }, async (name)=>{
+      paint(done.concat(row(name, null, "")), true);
+      await new Promise(r=>setTimeout(r, 30));      // let the row paint
+    }).then(res=>{
+      const fails = res.filter(r=>!r.ok).length;
+      res.forEach(r=> done.push(row(r.name, r.ok, r.info)));
+      done.push(row("Result", !fails, fails ? fails + " step(s) failed — please report" : "all steps passed"));
+      paint(done, false);
+    });
+  } catch(e){
+    paint([row("Self-test", false, String(e && e.message || e))], false);
+  } finally {
+    selfTestBusy = false;
+  }
+}
+let selfTestBusy = false;
 
 // Close the open document and return to the empty state, releasing all memory.
 function closeFile(){
@@ -3444,6 +3972,8 @@ function openPagesGrid(keepSel){
       </button>`).join("");
     const acts = selecting ? h`<div class="pgacts">
         <button class="ghost" id="pgRot" ${sel.size?"":"disabled"}>⟳ Rotate</button>
+        <button class="ghost" id="pgDup" ${sel.size?"":"disabled"}>Duplicate</button>
+        <button class="ghost" id="pgBlank" ${sel.size===1?"":"disabled"}>+ Blank</button>
         <button class="ghost" id="pgExt" ${sel.size?"":"disabled"}>Copy</button>
         <button class="ghost danger" id="pgDel" ${sel.size?"":"disabled"}>Delete</button>
       </div>` : "";
@@ -3477,6 +4007,20 @@ function openPagesGrid(keepSel){
         closeSheet();
         await doExtract(pages);
       };
+      // v11.44: duplicate each selected page in place (copy lands right after
+      // its original), and insert a blank page after a single selected page.
+      $("pgDup").onclick = async ()=>{
+        const pages = [...sel].sort((a,b)=>a-b);
+        closeSheet();
+        await duplicatePages(pages);
+        openPagesGrid();
+      };
+      $("pgBlank").onclick = async ()=>{
+        const after = [...sel][0];
+        closeSheet();
+        await insertBlankAfter(after);
+        openPagesGrid();
+      };
       $("pgDel").onclick = async ()=>{
         if (sel.size >= n){ setStatus("Cannot delete every page.","err"); return; }
         const keep = ident().filter(i=>!sel.has(i));
@@ -3490,6 +4034,43 @@ function openPagesGrid(keepSel){
   }
   draw();
   openSheet();
+}
+
+// ---- v11.44: duplicate pages / insert a blank page ------------------------
+// Duplicate uses the same graftPage primitive Combine and scan-append use: the
+// page is grafted from a COPY of the document into the live one, right after
+// its original, so resources (fonts, images) are carried across properly
+// rather than re-rasterised. Grafting runs in reverse index order so earlier
+// insertion points stay valid.
+async function duplicatePages(pages){
+  if (!pages || !pages.length) return;
+  showSpin(true,"Duplicating "+pages.length+" page(s)…");
+  try {
+    pushUndo();
+    const src = mupdf.Document.openDocument(workingBytes.slice(0), "application/pdf").asPDF();
+    try {
+      for (const i of [...pages].sort((a,b)=>b-a)) MDOC.graftPage(i+1, src, i);
+    } finally { try{ src.destroy(); }catch(e){} }
+    workingBytes = u8(MDOC.saveToBuffer("garbage").asUint8Array());
+    reopen(); await render();
+    setStatus("Duplicated "+pages.length+" page"+(pages.length>1?"s":"")
+      +" — each copy sits right after its original. Now "+MDOC.countPages()+" pages.","ok");
+  } catch(e){ setStatus("Could not duplicate: "+friendly(e),"err"); }
+  showSpin(false);
+}
+// The blank page matches its neighbour's size, so an A4 document stays all-A4.
+async function insertBlankAfter(i){
+  showSpin(true,"Inserting a blank page…");
+  try {
+    pushUndo();
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    const ref = doc.getPage(i);
+    doc.insertPage(i+1, [ref.getWidth(), ref.getHeight()]);
+    workingBytes = new Uint8Array(await doc.save());
+    reopen(); await render();
+    setStatus("Blank page added after page "+(i+1)+" — Undo removes it.","ok");
+  } catch(e){ setStatus("Could not add a blank page: "+friendly(e),"err"); }
+  showSpin(false);
 }
 
 // ---------------- merge (mupdf graftPage, with chosen order) ----------------
@@ -5285,10 +5866,12 @@ $("compBtn").onclick = ()=>{
     <div class="row"><button class="full" id="cpHigh">High quality — pictures at 200 dpi</button></div>
     <div class="row"><button class="full" id="cpMed">Balanced — pictures at 150 dpi</button></div>
     <div class="row"><button class="full" id="cpLow">Smallest — pictures at 110 dpi</button></div>
+    <div class="row"><button class="full" id="cpTarget">Reach a size… — e.g. under 2 MB for an upload</button></div>
     <div class="row"><button class="ghost full" id="cpCancel">Cancel</button></div>`;
   $("cpHigh").onclick = ()=>{ closeSheet(); runCompress("high"); };
   $("cpMed").onclick  = ()=>{ closeSheet(); runCompress("medium"); };
   $("cpLow").onclick  = ()=>{ closeSheet(); runCompress("low"); };
+  $("cpTarget").onclick = ()=>{ openTargetSize(); };
   $("cpCancel").onclick = closeSheet;
   openSheet();
 };
@@ -5789,6 +6372,128 @@ function confirmRasterise(before, losslessLen){
     sheetOnDismiss = ()=> done(null);   // backdrop / Esc = cancel
   });
 }
+// ---- v11.46 (Phase 4): compress to a TARGET SIZE ---------------------------
+// "Get it under 2 MB for the portal" is the iLovePDF feature people actually
+// use. The search is over the machinery that already exists, most-careful
+// first: lossless pass, then per-image recompression at high → medium → low,
+// stopping at the first result that meets the target. Rasterising remains a
+// last resort that asks first when the document has real text.
+function openTargetSize(){
+  const cur = workingBytes.length;
+  $("sheet").innerHTML = h`
+    <h3>Compress to a size</h3>
+    <p class="hint">Currently ${fmtKB(cur)}. Pick a limit — the gentlest setting that fits is used, so quality is never given up without need.</p>
+    <div class="row teseg" id="tsPre">
+      <button class="segb" data-mb="10">10 MB</button>
+      <button class="segb" data-mb="5">5 MB</button>
+      <button class="segb" data-mb="2">2 MB</button>
+      <button class="segb" data-mb="1">1 MB</button>
+    </div>
+    <div class="row"><input type="number" id="tsIn" min="0.1" step="0.1" inputmode="decimal" placeholder="or type a size in MB"></div>
+    <div class="row"><button class="full" id="tsGo">Compress</button></div>
+    <div class="row"><button class="ghost full" id="tsCancel">Cancel</button></div>`;
+  const go = mb=>{
+    if (!(mb > 0)) return;
+    if (mb*1024*1024 >= cur){
+      setStatus("It is already under "+mb+" MB ("+fmtKB(cur)+") — nothing to do.","ok");
+      closeSheet(); return;
+    }
+    closeSheet(); runCompressToTarget(Math.round(mb*1024));
+  };
+  $("tsPre").querySelectorAll("[data-mb]").forEach(b=> b.onclick = ()=> go(+b.dataset.mb));
+  $("tsGo").onclick = ()=> go(parseFloat($("tsIn").value));
+  $("tsIn").onkeydown = e=>{ if (e.key==="Enter"){ e.preventDefault(); go(parseFloat($("tsIn").value)); } };
+  $("tsCancel").onclick = closeSheet;
+  openSheet();
+  setTimeout(()=>{ try{ $("tsIn").focus(); }catch(e){} }, 100);
+}
+async function runCompressToTarget(targetKB){
+  const before = workingBytes.length, target = targetKB*1024;
+  showSpin(true,"Compressing…");
+  try {
+    // 1) lossless structural pass (with font subsetting)
+    let best = u8(MDOC.saveToBuffer("compress,compress-images,compress-fonts,subset-fonts,garbage").asUint8Array());
+    let bestLen = best.length, how = "lossless clean-up only", rasterised = false;
+    // 2) per-image recompression, gentlest level first, stop when it fits
+    if (bestLen > target){
+      for (const level of ["high","medium","low"]){
+        showSpin(true,"Compressing… trying "+(level==="high"?"200":level==="medium"?"150":"110")+" dpi pictures");
+        let work = null;
+        try {
+          work = mupdf.Document.openDocument(workingBytes.slice(0), "application/pdf").asPDF();
+          const rep = await recompressImages(work, level, async (i,n)=>{
+            showSpin(true,"Compressing… picture "+i+" of "+n);
+            await new Promise(r=>setTimeout(r,0));
+          });
+          if (rep && rep.changed){
+            const cand = u8(work.saveToBuffer("compress,compress-fonts,subset-fonts,garbage").asUint8Array());
+            if (cand.length < bestLen){
+              best = cand; bestLen = cand.length;
+              how = rep.changed+" picture"+(rep.changed>1?"s":"")+" reduced ("
+                  + (level==="high"?"200":level==="medium"?"150":"110")+" dpi"
+                  + (rep.bilevel ? ", "+rep.bilevel+" stored black-and-white" : "")+")";
+            }
+          }
+        } catch(e){}
+        finally { try{ if(work) work.destroy(); }catch(e){} }
+        if (bestLen <= target) break;
+      }
+    }
+    // 3) still over target: rasterising is the only move left. Ask when the
+    //    document has real text; scans rasterise freely.
+    if (bestLen > target){
+      const rasterAll = async ()=>{
+        for (const step of COMPRESS.low.steps){
+          const bytes = await rasterize(step.dpi, step.q);
+          if (bytes.length < bestLen){ best=bytes; bestLen=bytes.length; rasterised=true; }
+          if (bytes.length <= target) break;
+        }
+        if (rasterised) how = "pages turned into pictures to reach the size";
+      };
+      if (sampledTextLength() >= 80){
+        showSpin(false);
+        const choice = await confirmRasterise(before, bestLen);
+        if (choice === null){ setStatus("Compression cancelled.","warn"); return; }
+        showSpin(true,"Compressing…");
+        if (choice === true) await rasterAll();
+      } else await rasterAll();
+    }
+    if (bestLen >= before){
+      showSpin(false);
+      setStatus("Already about as small as it usefully gets — "+fmtKB(before)+" left unchanged.","ok");
+      return;
+    }
+    const undoKept = pushUndoGuarded();
+    workingBytes = best instanceof Uint8Array ? best : new Uint8Array(best);
+    reopen(); await render();
+    showSpin(false);
+    showCompressReport(before, bestLen, target, how, rasterised, undoKept);
+  } catch(err){ setStatus("Could not compress: "+friendly(err),"err"); }
+  showSpin(false);
+}
+// The before/after report — what changed, whether the target was met, and what
+// was NOT touched. Shown for target-size compression, where "did it fit?" is
+// the whole question.
+function showCompressReport(before, after, target, how, rasterised, undoKept){
+  const met = after <= target;
+  const pct = Math.round(100*(1-after/before));
+  $("sheet").innerHTML = h`
+    <h3>${met ? "Done — it fits" : "As close as it gets"}</h3>
+    <div class="about">
+      <div class="abrow"><span>Before</span><b>${fmtKB(before)}</b></div>
+      <div class="abrow"><span>After</span><b>${fmtKB(after)} (${pct}% smaller)</b></div>
+      <div class="abrow"><span>Limit</span><b>${fmtKB(target)} — ${met ? "met" : "not reachable"}</b></div>
+      <div class="abrow"><span>What changed</span><b>${how}</b></div>
+      <div class="abrow"><span>Text</span><b>${rasterised ? "now pictures — no longer selectable" : "untouched — still selectable and searchable"}</b></div>
+    </div>
+    ${raw(met ? "" : '<p class="hint mt8">Below this the document stops being readable. If the limit is a hard one, try removing pages you don’t need first (All pages → Select → Delete).</p>')}
+    ${raw(undoKept ? "" : '<p class="hint mt8">Too large to keep an undo step for this.</p>')}
+    <div class="row mt8"><button class="full" id="crOk">OK</button></div>`;
+  $("crOk").onclick = closeSheet;
+  openSheet();
+  setStatus("Compressed: "+fmtKB(before)+" → "+fmtKB(after)+"."+(undoKept?" Undo reverses it.":""), met?"ok":"warn");
+}
+
 async function runCompress(level){
   const cfg=COMPRESS[level], before=workingBytes.length;
   showSpin(true,"Compressing…");
@@ -5798,7 +6503,10 @@ async function runCompress(level){
     //    own. It does not mutate MDOC or workingBytes, so we can still decide
     //    what to do before committing — and before taking the Undo snapshot,
     //    which keeps peak memory down.
-    let best = u8(MDOC.saveToBuffer("compress,compress-images,compress-fonts,garbage").asUint8Array());
+    // v11.46: subset-fonts joined the pass — embedded fonts are trimmed to the
+    // glyphs the document actually uses. A no-op on already-subset fonts
+    // (verified byte-identical), a real win on full embedded fonts.
+    let best = u8(MDOC.saveToBuffer("compress,compress-images,compress-fonts,subset-fonts,garbage").asUint8Array());
     let bestLen = best.length;
     let rasterised = false;
 
@@ -5817,7 +6525,7 @@ async function runCompress(level){
             await new Promise(r=>setTimeout(r,0));     // keep the UI alive
           });
           if (imgRep && imgRep.changed){
-            const cand = u8(work.saveToBuffer("compress,compress-fonts,garbage").asUint8Array());
+            const cand = u8(work.saveToBuffer("compress,compress-fonts,subset-fonts,garbage").asUint8Array());
             if (cand.length < bestLen){ best = cand; bestLen = cand.length; }
           }
         }

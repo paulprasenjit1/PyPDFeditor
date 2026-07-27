@@ -680,3 +680,15 @@ input[type=file] { display:none; }
            display:flex; align-items:center; justify-content:center; }
 .sigcard img { max-width:100%; max-height:48px; object-fit:contain; }
 .sigcard:active { background:#e6eaf2; }
+
+/* ---- v11.47: form filling ------------------------------------------------ */
+/* Tap targets over real AcroForm fields. Hidden outside Form mode. Dashed
+   blue reads as "fillable" against both white pages and the green edit
+   highlights; the background tint keeps tiny checkboxes findable. */
+.fbox{
+  position:absolute; display:none; padding:0; margin:0;
+  border:1.5px dashed #4d9fff; border-radius:3px;
+  background:rgba(77,159,255,.12); cursor:pointer;
+}
+#viewer.formmode .fbox{ display:block; }
+.fbox:focus-visible{ outline:2px solid #4d9fff; outline-offset:1px; }

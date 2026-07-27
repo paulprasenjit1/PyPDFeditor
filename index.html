@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.41">
+<html lang="en" data-build="11.47">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -129,7 +129,23 @@
     <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18c3 0 5 -10 7 -10c1 0 1 4 2 4c1 0 2 -2 3 -2"/><path d="M4 21h16"/></svg>
     <span>Sign</span>
   </button>
+  <!-- v11.47: fill real form fields (AcroForm) -->
+  <button class="segbtn" id="formBtn" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="5" rx="1"/><rect x="4" y="14" width="5" height="5" rx="1"/><path d="M5.5 16.5l1.2 1.2l2 -2.4"/></svg>
+    <span>Form</span>
+  </button>
+  <!-- v11.43: whiteout — drag a box that is painted opaque white -->
+  <button class="segbtn" id="whiteBtn" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="7" width="14" height="10" rx="1"/><path d="M8 4l3 3"/><path d="M13 4l3 3"/></svg>
+    <span>Whiteout</span>
+  </button>
+  <!-- v11.43: place a picture from Photos on the page (same drag-a-box flow as Sign) -->
+  <button class="segbtn" id="imgPlaceBtn" disabled>
+    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5 -4l3 3l4 -4l4 4"/></svg>
+    <span>Image</span>
+  </button>
 </div>
+<input type="file" id="insImgInput" accept="image/*" hidden>
 
 <!-- Legacy action buttons: hidden but kept in the DOM (build guard + tests +
      handlers); the More sheet's Compress / Unlock tiles trigger them. -->
