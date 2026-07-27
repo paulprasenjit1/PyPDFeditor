@@ -6,7 +6,7 @@
    - VENDOR_CACHE (~12MB: MuPDF wasm + pdf-lib) — bump ONLY when vendor/ files
      actually change. Kept across app releases, so updates no longer re-download
      the engine and the first load after an update is fast. */
-const APP_CACHE    = "pypdf-app-v11.29";
+const APP_CACHE    = "pypdf-app-v11.30";
 const VENDOR_CACHE = "pypdf-vendor-v1";
 
 const APP_SHELL = [

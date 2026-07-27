@@ -17,7 +17,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.29";
+const APP_BUILD = "11.30";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -92,10 +92,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "22 Jul 2026";   // v11.29
+const BUILD_DATETIME = "27 Jul 2026";   // v11.30
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "edited text now keeps the document's own font and size — no more Times-Roman substitution or shrinking when you correct a name or date.";
+const WHATS_NEW = "editing text no longer clips the lines above and below it, and a right-aligned or centred field stays lined up with its column.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -1977,24 +1977,62 @@ function encodeWithPdfFont(info, text){
       w += info.widths[idx];
     }
   }
-  return { hex: codes.join("").toUpperCase(), width: w/1000 };   // width is per 1pt of size
+  // width is per 1pt of font size; glyphs is what Tc gets multiplied by
+  return { hex: codes.join("").toUpperCase(), width: w/1000, glyphs: codes.length };
 }
 // Emit the text as raw content-stream operators against the page's existing
 // font resource. pdf-lib appends to the page content stream, so /key resolves
 // through the page's own (or inherited) /Resources — the same dictionary the
 // original text used.
-function drawWithPdfFont(pg, info, hex, x, y, size, colour){
+// `tc` is character spacing in points (the Tc operator), used to reproduce how
+// tightly the original line was set. Publishers kern body text, which a PDF
+// stores as a TJ array of glyph runs with offsets between them. We redraw with
+// a single Tj and have no access to those offsets, so the same words in the
+// same font come out a few percent wider than the text they replace — 87.5pt
+// against 84.9pt on the Cambria name field, enough to push a centred line
+// visibly off centre. Tc adds a fixed amount to every glyph's advance, which is
+// what kerning is; it does NOT distort the glyphs, and unlike horizontal
+// scaling (Tz) it leaves the font size that extractors report untouched — so
+// editing the same field twice can't ratchet it smaller. Text state belongs to
+// the graphics state, so the q/Q pair stops it leaking into later content.
+function drawWithPdfFont(pg, info, hex, x, y, size, colour, tc){
   const O = PDFOperator.of.bind(PDFOperator), N = PDFNumber.of.bind(PDFNumber);
-  pg.pushOperators(
+  const ops = [
     O("q",  []),
     O("BT", []),
     O("rg", [N(colour[0]), N(colour[1]), N(colour[2])]),
-    O("Tf", [PDFName.of(info.key), N(size)]),
+    O("Tf", [PDFName.of(info.key), N(size)])
+  ];
+  if (tc && Math.abs(tc) > 0.0005) ops.push(O("Tc", [N(+tc.toFixed(4))]));
+  ops.push(
     O("Tm", [N(1), N(0), N(0), N(1), N(x), N(y)]),
     O("Tj", [PDFHexString.of(hex)]),
     O("ET", []),
     O("Q",  [])
   );
+  pg.pushOperators.apply(pg, ops);
+}
+// Per-glyph spacing that makes our un-kerned run occupy the width the original
+// actually occupied. Returns 0 unless the string is long enough for the
+// estimate to mean anything and the correction is small enough to be tracking
+// rather than a sign that we mis-measured something.
+//
+// Divided by glyphs-1, not glyphs: a span's box is the UNION of its glyph
+// quads, and the last quad ends at that glyph's advance — the spacing added
+// after it falls outside the box. Dividing by the glyph count instead leaves a
+// systematic 0.2pt of slack that each re-edit of the same field would add
+// again, so a field edited five times crept 0.8pt wider.
+function trackingFor(sp, naturalWidth, glyphs, size){
+  const ink = sp.x1 - sp.x0;
+  if (!(naturalWidth > 1) || !(ink > 1) || !(glyphs > 1)) return 0;
+  if ((sp.text || "").trim().length < 4) return 0;
+  const tc = (ink - naturalWidth) / (glyphs - 1);
+  return Math.abs(tc) <= 0.12*(size || 11) ? tc : 0;
+}
+// The width a run will MEASURE as once drawn — same union-of-quads convention,
+// so it can be compared directly against a span box read back out of the page.
+function trackedWidth(enc, size, tc){
+  return enc.width*size + tc*Math.max(enc.glyphs - 1, 0);
 }
 // Does the captured resource still exist on the page after the redact + save?
 // ("garbage" collection drops a font whose only user was the text we erased.)
@@ -2093,26 +2131,128 @@ function sampleSpanBg(pageIndex, sp){
   } catch(e){ return null; }
   finally { try{ if(pix) pix.destroy(); }catch(e){} try{ if(page) page.destroy(); }catch(e){} }
 }
-// How much room the replacement actually has: from the start of this span to
-// whatever sits next on the same line, or the page edge.
-//
-// v11.29 — this used to be the span's OWN ink width, which was wrong twice
-// over. A substitute font with different metrics needs more room for the very
-// same words (Times renders "Dr. SANDIPAN PAUL" ~8% wider than Cambria), so
-// re-typing unchanged text silently shrank it; and a field with clear space to
-// its right was never allowed to use it. Measure the real gap instead, so the
-// size only drops when the text would genuinely collide with something.
-function availWidthFor(pageIndex, sp, pageW){
-  const own = sp.x1 - sp.x0;
-  let right = (pageW > 0 ? pageW : sp.x1 + own) - 4;      // keep a small page margin
+// ---- v11.30: edit geometry (redaction band, alignment, available width) -----
+// Everything here works off ONE fact about structured-text spans: a span's box
+// is the FONT box of its line (ascender to descender), not the ink. At normal
+// leading that box is TALLER than the line pitch — 11.25pt Helvetica reports a
+// 15.45pt box on 13.0pt leading — so the boxes of consecutive lines genuinely
+// OVERLAP by ~2.4pt. Any geometry that treats a span box as "just this line"
+// silently reaches into its neighbours.
+
+// The rectangle to redact. MuPDF drops every glyph whose box INTERSECTS this
+// rect, so the old rect (the span box, plus 1pt of padding all round) deleted
+// whatever sat above and below within the same columns:
+//   "Billing Address :" -> "Bill",  "C/o …, Near Park" -> "C/o …, South Col".
+// Clamp the rect vertically to the gap between the neighbouring lines. A band
+// through the x-height still intersects every glyph OF THIS LINE — mupdf
+// removes the whole glyph, ascenders and descenders included — while no longer
+// touching the lines above or below. It also shrinks the area whose background
+// gets erased, which is why an edit no longer punches a white slot through a
+// watermark or a coloured panel.
+function redactBandFor(pageIndex, sp){
+  let top = sp.y0 - 1, bot = sp.y1 + 1;
+  const cy = (sp.y0 + sp.y1) / 2;
   try {
     for (const o of getSpans(pageIndex)){
       if (o === sp) continue;
-      if (o.y1 <= sp.y0 + 1 || o.y0 >= sp.y1 - 1) continue;   // not on this line
-      if (o.x0 >= sp.x1 - 0.5 && o.x0 - 2 < right) right = o.x0 - 2;   // nearest neighbour, 2pt gutter
+      if (o.x1 <= sp.x0 - 1 || o.x0 >= sp.x1 + 1) continue;   // different column
+      const ocy = (o.y0 + o.y1) / 2;
+      if (ocy < cy && o.y1 > top) top = o.y1;                 // nearest line above
+      if (ocy > cy && o.y0 < bot) bot = o.y0;                 // nearest line below
     }
   } catch(e){}
-  return Math.max(right - sp.origin[0], own);            // never tighter than the original box
+  // Safety net for pathologically tight or overlapping typesetting: the band
+  // MUST still cross this line's x-height, or the redaction would remove
+  // nothing and the old text would survive under the new. Widening here can
+  // clip a neighbour, but it is still far tighter than the pre-v11.30 box.
+  const size = sp.size || 11, base = sp.origin ? sp.origin[1] : (sp.y0+sp.y1)/2;
+  const xhTop = base - 0.55*size, xhBot = base - 0.05*size;
+  if (!(bot - top > 0.2*size) || top > xhTop || bot < xhBot){
+    top = Math.min(top, xhTop);
+    bot = Math.max(bot, xhBot);
+  }
+  return [sp.x0 - 1, top, sp.x1 + 1, bot];
+}
+
+// Which edge of the block the line is anchored to. A right-aligned address
+// block was being re-typed from its LEFT edge, so a longer name grew past the
+// margin and the column stopped lining up ("Bandhana Paul" ran 7.5pt beyond the
+// 552.5pt right edge every other line shares). Decide from the block's own
+// evidence: gather the lines stacked with this one and see which edge they
+// agree on. Deliberately conservative — "left" (the pre-v11.30 behaviour) is
+// the default, and another mode has to win clearly to be used.
+function blockAlignFor(pageIndex, sp){
+  const out = { mode:"left", x:(sp.origin ? sp.origin[0] : sp.x0) };
+  try {
+    const size = sp.size || 11;
+    const cy = (sp.y0 + sp.y1) / 2;
+    const peers = [];
+    for (const o of getSpans(pageIndex)){
+      if (o === sp) continue;
+      if (Math.abs((o.y0+o.y1)/2 - cy) > 3.2*size) continue;       // not stacked with us
+      if (o.x1 <= sp.x0 - 1 || o.x0 >= sp.x1 + 1) continue;        // different column
+      peers.push(o);
+    }
+    if (peers.length < 2) return out;                              // not enough evidence
+    const all = peers.concat([sp]);
+    // Score each edge by how many lines sit on it, measured against the MEDIAN
+    // rather than as a max-min spread: one line whose last glyph has an unusual
+    // side bearing (or a producer whose metrics differ a hair from ours) must
+    // not veto an alignment the other four lines plainly share.
+    const tol = Math.max(1.5, 0.16*size);
+    const score = f => {
+      const v = all.map(f).sort((a,b)=>a-b);
+      const med = v[v.length>>1];
+      return v.filter(x=>Math.abs(x-med) <= tol).length / v.length;
+    };
+    const sL = score(s=>s.x0), sR = score(s=>s.x1), sC = score(s=>(s.x0+s.x1)/2);
+    // "left" is the pre-v11.30 behaviour and the default: another edge has to
+    // fit clearly better to be used. A block that agrees on BOTH edges is a
+    // fixed-width column, where left is already correct — don't churn it.
+    if (sR >= 0.8 && sR > sL + 0.3){ out.mode = "right";  out.x = sp.x1; }
+    else if (sC >= 0.8 && sC > sL + 0.3 && sC > sR + 0.3){ out.mode = "center"; out.x = (sp.x0+sp.x1)/2; }
+  } catch(e){}
+  return out;
+}
+
+// How much room the replacement actually has, measured in the direction the
+// text grows. Before v11.29 this was the span's OWN ink width, so a substitute
+// font with different metrics failed the fit test on the very same words; since
+// v11.29 it is the real gap to the next span, and as of v11.30 that gap is
+// measured leftwards for a right-aligned line and both ways for a centred one.
+function availWidthFor(pageIndex, sp, pageW, align){
+  const own = Math.max(sp.x1 - sp.x0, 1);
+  const mode = align ? align.mode : "left";
+  const pageR = (pageW > 0 ? pageW : sp.x1 + own) - 4;      // small page margin
+  let right = pageR, left = 4;
+  try {
+    for (const o of getSpans(pageIndex)){
+      if (o === sp) continue;
+      if (o.y1 <= sp.y0 + 1 || o.y0 >= sp.y1 - 1) continue;         // not on this line
+      if (o.x0 >= sp.x1 - 0.5) right = Math.min(right, o.x0 - 2);   // 2pt gutter
+      if (o.x1 <= sp.x0 + 0.5) left  = Math.max(left,  o.x1 + 2);
+    }
+  } catch(e){}
+  let avail;
+  if (mode === "right")       avail = align.x - left;
+  else if (mode === "center") avail = 2 * Math.min(align.x - left, right - align.x);
+  else                        avail = right - (sp.origin ? sp.origin[0] : sp.x0);
+  return Math.max(avail, own);                             // never tighter than the original
+}
+// Where to start drawing, once the final width is known.
+//
+// Expressed as a SHIFT from the original pen position rather than as an
+// absolute edge, and both widths are measured with the same font we are about
+// to draw with. That makes re-typing a field unchanged an exact no-op in every
+// alignment mode: delta is 0, so the text goes back on its original origin. An
+// absolute anchor can't promise that, because a span's box is the ink extent
+// while text is laid out by advance width, and the two differ by the first and
+// last glyph's side bearings (1.3pt on the Cambria name field — visible).
+function drawXFor(align, originX, origWidth, newWidth){
+  const delta = newWidth - origWidth;
+  if (!align || align.mode === "left") return originX;
+  if (align.mode === "right")  return originX - delta;        // right edge pinned
+  return originX - delta/2;                                   // centre pinned
 }
 // Shrink the draw size so a one-line replacement fits the space available
 // (pdf-lib doesn't wrap). Never shrink below half — better a slight overflow
@@ -2144,11 +2284,16 @@ async function applyTextEdit(pageIndex, sp, newText){
     const fres = capturePdfFont(pageIndex, sp.font);
     let pageW = 0;
     try { const mp = MDOC.loadPage(pageIndex); const b = mp.getBounds(); pageW = b[2]-b[0]; mp.destroy(); } catch(e){}
-    const avail = availWidthFor(pageIndex, sp, pageW);
+    // v11.30: which edge the block lines up on, how much room the text has in
+    // that direction, and a redaction band that can't reach the lines above and
+    // below. All three read getSpans, whose cache the redaction invalidates.
+    const align = blockAlignFor(pageIndex, sp);
+    const avail = availWidthFor(pageIndex, sp, pageW, align);
+    const band  = redactBandFor(pageIndex, sp);
     // 1) remove the original glyphs with a MuPDF redaction (no black box)
     const page = MDOC.loadPage(pageIndex);
     const an = page.createAnnotation("Redact");
-    an.setRect([sp.x0-1, sp.y0-1, sp.x1+1, sp.y1+1]);
+    an.setRect(band);
     an.update();
     page.applyRedactions(false);          // false => erase content, don't paint a box
     page.destroy();
@@ -2161,15 +2306,17 @@ async function applyTextEdit(pageIndex, sp, newText){
     const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
     const pg = doc.getPage(pageIndex);
     const H = pg.getHeight();
-    const w = (sp.x1-sp.x0)+2, h = (sp.y1-sp.y0)+2;
     // fill the erased area with the original background colour so an edit on a
     // coloured cell/banner doesn't leave a white patch. Keep pure white when the
     // background is (near-)white or not a trustworthy flat colour — so ordinary
     // white-page edits are byte-for-byte unchanged.
+    // v11.30: fill EXACTLY the band that was erased, not the whole span box —
+    // painting the full box would cover the descenders of the line above and
+    // the ascenders of the line below, which the tighter redaction now spares.
     const nearWhite = bg && bg.r>=245 && bg.g>=245 && bg.b>=245;
     const fillCol = (bg && bg.uniform && !nearWhite)
                   ? rgb(bg.r/255, bg.g/255, bg.b/255) : rgb(1,1,1);
-    pg.drawRectangle({ x:sp.x0-1, y:H-(sp.y1+1), width:w, height:h, color:fillCol });
+    pg.drawRectangle({ x:band[0], y:H-band[3], width:band[2]-band[0], height:band[3]-band[1], color:fillCol });
     // a text span is a single line; collapse any newlines the user typed so the
     // replacement stays on that line and can't flow downward past where the
     // original sat (and over the content below it)
@@ -2177,22 +2324,39 @@ async function applyTextEdit(pageIndex, sp, newText){
     let substituted = false;
     if (text.trim() !== ""){
       const baseSize = sp.size || 11;
-      const x = sp.origin[0], y = H - sp.origin[1];
+      const y = H - sp.origin[1];                       // baseline never moves
       // TIER 1 (v11.29): type it in the document's own embedded font, so the
       // edited field is indistinguishable from the text around it. Silently
       // declines (returns null) for exotic encodings or a character the
       // embedded subset doesn't carry.
       const enc = fres && pdfFontStillOnPage(pg, fres.key) ? encodeWithPdfFont(fres, text) : null;
       if (enc){
-        const drawSize = fitFontSizeWidth(enc.width, baseSize, avail);
-        drawWithPdfFont(pg, fres, enc.hex, x, y, drawSize, sp.color);
+        // v11.30: match the original's letter density, then shift by how much
+        // longer/shorter the replacement is, so a right-aligned or centred
+        // field stays lined up. Both widths are measured the same way, which
+        // makes re-typing a field unchanged an exact no-op.
+        const eo = encodeWithPdfFont(fres, sp.text);
+        const natural = eo ? eo.width*baseSize : 0;
+        const tc = eo ? trackingFor(sp, natural, eo.glyphs, baseSize) : 0;
+        // the replacement carries the same per-glyph spacing
+        const widthAt = s => trackedWidth(enc, s, tc);
+        let drawSize = fitFontSizeWidth(enc.width, baseSize, avail);
+        if (widthAt(drawSize) > avail && widthAt(drawSize) > 0)
+          drawSize = Math.max(baseSize*0.5, drawSize * avail / widthAt(drawSize));
+        const newW  = widthAt(drawSize);
+        const origW = tc ? (sp.x1 - sp.x0) : (eo ? natural : (sp.x1 - sp.x0));
+        drawWithPdfFont(pg, fres, enc.hex, drawXFor(align, sp.origin[0], origW, newW),
+                        y, drawSize, sp.color, tc);
       } else {
         // TIER 2: base-14 substitution, as before
         const font = await doc.embedFont(pickFont(sp.font));
         const safe = sanitizeForFont(text);
         substituted = safe !== text;     // some glyphs fell outside the base font
         const drawSize = fitFontSize(font, safe, baseSize, avail);   // shrink only if it would collide
-        pg.drawText(safe, { x, y, size:drawSize,
+        let drawn = sp.x1 - sp.x0, origW = drawn;
+        try { drawn = font.widthOfTextAtSize(safe, drawSize);
+              origW = font.widthOfTextAtSize(sanitizeForFont(sp.text), baseSize); } catch(e){}
+        pg.drawText(safe, { x:drawXFor(align, sp.origin[0], origW, drawn), y, size:drawSize,
                             font, color:rgb(sp.color[0],sp.color[1],sp.color[2]), lineHeight:drawSize*1.15 });
       }
     }

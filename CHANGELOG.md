@@ -4,6 +4,71 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.30] — 2026-07-27 — Text edit stops damaging the lines around it
+
+Backup: `backups/pypdf-pwa-v11.29-pre-v1130-editfix-restore-point.zip`.
+
+Reported with a before/after pair of an Amazon tax invoice: changing the billing
+name from "Prasenjit Paul" to "Bandhana Paul" left the page with
+`Billing Address :` reduced to `Bill`, `Shipping Address :` to `Ship`, and
+`C/o Bharat Ch Paul, South Colony, Near Park` to `C/o Bharat Ch Paul, South Col`
+— and the right-aligned address column no longer lined up.
+
+- **The redaction was reaching into the neighbouring lines.** A structured-text
+  span's box is the FONT box of its line, ascender to descender. At normal
+  leading that box is TALLER than the line pitch — 15.45pt for 11.25pt text set
+  on 13.0pt — so consecutive lines' boxes genuinely overlap by ~2.4pt, and the
+  editor was redacting the whole box plus another 1pt of padding. MuPDF drops
+  every glyph whose box intersects the redaction rect, so each edit silently
+  deleted whatever sat above and below it within the same columns. The rect is
+  now clamped to the clear gap between the lines above and below; a band through
+  the x-height still intersects every glyph OF THIS LINE (MuPDF removes whole
+  glyphs, ascenders and descenders included) while touching nothing else. The
+  background fill was widened to match — it now covers exactly the erased band,
+  where before it painted over the descenders of the line above. As a side
+  effect an edit erases far less of whatever sits behind the text, so it no
+  longer punches a white slot through a watermark or a coloured panel.
+- **Block alignment is preserved.** The replacement was always re-typed from the
+  original's LEFT edge, so in a right-aligned address block a longer name grew
+  past the margin and broke the column. The editor now reads the alignment off
+  the block itself — the lines stacked with this one are scored against the
+  median of their left edges, right edges and centres — and anchors the
+  replacement to whichever edge they agree on. Scoring by agreement-with-median
+  rather than by spread means one line whose last glyph has an unusual side
+  bearing can't veto an alignment the other four plainly share. Left stays the
+  default and another mode has to win clearly, so ordinary left-aligned text is
+  untouched.
+- **Placement is expressed as a shift from the original pen position**, with
+  both the old and new widths measured in the font actually being drawn. That
+  makes re-typing a field unchanged an exact no-op in every alignment mode,
+  which an absolute edge anchor cannot promise (a span's box is its ink extent,
+  but text is laid out by advance width, and the two differ by the first and
+  last glyph's side bearings — 1.3pt on the Cambria name field).
+- **The document's own letter spacing is reproduced.** Publishers kern body
+  text, stored as a TJ array of glyph runs with offsets we can't read back, so
+  an un-kerned redraw of the same words came out ~3% wide (87.5pt against
+  84.9pt on the Cambria name field) — enough to push a centred line visibly off
+  centre. The replacement now carries a `Tc` character-spacing value derived
+  from what the original actually measured. `Tc` was chosen over horizontal
+  scaling (`Tz`) because it doesn't distort the glyphs and doesn't change the
+  font size extractors report — `Tz` made the same field read back as 9.85pt
+  instead of 10pt, and re-editing it would have ratcheted it smaller each time.
+  The divisor is glyphs-1, not glyphs, because a span box is the union of its
+  glyph quads and the spacing after the last glyph falls outside it; dividing by
+  the glyph count left 0.16pt of slack that each re-edit added again.
+- Verified on the reported invoice: re-running the exact edit changes 3 lines
+  out of 209 across both pages, both pages keep their original line count, and a
+  150dpi pixel diff against the untouched original shows changed pixels ONLY
+  inside the two name fields (x 476.6–552.0pt) with page 2 bit-identical.
+  Editing the same field five times in a row moves it 0.08pt in total and does
+  not change its size.
+- Tests: new `tests/textedit-tests.mjs` (59 checks) added to `npm test`, running
+  the shipped helpers out of `app.js` against fixtures built at the leading that
+  triggered the bug — redaction bleed, left/right/centre alignment, size
+  preservation, deletion, embedded-font coverage and fallback, tracking maths,
+  consecutive edits, repeat-edit creep, and source guards on the fixed call
+  sites. Whole suite green: 13 + 15 + 59 + 30 + 17 + 91.
+
 ## [v11.29] — 2026-07-22 — Text edit keeps the document's own font and size
 
 Backup: `backups/pypdf-pwa-v11.28-pre-v1129-fontmatch-restore-point.zip`.
