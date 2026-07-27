@@ -781,3 +781,97 @@ function quadArea(q){
   for (let i=0;i<4;i++){ const p=q[i], r=q[(i+1)&3]; a+=p.x*r.y-r.x*p.y; }
   return Math.abs(a)/2;
 }
+
+// ---- v11.32: auto-capture readiness ---------------------------------------
+// Pure decision helpers for the live preview: may the shutter fire by itself?
+//
+// This deliberately does NOT reuse detectQuad's scoring. The detector answers
+// "which candidate in this frame is the most document-like", and it always
+// hands back its best guess — that is the right behaviour for drawing a green
+// box the user can then correct on the Adjust screen. Auto-capture asks a much
+// stricter question: "is this good enough to commit to a page WITHOUT the user
+// ever seeing the Adjust screen?" So the geometry is re-checked from scratch
+// with tighter limits, and anything marginal is refused. The asymmetry is
+// deliberate: a false negative costs one tap on the shutter, a false positive
+// silently files a cropped or skewed page the user may not notice until the
+// PDF is made.
+
+export const AUTO = {
+  MIN_AREA:  0.22,   // quad must cover >=22% of the frame (a real document fills the view)
+  MAX_AREA:  0.97,   // ... but not essentially all of it: that is the detector giving up
+  MIN_SIDE:  0.18,   // every side >= 18% of the SHORT frame edge
+  MIN_ANGLE: 72,     // corner angles, tighter than detectQuad's 65..115 —
+  MAX_ANGLE: 108,    //   a steep angle means an oblique view the warp will smear
+  MARGIN:    0.012,  // corners must sit this far inside the frame (fraction of each axis)
+  MOTION:    0.012,  // max per-frame corner drift, as a fraction of the frame diagonal
+};
+
+// Largest distance any one corner moved between two quads. Infinity when either
+// is missing, so "no previous quad" reads as "moving" and cannot arm a capture.
+export function quadMaxCornerShift(a, b){
+  if (!a || !b || a.length !== 4 || b.length !== 4) return Infinity;
+  let m = 0;
+  for (let i=0;i<4;i++){
+    const d = Math.hypot(a[i].x-b[i].x, a[i].y-b[i].y);
+    if (!isFinite(d)) return Infinity;
+    if (d > m) m = d;
+  }
+  return m;
+}
+
+// q: 4 corners TL,TR,BR,BL in video px. vw/vh: frame size. motionFrac: the last
+// per-frame corner drift divided by the frame diagonal (pass Infinity if
+// unknown). Returns { ok, why } — `why` names the first failing gate, which is
+// what the on-screen hint shows the user so a refusal is never mysterious.
+export function autoCaptureReady(q, vw, vh, motionFrac){
+  if (!q || q.length !== 4) return { ok:false, why:"no-quad" };
+  for (const p of q)
+    if (!p || !isFinite(p.x) || !isFinite(p.y)) return { ok:false, why:"no-quad" };
+  if (!(vw > 0) || !(vh > 0)) return { ok:false, why:"no-frame" };
+
+  // 1) Entirely inside the frame, with a margin. A document running off the
+  //    edge is already cropped, and the green outline alone does not make that
+  //    obvious — the line simply sits along the edge of the screen.
+  const mx = vw*AUTO.MARGIN, my = vh*AUTO.MARGIN;
+  for (const p of q)
+    if (p.x < mx || p.y < my || p.x > vw-mx || p.y > vh-my) return { ok:false, why:"off-frame" };
+
+  // 2) Convex with no collapsed side. A self-intersecting or slivered quad
+  //    warps to garbage; quadIsSane is the same test detectQuad applies, but
+  //    with a larger minimum side because we are committing unreviewed.
+  const shortEdge = Math.min(vw, vh);
+  let sign = 0;
+  for (let i=0;i<4;i++){
+    const a=q[i], b=q[(i+1)&3], c=q[(i+2)&3];
+    if (Math.hypot(b.x-a.x, b.y-a.y) < AUTO.MIN_SIDE*shortEdge) return { ok:false, why:"too-small" };
+    const cr=(b.x-a.x)*(c.y-b.y)-(b.y-a.y)*(c.x-b.x);
+    if (cr){ const s=cr>0?1:-1; if(!sign) sign=s; else if(s!==sign) return { ok:false, why:"not-convex" }; }
+  }
+
+  // 3) Fills a sensible share of the frame.
+  const area = quadArea(q)/(vw*vh);
+  if (area < AUTO.MIN_AREA) return { ok:false, why:"too-small" };
+  if (area > AUTO.MAX_AREA) return { ok:false, why:"whole-frame" };
+
+  // 4) Corner angles near 90 degrees — i.e. the phone is roughly square-on.
+  //    A perspective correction from a steep angle stretches the far edge and
+  //    softens its text, which is exactly the failure the user cannot undo
+  //    later without rescanning.
+  for (let i=0;i<4;i++){
+    const a=q[(i+3)&3], b=q[i], c=q[(i+1)&3];
+    const v1x=a.x-b.x, v1y=a.y-b.y, v2x=c.x-b.x, v2y=c.y-b.y;
+    const m=Math.hypot(v1x,v1y)*Math.hypot(v2x,v2y)||1;
+    const ang=Math.acos(Math.max(-1,Math.min(1,(v1x*v2x+v1y*v2y)/m)))*180/Math.PI;
+    if (ang < AUTO.MIN_ANGLE || ang > AUTO.MAX_ANGLE) return { ok:false, why:"angled" };
+  }
+
+  // 5) Held still. This is the gate that the existing "locked" state does NOT
+  //    give us: liveStable counts frames the detection stayed CLOSE, and
+  //    quadClose's tolerance is 18% of the span — generous by design, so the
+  //    outline does not flicker. A slow, steady hand drift therefore keeps
+  //    incrementing liveStable while the page is visibly moving. Motion is
+  //    checked separately and tightly.
+  if (!(motionFrac <= AUTO.MOTION)) return { ok:false, why:"moving" };
+
+  return { ok:true, why:"" };
+}

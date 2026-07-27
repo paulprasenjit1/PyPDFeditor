@@ -2,7 +2,10 @@
 import * as mupdf from "./vendor/mupdf/mupdf.js";
 // shared scanner pixel math + edge detection (also imported by the scan worker
 // — one source of truth for the warp, filters and document edge detection)
-import { warpCore, colourBalanceCore, detectQuad, flattenIllumination, documentEnhance, idCardEnhance } from "./scan-core.js";
+// NOTE: keep this on ONE line. tests/harness.mjs and tests/scenario-tests.mjs
+// evaluate app.js by stripping `^import .*$` line by line, so a wrapped import
+// statement leaves a dangling `... } from "./scan-core.js";` behind.
+import { warpCore, colourBalanceCore, detectQuad, flattenIllumination, documentEnhance, idCardEnhance, autoCaptureReady, quadMaxCornerShift, AUTO } from "./scan-core.js";
 
 const $ = id => document.getElementById(id);
 // v11.18: belt-and-braces dark keyboard — set color-scheme on the root via the
@@ -17,12 +20,13 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.31";
+const APP_BUILD = "11.38";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","idToggle","cropReset","cropRetake","cropUse",
+    "autoBtn","paperBtn","idBothToggle",
     "ge0","ge1","ge2","ge3","he0","he1","he2","he3"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
@@ -92,10 +96,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.31
+const BUILD_DATETIME = "27 Jul 2026";   // v11.38
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "the green document outline no longer disappears after you add a page — it now follows the camera view whenever it changes size.";
+const WHATS_NEW = "you can now sign with your finger instead of hunting for a photo of your signature, and the app remembers it for next time.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -594,6 +598,9 @@ async function openRecentSheet(id){
     <h3>${entry.name}</h3>
     <p class="hint">${fmtKB(entry.size)} · stays only on this phone.</p>
     <div class="row"><button class="full" id="rsOpen">Open</button></div>
+    <!-- v11.35: open it and go straight to the camera, so pages land on the end
+         of THIS document. Needs the stored bytes, same as Share. -->
+    <div class="row"><button class="ghost full" id="rsScanAdd" ${shareBytes && shareBytes.length ? "" : "disabled"}>Scan more pages into this</button></div>
     <div class="row"><button class="ghost full" id="rsShare" ${shareBytes && shareBytes.length ? "" : "disabled"}>Share… (WhatsApp, Mail, AirDrop)</button></div>
     <div class="row"><button class="ghost full" id="rsStar">${entry.pinned ? "Remove star" : "Star"}</button></div>
     <div class="row"><button class="ghost danger full" id="rsDel">Remove from Recents</button></div>
@@ -614,6 +621,21 @@ async function openRecentSheet(id){
       await openBytes(bytes, entry.name || "document.pdf");
     } catch(e){ setStatus("Could not open it: "+friendly(e),"err"); }
     showSpin(false);
+  };
+  $("rsScanAdd").onclick = async ()=>{
+    closeSheet();
+    if ($("bigOpen").disabled){ setStatus("One moment — the engine is still loading.","warn"); return; }
+    try {
+      const bytes = await idbGet(id);
+      if (!bytes || !bytes.length) throw new Error("no longer stored on this device");
+      showSpin(true,"Opening…");
+      await openBytes(bytes, entry.name || "document.pdf");
+      showSpin(false);
+      // only enter the scanner once the document is genuinely open, so a failed
+      // open can't leave the camera pointing at nothing to append to
+      if (workingBytes) await startScan(true);
+      else setStatus("Could not open that document, so there is nothing to add pages to.","err");
+    } catch(e){ showSpin(false); setStatus("Could not open it: "+friendly(e),"err"); }
   };
   $("rsStar").onclick = ()=>{ closeSheet(); recentsToggleStar(id); };
   $("rsDel").onclick  = ()=>{ closeSheet(); recentsRemove(id); setStatus("Removed from Recents.","ok"); };
@@ -2076,17 +2098,91 @@ async function openTextEditor(pageIndex, spanIndex){
   }
   openTextEditorSheet(pageIndex, sp);
 }
+// v11.37: the edit sheet gained a paragraph mode and real type controls.
+// Colours are the six that actually get used on a document; an arbitrary
+// picker on a phone is fiddly and almost always ends in "black" anyway.
+const TE_COLOURS = [
+  { k:"keep",  label:"Same",   rgb:null },
+  { k:"black", label:"Black",  rgb:[0,0,0] },
+  { k:"grey",  label:"Grey",   rgb:[0.42,0.45,0.5] },
+  { k:"red",   label:"Red",    rgb:[0.78,0.11,0.11] },
+  { k:"blue",  label:"Blue",   rgb:[0.11,0.32,0.78] },
+  { k:"green", label:"Green",  rgb:[0.08,0.5,0.24] },
+  { k:"white", label:"White",  rgb:[1,1,1] },
+];
+const TE_FONTS = [
+  { k:"keep",    label:"Same" },
+  { k:"sans",    label:"Sans" },
+  { k:"serif",   label:"Serif" },
+  { k:"mono",    label:"Mono" },
+];
 function openTextEditorSheet(pageIndex, sp){
-  $("sheet").innerHTML = h`
-    <h3>Edit text · page ${pageIndex+1}</h3>
-    <p class="hint">The original text is removed and replaced with what you type, matching its position, size and colour. Leave empty to just delete it.</p>
-    <div class="row"><textarea id="teIn"></textarea></div>
-    <div class="row"><button class="full" id="teOk">Replace</button></div>
-    <div class="row"><button class="ghost full" id="teCancel">Cancel</button></div>`;
-  $("teIn").value = sp.text;
-  $("teOk").onclick = async ()=>{ const t=$("teIn").value; closeSheet(); await applyTextEdit(pageIndex, sp, t); };
-  $("teCancel").onclick = closeSheet;
-  openSheet();  setTimeout(()=>$("teIn").focus(), 100);
+  const spans = getSpans(pageIndex);
+  const idx = spans.indexOf(sp);
+  const block = idx >= 0 ? paragraphBlock(spans, idx) : null;
+  const canBlock = !!(block && block.multi);
+  // Paragraph mode is the default WHEN there is a paragraph, because that is
+  // almost always what someone means by "edit this text"; the single-line
+  // behaviour is one tap away and is still what a form field gets.
+  let asBlock = canBlock;
+  let size = null;            // null = keep the original
+  let colour = "keep", fontK = "keep";
+
+  const draw = ()=>{
+    const body = asBlock ? block.lines.map(l=>l.text).join(" ") : sp.text;
+    $("sheet").innerHTML = h`
+      <h3>Edit text · page ${pageIndex+1}</h3>
+      <p class="hint">${asBlock
+        ? "The whole paragraph ("+block.lines.length+" lines) is replaced and re-wrapped to its own width."
+        : "This line is replaced, keeping its position, size and colour."} Leave it empty to delete the text.</p>
+      ${raw(canBlock ? `<div class="row teseg" id="teScope">
+          <button class="segb${asBlock?" on":""}" data-v="1">Whole paragraph</button>
+          <button class="segb${asBlock?"":" on"}" data-v="0">This line only</button>
+        </div>` : "")}
+      <div class="row"><textarea id="teIn"></textarea></div>
+      <div class="row telbl">Size</div>
+      <div class="row teseg" id="teSize">
+        <button class="segb" data-d="-1">A −</button>
+        <button class="segb" id="teSizeNow">${(size==null ? (sp.size||11) : size).toFixed(1)} pt</button>
+        <button class="segb" data-d="1">A +</button>
+      </div>
+      <div class="row telbl">Colour</div>
+      <div class="row teseg tewrap" id="teCol">
+        ${raw(TE_COLOURS.map(c=>`<button class="segb${colour===c.k?" on":""}" data-k="${c.k}">${c.label}</button>`).join(""))}
+      </div>
+      <div class="row telbl">Typeface</div>
+      <div class="row teseg" id="teFont">
+        ${raw(TE_FONTS.map(f=>`<button class="segb${fontK===f.k?" on":""}" data-k="${f.k}">${f.label}</button>`).join(""))}
+      </div>
+      <div class="row"><button class="full" id="teOk">Replace</button></div>
+      <div class="row"><button class="ghost full" id="teCancel">Cancel</button></div>`;
+    $("teIn").value = body;
+    if (canBlock) $("teScope").querySelectorAll("[data-v]").forEach(b=>
+      b.onclick = ()=>{ asBlock = b.dataset.v === "1"; draw(); });
+    $("teSize").querySelectorAll("[data-d]").forEach(b=>
+      b.onclick = ()=>{
+        const cur = size == null ? (sp.size||11) : size;
+        size = Math.min(96, Math.max(4, Math.round((cur + (+b.dataset.d)*0.5)*2)/2));
+        $("teSizeNow").textContent = size.toFixed(1)+" pt";
+      });
+    $("teSizeNow").onclick = ()=>{ size = null; $("teSizeNow").textContent = (sp.size||11).toFixed(1)+" pt"; };
+    $("teCol").querySelectorAll("[data-k]").forEach(b=>
+      b.onclick = ()=>{ colour = b.dataset.k;
+        $("teCol").querySelectorAll("[data-k]").forEach(o=>o.classList.toggle("on", o===b)); });
+    $("teFont").querySelectorAll("[data-k]").forEach(b=>
+      b.onclick = ()=>{ fontK = b.dataset.k;
+        $("teFont").querySelectorAll("[data-k]").forEach(o=>o.classList.toggle("on", o===b)); });
+    $("teOk").onclick = async ()=>{
+      const t = $("teIn").value;
+      const opts = { size, colour: (TE_COLOURS.find(c=>c.k===colour)||{}).rgb, font: fontK };
+      closeSheet();
+      if (asBlock && canBlock) await applyBlockEdit(pageIndex, block, t, opts);
+      else await applyTextEdit(pageIndex, sp, t, opts);
+    };
+    $("teCancel").onclick = closeSheet;
+  };
+  draw();
+  openSheet();  setTimeout(()=>{ const i=$("teIn"); if(i) i.focus(); }, 100);
 }
 
 // Estimate the background colour immediately AROUND a text span by rendering the
@@ -2215,6 +2311,130 @@ function blockAlignFor(pageIndex, sp){
   return out;
 }
 
+// ---- v11.37: paragraphs (pure) -------------------------------------------
+// Until v11.37 a "span" — one line — was the largest thing that could be
+// edited. That is fine for a form field and useless for a sentence: changing
+// "twelve" to "twenty-four" in the middle of a paragraph left the rest of the
+// line short and every line below it untouched, so the text no longer read as
+// a paragraph. Editing a paragraph means re-wrapping it, which first means
+// knowing which lines belong to it.
+//
+// Pure on purpose: it takes the spans array rather than a page index, so the
+// grouping can be driven directly by tests with hand-built fixtures.
+//
+// A paragraph is a run of lines that: overlap horizontally (same column), are
+// set at the same size, are spaced at a consistent pitch, and are not
+// separated by a gap large enough to be a paragraph break. Deliberately
+// conservative — a block that is not clearly one paragraph comes back as the
+// single line it started from, which is the pre-v11.37 behaviour.
+function paragraphBlock(spans, idx){
+  const sp = spans && spans[idx];
+  if (!sp) return null;
+  const size = sp.size || 11;
+  const single = { lines:[sp], indexes:[idx], size, leading:size*1.2, x0:sp.x0, x1:sp.x1, multi:false };
+  if (spans.length < 2) return single;
+
+  const sameFamily = (a,b)=>{
+    if (Math.abs((a.size||11) - (b.size||11)) > 0.6) return false;
+    // Colour must match too: a heading or a highlighted term re-wrapped into
+    // the body would silently lose its colour.
+    for (let c=0;c<3;c++) if (Math.abs((a.color?a.color[c]:0) - (b.color?b.color[c]:0)) > 0.02) return false;
+    return true;
+  };
+  const overlaps = (a,b)=>{
+    const lo = Math.max(a.x0, b.x0), hi = Math.min(a.x1, b.x1);
+    return (hi - lo) > 0.35 * Math.min(a.x1-a.x0, b.x1-b.x0);
+  };
+  // Restrict to the seed's OWN column before walking. Sorting the whole page by
+  // baseline interleaves side-by-side columns — a two-column layout gives
+  // left1, right1, left2, right2… with equal baselines — and a walk over that
+  // list stops at the very first neighbour, so a paragraph in a two-column
+  // document could never be found at all. Filtering first is also what makes
+  // the pitch check meaningful: it then measures the gap to the next line of
+  // THIS column rather than to whatever sits beside it.
+  const order = spans.map((s,i)=>({ s, i }))
+                     .filter(o=> o.s && o.s.origin && (o.i === idx || overlaps(sp, o.s)))
+                     .sort((a,b)=> a.s.origin[1] - b.s.origin[1]);
+  const at = order.findIndex(o=>o.i === idx);
+  if (at < 0) return single;
+  // Pitch: the gap between consecutive baselines. Normal leading is 1.0x to
+  // 1.6x the size; anything looser is a paragraph break, and anything tighter
+  // means the two lines are not stacked at all (side-by-side columns whose
+  // boxes happen to overlap).
+  const pitchOk = (dy)=> dy > size*0.85 && dy < size*2.1;
+
+  const picked = [order[at]];
+  for (let dir of [-1, 1]){
+    let k = at, guardPitch = 0;
+    for (;;){
+      const j = k + dir;
+      if (j < 0 || j >= order.length) break;
+      const a = order[k].s, b = order[j].s;
+      const dy = Math.abs(b.origin[1] - a.origin[1]);
+      if (!pitchOk(dy) || !sameFamily(a,b) || !overlaps(a,b)) break;
+      // Once a pitch is established, a later line must keep it: a tighter or
+      // looser step is a different block even if everything else matches.
+      if (guardPitch && Math.abs(dy - guardPitch) > Math.max(1.2, size*0.28)) break;
+      guardPitch = guardPitch || dy;
+      picked.push(order[j]);
+      k = j;
+    }
+  }
+  if (picked.length < 2) return single;
+  picked.sort((a,b)=> a.s.origin[1] - b.s.origin[1]);
+  const lines = picked.map(p=>p.s);
+  // Leading is the MEDIAN step, not the mean: one line carrying a superscript
+  // or an inline image can stretch a single gap without changing the setting.
+  const steps = [];
+  for (let i=1;i<lines.length;i++) steps.push(lines[i].origin[1] - lines[i-1].origin[1]);
+  steps.sort((a,b)=>a-b);
+  const leading = steps[steps.length>>1] || size*1.2;
+  return {
+    lines, indexes: picked.map(p=>p.i), size, leading, multi:true,
+    x0: Math.min(...lines.map(l=>l.x0)),
+    // The right edge of a paragraph is where the FULL lines end, not where the
+    // last (short) line happens to stop — otherwise every paragraph would be
+    // re-wrapped to the width of its own final line and grow taller each time.
+    x1: (()=>{ const w = lines.map(l=>l.x1).sort((a,b)=>a-b); return w[Math.floor(w.length*0.75)] || w[w.length-1]; })(),
+  };
+}
+// Greedy line breaking. `measure` returns the width of a string at the size
+// being laid out. Words longer than the line are given their own line rather
+// than being broken mid-word: hyphenation needs a dictionary, and a wrong
+// hyphen is worse than a long line.
+function wrapLines(text, maxWidth, measure){
+  const out = [];
+  const paras = String(text == null ? "" : text).split(/\r?\n/);
+  for (const para of paras){
+    const words = para.split(/\s+/).filter(w=>w.length);
+    if (!words.length){ out.push(""); continue; }
+    let line = "";
+    for (const word of words){
+      const cand = line ? line + " " + word : word;
+      if (line && measure(cand) > maxWidth){ out.push(line); line = word; }
+      else line = cand;
+    }
+    if (line) out.push(line);
+  }
+  return out.length ? out : [""];
+}
+// Largest size at or below `start` whose wrapped text still fits in `maxLines`.
+// Shrinking is preferred to overflowing: text that runs past the bottom of a
+// paragraph lands on whatever is underneath it, which the user cannot see
+// coming and cannot easily undo.
+function fitBlockSize(text, maxWidth, maxLines, start, measureAt, floor){
+  const lo = Math.max(floor || start*0.7, 1);
+  let size = start;
+  for (let i=0; i<14; i++){
+    const n = wrapLines(text, maxWidth, s=>measureAt(s, size)).length;
+    if (n <= maxLines) return { size, lines: wrapLines(text, maxWidth, s=>measureAt(s, size)), overflow:false };
+    if (size <= lo + 0.01) break;
+    size = Math.max(lo, size - Math.max(0.25, start*0.05));
+  }
+  const lines = wrapLines(text, maxWidth, s=>measureAt(s, size));
+  return { size, lines, overflow: lines.length > maxLines };
+}
+
 // How much room the replacement actually has, measured in the direction the
 // text grows. Before v11.29 this was the span's OWN ink width, so a substitute
 // font with different metrics failed the fit test on the very same words; since
@@ -2272,7 +2492,115 @@ function fitFontSizeWidth(width1pt, size, avail){
   return wAt > avail ? Math.max(size*0.5, size*avail/wAt) : size;
 }
 
-async function applyTextEdit(pageIndex, sp, newText){
+// v11.37: an explicit typeface choice overrides the name-matching in pickFont.
+function pickFontKeyed(name, key){
+  if (key === "sans")  return StandardFonts.Helvetica;
+  if (key === "serif") return StandardFonts.TimesRoman;
+  if (key === "mono")  return StandardFonts.Courier;
+  return pickFont(name);
+}
+// ---- v11.37: edit a whole paragraph, re-wrapping it -----------------------
+// The single-line path (applyTextEdit, below) is unchanged and still handles a
+// form field. This one exists because a sentence is not a line: changing a word
+// in the middle of a paragraph has to re-flow every line after it, or the
+// paragraph stops reading as one.
+//
+// The ordering is the same as the single-line path and for the same reason:
+// everything that reads getSpans is read BEFORE the redaction, because the
+// redaction invalidates that cache.
+async function applyBlockEdit(pageIndex, block, newText, opts){
+  opts = opts || {};
+  showSpin(true, "Editing paragraph…");
+  try {
+    pushUndo();
+    const first = block.lines[0];
+    const bg    = sampleSpanBg(pageIndex, first);
+    const fres  = (opts.font && opts.font !== "keep") ? null : capturePdfFont(pageIndex, first.font);
+    const align = blockAlignFor(pageIndex, first);
+    const bands = block.lines.map(l=> redactBandFor(pageIndex, l));
+
+    // 1) erase every line of the paragraph in ONE redaction pass
+    const page = MDOC.loadPage(pageIndex);
+    for (const b of bands){
+      const an = page.createAnnotation("Redact");
+      an.setRect(b);
+      an.update();
+    }
+    page.applyRedactions(false);
+    page.destroy();
+    workingBytes = u8(MDOC.saveToBuffer("compress-images,garbage").asUint8Array());
+
+    // 2) repaint the erased bands, then set the new text into the same shape
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    const pg  = doc.getPage(pageIndex);
+    const H   = pg.getHeight();
+    const nearWhite = bg && bg.r>=245 && bg.g>=245 && bg.b>=245;
+    const fillCol = (bg && bg.uniform && !nearWhite)
+                  ? rgb(bg.r/255, bg.g/255, bg.b/255) : rgb(1,1,1);
+    for (const b of bands)
+      pg.drawRectangle({ x:b[0], y:H-b[3], width:b[2]-b[0], height:b[3]-b[1], color:fillCol });
+
+    const text = String(newText == null ? "" : newText);
+    let overflow = false, substituted = false, usedLines = 0;
+    if (text.trim() !== ""){
+      const startSize = opts.size != null ? opts.size : (block.size || first.size || 11);
+      const colour = opts.colour || first.color || [0,0,0];
+      const width  = Math.max(12, block.x1 - block.x0);
+      const maxLines = block.lines.length;
+
+      // Measure in whatever face the text will actually be drawn in — measuring
+      // in one font and drawing in another is the v11.29 bug all over again.
+      let b14 = null;
+      const encOK = fres && pdfFontStillOnPage(pg, fres.key);
+      if (!encOK) b14 = await doc.embedFont(pickFontKeyed(first.font, opts.font));
+      const measureAt = (s, size)=>{
+        if (encOK){ const e = encodeWithPdfFont(fres, s); return e ? e.width*size : Infinity; }
+        try { return b14.widthOfTextAtSize(sanitizeForFont(s), size); } catch(e){ return Infinity; }
+      };
+      const fit = fitBlockSize(text, width, maxLines, startSize, measureAt, startSize*0.7);
+      overflow = fit.overflow;
+      usedLines = fit.lines.length;
+
+      // Baselines: keep the paragraph's own first baseline and its own leading,
+      // so a re-wrapped paragraph sits exactly where the old one did.
+      const y0 = first.origin[1], lead = block.leading || fit.size*1.2;
+      for (let i=0; i<fit.lines.length; i++){
+        const line = fit.lines[i];
+        if (!line) continue;
+        const y = H - (y0 + i*lead);
+        const w = measureAt(line, fit.size);
+        // A wrapped line is a full line: it is anchored on the block's own
+        // edges, not on the old line's ink extent, which is where the text
+        // happened to stop before.
+        const x = align.mode === "right"  ? block.x1 - w
+                : align.mode === "center" ? block.x0 + (width - w)/2
+                                          : block.x0;
+        if (encOK){
+          const e = encodeWithPdfFont(fres, line);
+          if (e) drawWithPdfFont(pg, fres, e.hex, x, y, fit.size, colour, 0);
+        } else {
+          const safe = sanitizeForFont(line);
+          if (safe !== line) substituted = true;
+          pg.drawText(safe, { x, y, size:fit.size, font:b14,
+                              color:rgb(colour[0],colour[1],colour[2]) });
+        }
+      }
+    }
+    workingBytes = new Uint8Array(await doc.save());
+    reopen();
+    setMode("text");
+    await render();
+    setStatus("Paragraph updated on page "+(pageIndex+1)+"."
+      + (overflow ? " It is longer than the space it had, so it now runs past where the paragraph ended — undo if that is wrong."
+                  : (usedLines && usedLines < block.lines.length ? " It now takes "+usedLines+" line(s) instead of "+block.lines.length+"." : ""))
+      + (substituted ? " Some characters aren't available in that typeface and were shown as “?”." : ""),
+      overflow ? "warn" : "ok");
+  } catch(e){ setStatus("Could not change the paragraph: "+friendly(e),"err"); }
+  showSpin(false);
+}
+
+async function applyTextEdit(pageIndex, sp, newText, opts){
+  opts = opts || {};
   showSpin(true,"Editing text…");
   try {
     pushUndo();
@@ -2281,7 +2609,9 @@ async function applyTextEdit(pageIndex, sp, newText){
     // v11.29: and grab the span's real font BEFORE the save renumbers objects,
     // plus the room it has on the line (getSpans is cache-backed; after the
     // redaction the cache is stale, so both have to be read now)
-    const fres = capturePdfFont(pageIndex, sp.font);
+    // v11.37: an explicit typeface choice means the document's own embedded
+    // font is deliberately NOT reused — that is the whole point of the choice.
+    const fres = (opts.font && opts.font !== "keep") ? null : capturePdfFont(pageIndex, sp.font);
     let pageW = 0;
     try { const mp = MDOC.loadPage(pageIndex); const b = mp.getBounds(); pageW = b[2]-b[0]; mp.destroy(); } catch(e){}
     // v11.30: which edge the block lines up on, how much room the text has in
@@ -2323,7 +2653,10 @@ async function applyTextEdit(pageIndex, sp, newText){
     const text = (newText||"").replace(/[\r\n]+/g, " ");
     let substituted = false;
     if (text.trim() !== ""){
-      const baseSize = sp.size || 11;
+      // v11.37: the sheet can override size and colour. Both default to the
+      // original, so an edit that touches neither is byte-identical to v11.36.
+      const baseSize = opts.size != null ? opts.size : (sp.size || 11);
+      const colour = opts.colour || sp.color || [0,0,0];
       const y = H - sp.origin[1];                       // baseline never moves
       // TIER 1 (v11.29): type it in the document's own embedded font, so the
       // edited field is indistinguishable from the text around it. Silently
@@ -2346,10 +2679,10 @@ async function applyTextEdit(pageIndex, sp, newText){
         const newW  = widthAt(drawSize);
         const origW = tc ? (sp.x1 - sp.x0) : (eo ? natural : (sp.x1 - sp.x0));
         drawWithPdfFont(pg, fres, enc.hex, drawXFor(align, sp.origin[0], origW, newW),
-                        y, drawSize, sp.color, tc);
+                        y, drawSize, colour, tc);
       } else {
         // TIER 2: base-14 substitution, as before
-        const font = await doc.embedFont(pickFont(sp.font));
+        const font = await doc.embedFont(pickFontKeyed(sp.font, opts.font));
         const safe = sanitizeForFont(text);
         substituted = safe !== text;     // some glyphs fell outside the base font
         const drawSize = fitFontSize(font, safe, baseSize, avail);   // shrink only if it would collide
@@ -2357,7 +2690,7 @@ async function applyTextEdit(pageIndex, sp, newText){
         try { drawn = font.widthOfTextAtSize(safe, drawSize);
               origW = font.widthOfTextAtSize(sanitizeForFont(sp.text), baseSize); } catch(e){}
         pg.drawText(safe, { x:drawXFor(align, sp.origin[0], origW, drawn), y, size:drawSize,
-                            font, color:rgb(sp.color[0],sp.color[1],sp.color[2]), lineHeight:drawSize*1.15 });
+                            font, color:rgb(colour[0],colour[1],colour[2]), lineHeight:drawSize*1.15 });
       }
     }
     workingBytes = new Uint8Array(await doc.save());
@@ -2424,9 +2757,148 @@ $("signBtn").onclick = ()=> startSign();
 $("unlockBtn").onclick = ()=> confirmDiscard("unlock another PDF", ()=>$("unlockInput").click());
 
 // ---------------- sign (entered from the More sheet) ----------------
+// ---- v11.38: draw a signature with your finger ---------------------------
+// Until v11.38 signing REQUIRED an image file: you had to sign paper, photograph
+// it, get the photo onto the phone, and pick it here. Every competitor lets you
+// draw with a finger and remembers what you drew. This is the same placement
+// path as before — only where the picture comes from is new.
+const SIG_MAX = 3;                          // saved signatures kept on device
+let savedSigs = [];                         // [{ id, png, ts }] newest first
+async function sigsLoad(){
+  try { savedSigs = (await idbGet("sigs")) || []; } catch(e){ savedSigs = []; }
+  return savedSigs;
+}
+async function sigsSave(){ try { await idbSet("sigs", savedSigs); } catch(e){ storageWarn(e); } }
+async function sigsAdd(png){
+  savedSigs.unshift({ id: "s"+Date.now(), png, ts: Date.now() });
+  savedSigs = savedSigs.slice(0, SIG_MAX);
+  await sigsSave();
+}
+
 function startSign(){
   if (mode==="sign"){ setMode(null); return; }   // toggling off cancels sign mode
-  $("sigInput").click();   // always pick a signature image before placing
+  openSignSheet();
+}
+// Pick a saved signature, draw a new one, or import an image. Saved ones come
+// first because after the first use that is what people want every time.
+async function openSignSheet(){
+  await sigsLoad();
+  const cards = savedSigs.map(s=>
+    `<button class="sigcard" data-id="${esc(s.id)}" aria-label="Use this signature">
+       <img src="${esc(s.png)}" alt="">
+     </button>`).join("");
+  $("sheet").innerHTML = h`
+    <h3>Sign</h3>
+    <p class="hint">${savedSigs.length ? "Tap a signature to place it, or draw a new one."
+                                       : "Draw your signature once and it is kept on this phone for next time."}</p>
+    ${raw(savedSigs.length ? `<div class="row sigrow">${cards}</div>` : "")}
+    <div class="row"><button class="full" id="sgDraw">Draw a signature</button></div>
+    <div class="row"><button class="ghost full" id="sgPick">Use a photo of a signature</button></div>
+    ${raw(savedSigs.length ? `<div class="row"><button class="ghost danger full" id="sgClear">Forget saved signatures</button></div>` : "")}
+    <div class="row"><button class="ghost full" id="sgCancel">Cancel</button></div>`;
+  $("sheet").querySelectorAll("[data-id]").forEach(b=> b.onclick = ()=>{
+    const s = savedSigs.find(x=>x.id === b.dataset.id);
+    closeSheet();
+    if (s){ signImgDataUrl = s.png; setMode("sign");
+            setStatus("Drag a box on the page to place your signature.","ok"); }
+  });
+  $("sgDraw").onclick  = ()=>{ closeSheet(); openSignPad(); };
+  $("sgPick").onclick  = ()=>{ closeSheet(); $("sigInput").click(); };
+  if ($("sgClear")) $("sgClear").onclick = async ()=>{
+    closeSheet(); savedSigs = []; await sigsSave();
+    setStatus("Saved signatures removed from this phone.","ok");
+  };
+  $("sgCancel").onclick = closeSheet;
+  openSheet();
+}
+// The pad itself. Strokes are captured as points and drawn with a rounded,
+// slightly speed-tapered line so it reads as ink rather than as a mouse trail.
+function openSignPad(){
+  $("sheet").innerHTML = h`
+    <h3>Draw your signature</h3>
+    <p class="hint">Sign with your finger. It is saved on this phone only.</p>
+    <div class="row"><canvas id="sgPad" class="sigpad" width="1000" height="380" aria-label="Signature pad"></canvas></div>
+    <div class="row teseg">
+      <button class="segb" id="sgUndo">Undo stroke</button>
+      <button class="segb" id="sgWipe">Clear</button>
+    </div>
+    <div class="row"><button class="full" id="sgOk" disabled>Use this signature</button></div>
+    <div class="row"><button class="ghost full" id="sgBack">Back</button></div>`;
+  const cv = $("sgPad"), ctx = cv.getContext("2d");
+  const strokes = [];
+  let cur = null;
+  const repaint = ()=>{
+    ctx.clearRect(0,0,cv.width,cv.height);
+    ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#0b1220";
+    for (const st of strokes){
+      if (st.length < 2){
+        if (st.length === 1){ ctx.beginPath(); ctx.arc(st[0].x, st[0].y, 3.2, 0, Math.PI*2);
+                              ctx.fillStyle="#0b1220"; ctx.fill(); }
+        continue;
+      }
+      for (let i=1;i<st.length;i++){
+        const a = st[i-1], b = st[i];
+        // Taper with speed: a fast stroke is thinner, which is what a pen does
+        // and what stops finger-drawn signatures looking like rope.
+        const v = Math.hypot(b.x-a.x, b.y-a.y);
+        ctx.lineWidth = Math.max(2.2, 7.5 - v*0.28);
+        ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+      }
+    }
+    $("sgOk").disabled = !strokes.some(s=>s.length > 1);
+  };
+  const pt = (e)=>{
+    const r = cv.getBoundingClientRect();
+    return { x: (e.clientX - r.left) * (cv.width / r.width),
+             y: (e.clientY - r.top)  * (cv.height / r.height) };
+  };
+  cv.addEventListener("pointerdown", e=>{
+    e.preventDefault();
+    try { cv.setPointerCapture(e.pointerId); } catch(err){}
+    cur = [pt(e)]; strokes.push(cur); repaint();
+  });
+  cv.addEventListener("pointermove", e=>{ if (!cur) return; e.preventDefault(); cur.push(pt(e)); repaint(); });
+  const end = ()=>{ cur = null; };
+  cv.addEventListener("pointerup", end);
+  cv.addEventListener("pointercancel", end);
+  cv.addEventListener("pointerleave", end);
+  $("sgUndo").onclick = ()=>{ strokes.pop(); repaint(); };
+  $("sgWipe").onclick = ()=>{ strokes.length = 0; repaint(); };
+  $("sgBack").onclick = ()=>{ closeSheet(); openSignSheet(); };
+  $("sgOk").onclick = async ()=>{
+    const png = signPadToPng(cv, strokes);
+    closeSheet();
+    if (!png){ setStatus("Nothing was drawn, so there is nothing to place.","warn"); return; }
+    await sigsAdd(png);
+    signImgDataUrl = png;
+    setMode("sign");
+    setStatus("Signature saved on this phone. Drag a box on the page to place it.","ok");
+  };
+  openSheet();
+  repaint();
+}
+// Trim the pad to the ink and export it with a transparent background, so the
+// signature sits on the page rather than in a white rectangle. Cropping matters
+// as much as transparency: an untrimmed pad places a mostly-empty box, and the
+// user then has to fight the aspect ratio to make the signature the right size.
+function signPadToPng(cv, strokes){
+  let x0=1e9, y0=1e9, x1=-1e9, y1=-1e9, any=false;
+  for (const st of strokes) for (const p of st){
+    any = true;
+    if (p.x<x0) x0=p.x; if (p.y<y0) y0=p.y;
+    if (p.x>x1) x1=p.x; if (p.y>y1) y1=p.y;
+  }
+  if (!any) return null;
+  const pad = 12;
+  x0 = Math.max(0, x0-pad); y0 = Math.max(0, y0-pad);
+  x1 = Math.min(cv.width,  x1+pad); y1 = Math.min(cv.height, y1+pad);
+  const w = Math.max(8, Math.round(x1-x0)), hh = Math.max(8, Math.round(y1-y0));
+  const out = document.createElement("canvas");
+  out.width = w; out.height = hh;
+  const octx = out.getContext("2d");
+  // The pad is drawn on transparent already; copying the crop keeps that.
+  octx.drawImage(cv, x0, y0, w, hh, 0, 0, w, hh);
+  return out.toDataURL("image/png");
 }
 $("sigInput").onchange = async e=>{
   const f=e.target.files[0]; if(!f) return;
@@ -2558,6 +3030,9 @@ $("moreBtn").onclick = ()=>{
     <div class="mgrp-l">Create</div>
     <div class="mgrid">
       <button class="mtile" id="mScan">${ic("camera")}<span>Scan</span></button>
+      <!-- v11.35: scan straight into the open document (a signed page coming
+           back on paper is the everyday case) instead of scan → save → combine -->
+      <button class="mtile" id="mScanAdd" ${d}>${ic("camera")}<span>Scan more pages</span></button>
       <button class="mtile" id="mImg">${ic("photo")}<span>Photos → PDF</span></button>
     </div>
     <div class="mgrp-l">Pages</div>
@@ -2575,7 +3050,8 @@ $("moreBtn").onclick = ()=>{
       <button class="mtile" id="mAbout">${ic("info")}<span>About</span></button>
       <button class="mtile" id="mClose">${ic("close")}<span>Cancel</span></button>
     </div>`;
-  $("mScan").onclick  = ()=>{ closeSheet(); startScan(); };
+  $("mScan").onclick  = ()=>{ closeSheet(); startScan(false); };
+  $("mScanAdd").onclick = ()=>{ closeSheet(); if (workingBytes) startScan(true); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
   $("mImg").onclick   = ()=>{ closeSheet(); confirmDiscard("turn photos into a new PDF", ()=>$("imgInput").click()); };
@@ -3045,6 +3521,72 @@ $("imgInput").onchange = async e=>{
   showSpin(false);
 };
 
+// ---- v11.33: real paper sizes for scanned pages ---------------------------
+// Before v11.33 every scanned page was built as
+//     sPt = 842/max(w,h);  addPage([w*sPt, h*sPt])
+// which scales the LONG side to A4's 842pt but keeps whatever aspect ratio the
+// detected quad happened to have. A hand-cropped A4 sheet is never exactly
+// 1:1.414, so the page came out a near-A4 size that is not any real paper at
+// all. That shows up three ways: the print dialog scales it ("fit to page")
+// giving uneven margins, merging a scan with a born-digital PDF produces a
+// document whose pages are all slightly different sizes, and page numbering or
+// stamping later lands at inconsistent offsets.
+//
+// Now the page is a REAL size and the image is fitted inside it, letterboxed
+// with white where the aspect does not match. Nothing is cropped and nothing is
+// distorted: the aspect ratio of the captured pixels is preserved exactly.
+// White margins are what a flatbed scanner produces too, and they compress to
+// almost nothing.
+const PAPER_SIZES = {
+  auto:   null,                       // keep the captured shape (pre-v11.33)
+  a4:     { w:595.28, h:841.89, label:"A4" },
+  letter: { w:612,    h:792,    label:"Letter" },
+  legal:  { w:612,    h:1008,   label:"Legal" },
+};
+// Fit a w×h image (px) into a paper size, honouring orientation. Returns the
+// page box in points and the image rect inside it, both ready for pdf-lib.
+//   key "auto"  → the old behaviour: page == image, long side 842pt.
+// The paper is rotated to landscape when the image is wider than it is tall, so
+// a landscape capture does not end up letterboxed into a portrait page with
+// huge white bands top and bottom.
+function fitToPaper(imgW, imgH, key){
+  if (!(imgW > 0) || !(imgH > 0)) return null;
+  const paper = PAPER_SIZES[key];
+  if (!paper){                                     // "auto" / unknown key
+    const s = 842/Math.max(imgW, imgH);
+    return { pageW:imgW*s, pageH:imgH*s, x:0, y:0, w:imgW*s, h:imgH*s, letterboxed:false };
+  }
+  const landscape = imgW > imgH;
+  const pageW = landscape ? paper.h : paper.w;
+  const pageH = landscape ? paper.w : paper.h;
+  // contain-fit: the larger of the two scale factors would crop, so take the smaller
+  const s = Math.min(pageW/imgW, pageH/imgH);
+  const w = imgW*s, h = imgH*s;
+  const x = (pageW-w)/2, y = (pageH-h)/2;
+  // "letterboxed" is true only when the gap is big enough to see (>0.5pt on
+  // either axis); a rounding-level difference is not worth reporting.
+  return { pageW, pageH, x, y, w, h, letterboxed: x > 0.5 || y > 0.5 };
+}
+// v11.33 note on auto-rotation. The plan for this release said "auto rotate to
+// portrait when the page is wider than tall". That is NOT implemented, on
+// purpose, because it is wrong: a landscape certificate, a spreadsheet
+// printout and a sideways-held capture of a portrait sheet all produce exactly
+// the same output shape, and no amount of geometry can tell them apart —
+// distinguishing them needs to read the text direction, which is an OCR job.
+// Rotating on aspect alone would silently turn every genuinely landscape
+// document on its side.
+//
+// What IS done instead, and is unambiguously correct:
+//   * fitToPaper turns the PAPER to match the image, so a landscape capture
+//     gets a landscape A4 page instead of being letterboxed into portrait with
+//     large white bands, and
+//   * every scanned page can be turned a quarter at a time from the review
+//     sheet (see openScanPageSheet). That matters more now than it did: with
+//     auto capture the Adjust screen — and its Rotate button — is skipped.
+// The turn is stored per page and applied at PDF build time with /Rotate, so
+// it is lossless: the JPEG is never re-encoded to rotate it.
+function normaliseRot(r){ return ((Math.round((r||0)/90)*90)%360+360)%360; }
+
 // ---------------- document scanner (camera → edges → crop → PDF) ----------------
 // Everything runs on-device: getUserMedia camera preview, document edge
 // detection in plain JS (Otsu threshold + largest connected component), a
@@ -3070,6 +3612,24 @@ let scanEnhance = true;       // "Whiten": flatten illumination so paper reads w
 try { if (localStorage.getItem("scanEnhance")==="0") scanEnhance=false; } catch(e){}
 let scanIdMode = false;       // v10.79 "Photo ID": light, colour-true card placed on a white A4 page
 try { if (localStorage.getItem("scanIdMode")==="1") scanIdMode=true; } catch(e){}
+// v11.32 auto capture. ON by default — it is the faster path for the common
+// case (a stack of pages on a desk) and the shutter is still there for anyone
+// who wants to frame a shot deliberately. Persisted, so the choice sticks.
+let scanAuto = true;
+try { if (localStorage.getItem("scanAuto")==="0") scanAuto=false; } catch(e){}
+// v11.33 output paper size for scanned pages. "auto" keeps the captured shape
+// (the pre-v11.33 behaviour) and is deliberately NOT the default: a scan of an
+// A4 sheet should come out A4 so it prints with even margins and merges
+// cleanly with born-digital pages.
+let scanPaper = "a4";
+try { const p=localStorage.getItem("scanPaper"); if (p && PAPER_SIZES[p]) scanPaper=p; } catch(e){}
+// v11.34 "Both sides": front and back of one card composited onto a single A4
+// page. Declared here with the rest of the scanner state because the toggle is
+// wired up (and refreshed) further down the file, well before the compositing
+// code that uses it — a `let` beside that code would be in its dead zone.
+let idTwoSide = false;
+try { if (localStorage.getItem("scanIdTwoSide")==="1") idTwoSide=true; } catch(e){}
+let idPendingCard = null;     // canvas of side 1, held until side 2 arrives
 // v10.74: std now warps to a larger long side (was 2560) so the higher-res 4K
 // capture keeps its detail instead of being shrunk away. File size is held in
 // check by encodeUnderBudget() (size-budgeted adaptive JPEG) rather than a
@@ -3186,10 +3746,21 @@ function containFit(srcW,srcH,boxW,boxH){
 }
 
 // ---- session ----
-async function startScan(){
+// v11.35: when set, "Create PDF" becomes "Add to document" and the scanned
+// pages are grafted onto the end of whatever is open instead of replacing it.
+// Holds the target's name for the on-screen wording; the bytes come from
+// workingBytes at append time, since the scanner is modal and nothing else can
+// change the open document while it is up.
+let scanAppendTo = null;
+
+async function startScan(append){
   // scanPages is kept as-is: it is always [] here except when a previous
   // session was restored from IndexedDB, in which case we continue it
   capFrame = null; scanFallback = false;
+  scanAppendTo = (append && workingBytes) ? { name: fileName } : null;
+  idPendingCard = null;
+  disarmAuto(); autoBusy = false; autoNeedsRelease = false;
+  refreshAutoBtn(); refreshPaperBtn(); refreshIdTwoSideBtn();
   updateScanCount();
   $("scanCrop").classList.remove("show");
   $("scanCam").classList.add("show");
@@ -3207,21 +3778,34 @@ async function startScan(){
       setStatus("Note: iOS asks for camera access on each app launch — an Apple limit of installed web apps, not a fault.","warn");
     }
   } catch(e){}
-  if (!camHint) setStatus("Point the camera at a document and tap the shutter.","ok");
+  if (!camHint) setStatus(
+    scanAppendTo ? "Scanning into “"+scanAppendTo.name+"” — the pages will be added to the end."
+    : scanAuto   ? "Hold the camera over a page — it is taken automatically once framed and steady."
+                 : "Point the camera at a document and tap the shutter.", "ok");
   await startCamera();
 }
 function endScan(){
   stopCamera();
   scanPages = []; capFrame = null;
+  scanAppendTo = null;           // v11.35: forget any append target
+  idPendingCard = null;          // v11.34: drop a half-finished card pair
+  disarmAuto(); autoBusy = false; autoNeedsRelease = false;
   updateScanCount();
   $("scanCam").classList.remove("show");
   $("scanCrop").classList.remove("show");
 }
 function updateScanCount(){
-  $("scanCount").textContent = scanPages.length ? scanPages.length+" page(s) scanned" : "";
+  // v11.34: while one side of a card is held, say so — otherwise the page
+  // count not moving after a capture looks like the capture failed.
+  $("scanCount").textContent = idPendingCard
+    ? "Front held — scan the back"
+    : (scanPages.length ? scanPages.length+" page(s) scanned" : "");
   const d = $("scanDone");
   d.disabled = !scanPages.length;
-  d.textContent = scanPages.length ? "Create PDF ("+scanPages.length+")" : "Create PDF";
+  // v11.35: the button says what it will actually do — make a new PDF, or add
+  // these pages to the document already open.
+  const verb = scanAppendTo ? "Add to document" : "Create PDF";
+  d.textContent = scanPages.length ? verb+" ("+scanPages.length+")" : verb;
   renderScanThumbs();
   persistScan();                 // scan session survives the app being killed
 }
@@ -3231,19 +3815,42 @@ function renderScanThumbs(){
   strip.classList.toggle("has", scanPages.length>0);
   strip.innerHTML = scanPages.map((p,i)=>
     h`<button class="sthumb" data-pg="${i}" aria-label="Review scanned page ${i+1}"><img src="${p.thumb}" alt="Page ${i+1}"><span class="num">${i+1}</span></button>`).join("");
-  strip.querySelectorAll("[data-pg]").forEach(b=> b.onclick=()=> openScanPageSheet(+b.dataset.pg));
+  strip.querySelectorAll("[data-pg]").forEach(b=>{
+    const i = +b.dataset.pg;
+    b.onclick = ()=> openScanPageSheet(i);
+    // v11.33: show the page's rotation on its thumbnail. Set through the CSSOM,
+    // not a style attribute — the CSP is style-src 'self' with no unsafe-inline.
+    const r = normaliseRot(scanPages[i] && scanPages[i].rot);
+    const im = b.querySelector("img");
+    if (im && r) im.style.transform = "rotate("+r+"deg)";
+  });
   strip.scrollLeft = strip.scrollWidth;          // keep the newest page in view
 }
 function openScanPageSheet(i){
   const p=scanPages[i]; if(!p) return;
   const url=URL.createObjectURL(new Blob([p.bytes],{type:"image/jpeg"}));
+  const rot = normaliseRot(p.rot);
   $("sheet").innerHTML = h`
     <h3>Scanned page ${i+1} of ${scanPages.length}</h3>
     <div class="row"><img class="pgprev" id="pgPrev" alt="Page ${i+1}"></div>
+    <div class="row"><button class="full" id="pgRot">⟳ Rotate${rot?" (now "+rot+"°)":""}</button></div>
     <div class="row"><button class="full" id="pgDel">Delete this page</button></div>
     <div class="row"><button class="ghost full" id="pgClose">Close</button></div>`;
-  $("pgPrev").src=url;
+  // v11.33: the preview is turned with CSS so the stored JPEG is never
+  // re-encoded; the same angle is written into the PDF with /Rotate on save.
+  const img = $("pgPrev");
+  img.src=url;
+  if (rot) img.style.transform = "rotate("+rot+"deg)";
   const done=()=>{ URL.revokeObjectURL(url); closeSheet(); };
+  // v11.33: rotation moved here from the Adjust screen alone. With auto capture
+  // the Adjust screen (and its Rotate button) is skipped entirely, so without
+  // this a sideways page could only be fixed after the PDF was built.
+  $("pgRot").onclick=()=>{
+    p.rot = normaliseRot(rot + 90);
+    done();
+    renderScanThumbs(); persistScan();
+    openScanPageSheet(i);                    // reopen so the change is visible
+  };
   $("pgDel").onclick=()=>{
     done();
     scanPages.splice(i,1);
@@ -3335,6 +3942,10 @@ async function resumeCamera(){
 }
 function enterFallback(){
   scanFallback = true;
+  // v11.32: there is no live preview to detect on in the fallback path, so
+  // auto capture has nothing to work from. Hide the toggle rather than leave a
+  // control on screen that silently does nothing.
+  disarmAuto(); refreshAutoBtn();
   setStatus("Live camera unavailable — using the native camera instead.","warn");
   $("camInput").click();
 }
@@ -3367,13 +3978,34 @@ function sizeQuadCanvas(){
 // it appears only after 2 consistent detections, eases toward each new
 // detection (lerp), and survives up to 2 missed frames before vanishing.
 let liveQuad=null, livePend=null, liveHits=0, liveMiss=0;
-function resetLiveQuad(){ liveQuad=null; livePend=null; liveHits=0; liveMiss=0; liveStable=0; }
+function resetLiveQuad(){
+  liveQuad=null; livePend=null; liveHits=0; liveMiss=0; liveStable=0;
+  liveMotionPx=Infinity;
+  // losing the document IS the "release" auto capture waits for after taking a
+  // page, so clear the latch here as well as on a jump (see autoNeedsRelease).
+  autoNeedsRelease=false;
+  disarmAuto();
+}
+// v11.32: per-frame corner drift of the SMOOTHED quad. liveStable is not a
+// substitute — it counts frames the detection stayed within quadClose's 18%
+// tolerance, which a slow steady hand drift never breaks. See autoCaptureReady.
+let liveMotionPx = Infinity;
 // v10.94: consecutive stable frames — >=3 (~0.9s) means the box has "locked"
 // onto the document: drawn bolder with corner ticks, and detection relaxes to
 // every other tick (600ms) to save battery while nothing is changing.
 let liveStable = 0;
 const quadLocked = ()=> liveStable >= 3;
 function smoothQuad(q){
+  const before = liveQuad;                  // v11.32: measure how far it moved
+  const out = smoothQuadCore(q);
+  // A brand-new or re-snapped quad has no meaningful "previous", so drift is
+  // Infinity — which reads as "moving" and cannot arm an auto capture. That is
+  // the safe direction: the very first frame of a new document is exactly when
+  // the detection is least trustworthy.
+  liveMotionPx = (before && out) ? quadMaxCornerShift(before, out) : Infinity;
+  return out;
+}
+function smoothQuadCore(q){
   if (!q){
     if (++liveMiss>2) resetLiveQuad();
     return liveQuad;
@@ -3388,12 +4020,125 @@ function smoothQuad(q){
   if (!quadClose(liveQuad,q)){              // detection jumped to something else: snap
     liveQuad=q.map(p=>({x:p.x,y:p.y}));
     liveStable=0;                           // lock is lost on a jump
+    // v11.32: a jump is the other way the user "releases" after an auto
+    // capture — sliding the next sheet under the camera without lifting the
+    // phone lands here rather than in resetLiveQuad. Both must clear the latch
+    // or the second page of a stack would never be taken automatically.
+    autoNeedsRelease=false;
+    disarmAuto();
     return liveQuad;
   }
   liveStable++;                             // same document, holding steady
   const a=0.35;                             // ease toward the new detection
   liveQuad=liveQuad.map((p,i)=>({x:p.x+(q[i].x-p.x)*a, y:p.y+(q[i].y-p.y)*a}));
   return liveQuad;
+}
+
+// ---- v11.32: auto capture ------------------------------------------------
+// With Auto on, the shutter fires itself once the document has been locked
+// (liveStable) AND passes the stricter autoCaptureReady gate AND has been held
+// still for AUTO_HOLD_MS. The page is then processed straight from the
+// auto-detected quad and the camera stays live — the Adjust screen is skipped
+// entirely. Tapping the shutter by hand still goes through Adjust, so a
+// deliberate shot can always be reviewed. That split is the whole design: Auto
+// is for working through a stack, the shutter is for the one awkward page.
+const AUTO_HOLD_MS = 900;      // steady-hold before firing (on top of the ~0.9s lock)
+let autoArmedAt = 0;           // Date.now() when the hold started; 0 = not armed
+let autoProgress = -1;         // 0..1 ring progress; -1 = draw no ring
+let autoNeedsRelease = false;  // set after a capture: the document must be lost
+                               // or replaced before the next one can arm
+let autoBusy = false;          // a capture is being processed right now
+let autoRaf = 0;               // rAF id for the countdown ring
+// Why the last frame was refused, and for how many frames running. A refusal is
+// invisible by design — the ring simply does not appear — and "nothing happens
+// and I don't know why" is the worst failure mode an automatic feature has. So
+// a reason that persists gets said once, in plain language.
+let autoWhy = "", autoWhyRun = 0, autoHintAt = 0;
+const AUTO_HINTS = {
+  "off-frame":   "Move back a little — part of the page is outside the frame.",
+  "too-small":   "Move closer, or fit more of the page in the frame.",
+  "whole-frame": "Point at a page on a contrasting surface — no edges found.",
+  "angled":      "Hold the phone flatter over the page.",
+  "not-convex":  "The detected shape isn't a page — try moving the phone.",
+  "moving":      "Hold still for a moment.",
+};
+function autoHint(why){
+  // Only after the same reason has held for ~1.8s, and at most once every 6s,
+  // so this cannot become a flickering commentary on every camera wobble.
+  if (!why || why === autoWhy){ autoWhyRun++; } else { autoWhy = why; autoWhyRun = 1; }
+  if (!why || autoWhyRun < 6) return;
+  const now = Date.now();
+  if (now - autoHintAt < 6000) return;
+  autoHintAt = now; autoWhyRun = 0;
+  const msg = AUTO_HINTS[why];
+  if (msg) setStatus(msg + " Or tap the shutter to take it yourself.", "warn");
+}
+
+function disarmAuto(){
+  autoArmedAt = 0; autoProgress = -1;
+  if (autoRaf){ try{ cancelAnimationFrame(autoRaf); }catch(e){} autoRaf = 0; }
+}
+// The detect loop only ticks every 300ms, which would make the ring move in
+// three visible jumps. While armed — and only while armed, so there is no
+// standing battery cost — redraw it on animation frames instead.
+function startAutoRing(){
+  if (autoRaf) return;
+  const step = ()=>{
+    if (!autoArmedAt){ autoRaf = 0; return; }
+    autoProgress = Math.min(1, (Date.now()-autoArmedAt)/AUTO_HOLD_MS);
+    try { drawLiveQuad(liveQuad); } catch(e){}
+    autoRaf = requestAnimationFrame(step);
+  };
+  autoRaf = requestAnimationFrame(step);
+}
+// Decide, once per detect tick, whether the countdown may run. Every failure
+// path disarms, so the ring resets the instant the user moves — which is the
+// feedback that makes auto capture feel trustworthy rather than random.
+function evalAutoCapture(v){
+  if (!scanAuto || scanFallback || autoBusy || capFrame || !liveQuad || !quadLocked()){
+    disarmAuto(); return;
+  }
+  // "held" is not a fault — it means the page just taken is still under the
+  // camera — so it never produces a hint.
+  if (autoNeedsRelease){ disarmAuto(); autoWhy = "held"; autoWhyRun = 0; return; }
+  const diag = Math.hypot(v.videoWidth, v.videoHeight) || 1;
+  const r = autoCaptureReady(liveQuad, v.videoWidth, v.videoHeight, liveMotionPx/diag);
+  if (!r.ok){ disarmAuto(); autoHint(r.why); return; }
+  autoWhy = ""; autoWhyRun = 0;
+  if (!autoArmedAt){ autoArmedAt = Date.now(); startAutoRing(); }
+  autoProgress = Math.min(1, (Date.now()-autoArmedAt)/AUTO_HOLD_MS);
+  if (autoProgress >= 1){
+    disarmAuto();
+    autoNeedsRelease = true;               // do not re-fire on the same page
+    autoFire();
+  }
+}
+// Take the page without going anywhere near the Adjust screen.
+async function autoFire(){
+  const v = $("scanVideo");
+  if (autoBusy || capFrame || !liveQuad || !v || !v.videoWidth) return;
+  autoBusy = true;
+  try {
+    const q = insetQuad(orderQuad(liveQuad.map(p=>({x:p.x,y:p.y}))), 0.008);
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v,0,0);
+    flashCapture();
+    // Keep the preview running while the page is processed. The worker does the
+    // heavy warp, so the camera does not need to stop — and not stopping is
+    // what makes a stack of pages feel continuous instead of stuttery.
+    await commitScanPage(c, q, { returnToCamera:false });
+  } catch(err){
+    setStatus("Auto capture could not finish that page: "+friendly(err),"err");
+  }
+  autoBusy = false;
+}
+function flashCapture(){
+  const fl = document.getElementById("scanFlash");
+  if (fl && typeof requestAnimationFrame === "function"){
+    fl.classList.add("go");
+    requestAnimationFrame(()=>requestAnimationFrame(()=>fl.classList.remove("go")));
+  }
 }
 function quadClose(a,b){
   let span=0;
@@ -3415,8 +4160,12 @@ function startLiveDetect(){
       // battery: once the box has locked, detect every other tick (600ms) —
       // a steady scene doesn't need re-detection 3×/second. Any jump or miss
       // clears the lock (in smoothQuad/resetLiveQuad) and full rate resumes.
-      if (quadLocked() && (tick++ & 1)) return;
+      // v11.32: never skip while an auto capture is counting down. The motion
+      // gate is measured BETWEEN detections, so halving the rate would halve
+      // the resolution of the one check that stops a moving page being taken.
+      if (quadLocked() && !autoArmedAt && (tick++ & 1)) return;
       drawLiveQuad(smoothQuad(detectOnVideoFrame(v)));
+      evalAutoCapture(v);
       liveErrs = 0;
     } catch(e){
       // one bad camera frame must not kill the preview loop — but a loop that
@@ -3443,9 +4192,9 @@ function detectOnVideoFrame(v){
   const q = detectQuad(ctx.getImageData(0,0,sw,sh));
   return q ? q.map(p=>({x:p.x/s, y:p.y/s})) : null;   // → video px
 }
-// Draw the detected document outline on the live preview. Capture is always
-// manual (the shutter) — there is no auto-capture, so there's no "hold still"
-// state here.
+// Draw the detected document outline on the live preview, plus (v11.32) the
+// auto-capture countdown ring at the centre of the document once the hold has
+// started. Capture is manual OR automatic depending on the Auto toggle.
 function drawLiveQuad(q){
   const cnv=$("scanQuad");
   // v11.31: re-assert the overlay size on every frame. It costs one layout read
@@ -3487,6 +4236,24 @@ function drawLiveQuad(q){
       }
     }
   }
+  // v11.32: countdown ring, centred on the document. Drawn last so it sits over
+  // the outline. It exists to make the capture PREDICTABLE — the user can see
+  // the shot coming and can cancel it just by moving, which is why every
+  // refusal path in evalAutoCapture disarms rather than pausing.
+  if (autoProgress >= 0){
+    const cx = q.reduce((s,p)=>s+p.x,0)/4*fit.scale+fit.offX;
+    const cy = q.reduce((s,p)=>s+p.y,0)/4*fit.scale+fit.offY;
+    const R = 26;
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(255,255,255,.28)";
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2); ctx.stroke();
+    ctx.strokeStyle = "#5dff78";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, -Math.PI/2, -Math.PI/2 + Math.PI*2*Math.min(1,autoProgress));
+    ctx.stroke();
+    ctx.lineCap = "butt";
+  }
 }
 
 // ---- capture ----
@@ -3502,12 +4269,10 @@ function captureFrame(){
 }
 $("scanShot").onclick = ()=>{
   if (scanFallback){ $("camInput").click(); return; }
-  // v10.94: iOS-camera-style capture confirmation — snap bright, fade out
-  const fl = document.getElementById("scanFlash");
-  if (fl && typeof requestAnimationFrame === "function"){
-    fl.classList.add("go");
-    requestAnimationFrame(()=>requestAnimationFrame(()=>fl.classList.remove("go")));
-  }
+  // v11.32: a deliberate tap cancels any countdown in progress — the user has
+  // decided to frame this one themselves, and it goes through Adjust.
+  disarmAuto();
+  flashCapture();      // v10.94: iOS-camera-style confirmation — snap, fade out
   captureFrame();
 };
 // shared: load a photo file (native camera fallback, or library import)
@@ -3819,28 +4584,166 @@ function setScanIdMode(on){
     try { localStorage.setItem("scanEnhance","0"); } catch(e){}
     $("enhToggle").classList.toggle("on", false);
     $("enhToggle").setAttribute("aria-pressed","false");
-    setStatus("Photo ID mode: the card will be placed on a white A4 page. Frame just the card.","ok");
+    setStatus(idTwoSide
+      ? "Photo ID, both sides: scan the front, then the back — they go on one A4 page."
+      : "Photo ID mode: the card will be placed on a white A4 page. Frame just the card.","ok");
+  } else {
+    clearIdPending(true);     // leaving ID mode abandons any held front side
   }
+  refreshIdTwoSideBtn();
   renderCropPreview();
 }
-// Place an enhanced card canvas centred in the upper third of a clean white A4
-// page (portrait), at near-real scale — the Epson-style ID scan look. Returns a
-// canvas. A4 is rendered at ~300 dpi; the white field compresses to almost
-// nothing, so the file stays well under the size budget.
-function compositeCardOnA4(cardCanvas){
-  const PAGE_W = 2480, PAGE_H = 3508;          // A4 @ 300 dpi, portrait
-  const TARGET_W = Math.round(PAGE_W*0.46);     // card width ≈ 46% of the page
-  const cw = cardCanvas.width, ch = cardCanvas.height;
-  let dw = TARGET_W, dh = Math.round(TARGET_W*ch/cw);
-  const maxH = Math.round(PAGE_H*0.42);         // don't let a tall card run long
-  if (dh > maxH){ dh = maxH; dw = Math.round(maxH*cw/ch); }
-  const x = Math.round((PAGE_W-dw)/2), y = Math.round(PAGE_H*0.17);
-  const c = document.createElement("canvas"); c.width=PAGE_W; c.height=PAGE_H;
+// v11.34: "Both sides" — only relevant inside Photo ID mode, so it is hidden
+// rather than merely disabled when ID mode is off. Hiding it also keeps the
+// filter row from wrapping to a third line on a small phone.
+function refreshIdTwoSideBtn(){
+  const b = $("idBothToggle"); if (!b) return;
+  b.hidden = !scanIdMode;
+  b.classList.toggle("on", idTwoSide);
+  b.setAttribute("aria-pressed", String(idTwoSide));
+}
+$("idBothToggle").onclick = ()=> setIdTwoSide(!idTwoSide);
+function setIdTwoSide(on){
+  idTwoSide = !!on;
+  try { localStorage.setItem("scanIdTwoSide", idTwoSide ? "1" : "0"); } catch(e){}
+  if (!idTwoSide) clearIdPending(true);   // a held side has nothing to pair with now
+  refreshIdTwoSideBtn();
+  setStatus(idTwoSide
+    ? "Both sides: scan the front, then the back — they go on one A4 page."
+    : "One card per page.","ok");
+}
+refreshIdTwoSideBtn();
+
+// v11.33: output paper size — cycles through the sizes that actually get used.
+$("paperBtn").onclick = ()=>{
+  const order = ["a4","letter","legal","auto"];
+  setScanPaper(order[(order.indexOf(scanPaper)+1) % order.length]);
+};
+function paperLabel(key){
+  const p = PAPER_SIZES[key];
+  return "Page: " + (p ? p.label : "As captured");
+}
+function setScanPaper(key){
+  if (!(key in PAPER_SIZES)) key = "a4";
+  scanPaper = key;
+  try { localStorage.setItem("scanPaper", key); } catch(e){}
+  refreshPaperBtn();
+  setStatus(PAPER_SIZES[key]
+    ? "Scanned pages will be "+PAPER_SIZES[key].label+" — the image is fitted inside, never cropped or stretched."
+    : "Scanned pages keep the shape they were captured at.","ok");
+}
+function refreshPaperBtn(){
+  const b = $("paperBtn"); if (!b) return;
+  b.textContent = paperLabel(scanPaper);
+  b.classList.toggle("on", scanPaper !== "auto");
+}
+refreshPaperBtn();
+
+// v11.32: auto capture toggle.
+$("autoBtn").onclick = ()=> setScanAuto(!scanAuto);
+function setScanAuto(on){
+  scanAuto = !!on;
+  try { localStorage.setItem("scanAuto", scanAuto ? "1" : "0"); } catch(e){}
+  refreshAutoBtn();
+  if (!scanAuto) disarmAuto();
+  setStatus(scanAuto
+    ? "Auto capture on — hold the camera steady over a page and it will be taken for you."
+    : "Auto capture off — tap the shutter for each page.","ok");
+}
+function refreshAutoBtn(){
+  const b = $("autoBtn"); if (!b) return;
+  b.classList.toggle("on", scanAuto);
+  b.setAttribute("aria-pressed", String(scanAuto));
+  // the fallback path has no live preview to detect on, so there is nothing to
+  // automate — hide the control rather than leave a dead toggle on screen
+  b.hidden = scanFallback;
+}
+refreshAutoBtn();
+// ---- v11.34: both sides of a card on ONE page ----------------------------
+// "Both sides" is the single most-requested shape of an ID scan and the one
+// every print shop produces: front and back of the same card, stacked on one
+// A4 sheet. Before v11.34 each capture became a page of its own, so an Aadhaar
+// or PAN card came out as a two-page PDF with two-thirds of each page blank —
+// which then had to be printed twice.
+// Only meaningful inside Photo ID mode; the toggle is hidden otherwise.
+// (`idTwoSide` and `idPendingCard` are declared with the rest of the scanner
+// state, above — the toggle wiring runs before this point and a `let` here
+// would be in its temporal dead zone.)
+//
+// A4 @ 300 dpi. The white field costs almost nothing once JPEG-compressed, so
+// a full-size page here does not blow the size budget.
+const ID_PAGE_W = 2480, ID_PAGE_H = 3508;
+
+// Shared placement maths for one or two cards on a white A4 portrait page.
+// Returns the page canvas. Passing a single card reproduces the pre-v11.34
+// geometry EXACTLY (46% width, 42% max height, top at 17% of the page), so the
+// existing one-sided output is unchanged to the pixel.
+function compositeCardsOnA4(cards){
+  const list = cards.filter(Boolean);
+  const c = document.createElement("canvas"); c.width=ID_PAGE_W; c.height=ID_PAGE_H;
   const ctx = c.getContext("2d");
-  ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,PAGE_W,PAGE_H);
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,ID_PAGE_W,ID_PAGE_H);
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(cardCanvas, x, y, dw, dh);
+  if (!list.length) return c;
+
+  const TARGET_W = Math.round(ID_PAGE_W*0.46);          // card width ≈ 46% of the page
+  // Each side is fitted independently: the two captures are rarely framed
+  // identically, and forcing a shared scale would shrink whichever side
+  // happened to be photographed from further away.
+  const fit = (card, maxH)=>{
+    const cw=card.width, ch=card.height;
+    let dw=TARGET_W, dh=Math.round(TARGET_W*ch/cw);
+    if (dh > maxH){ dh = maxH; dw = Math.round(maxH*cw/ch); }
+    return { dw, dh };
+  };
+  if (list.length === 1){
+    const { dw, dh } = fit(list[0], Math.round(ID_PAGE_H*0.42));
+    ctx.drawImage(list[0], Math.round((ID_PAGE_W-dw)/2), Math.round(ID_PAGE_H*0.17), dw, dh);
+    return c;
+  }
+  // Two sides: stack them in the upper two-thirds with a clear gap, both
+  // horizontally centred. Height cap is per card so a tall card (a passport
+  // page rather than an ID-1 card) still cannot overrun the sheet.
+  const maxH = Math.round(ID_PAGE_H*0.30);
+  const a = fit(list[0], maxH), b = fit(list[1], maxH);
+  const gap = Math.round(ID_PAGE_H*0.055);
+  const total = a.dh + gap + b.dh;
+  // centre the pair in the upper 78% of the page, never higher than a 9% margin
+  let y = Math.max(Math.round(ID_PAGE_H*0.09), Math.round((ID_PAGE_H*0.78-total)/2));
+  ctx.drawImage(list[0], Math.round((ID_PAGE_W-a.dw)/2), y, a.dw, a.dh);
+  y += a.dh + gap;
+  ctx.drawImage(list[1], Math.round((ID_PAGE_W-b.dw)/2), y, b.dw, b.dh);
   return c;
+}
+function compositeCardOnA4(cardCanvas){ return compositeCardsOnA4([cardCanvas]); }
+
+// Hold side 1, or combine with the held side 1 and return the finished page.
+// Returns null while still waiting for the second side.
+function takeIdSide(card, returnToCamera){
+  if (!idPendingCard){
+    idPendingCard = card;
+    capFrame = null;
+    if (returnToCamera){
+      $("scanCrop").classList.remove("show");
+      $("scanCam").classList.add("show");
+      if (!scanFallback) resumeCamera();
+    }
+    updateScanCount();          // refreshes the "side 1 held" hint
+    setStatus("Front captured. Turn the card over and scan the back.","ok");
+    return null;
+  }
+  const page = compositeCardsOnA4([idPendingCard, card]);
+  idPendingCard = null;
+  return page;
+}
+// Drop a half-finished card pair. Called when ID mode or the two-side toggle is
+// switched off and when the scan session ends, so a stale side can never be
+// silently welded onto an unrelated card later.
+function clearIdPending(quiet){
+  if (!idPendingCard) return;
+  idPendingCard = null;
+  updateScanCount();
+  if (!quiet) setStatus("The held front side was discarded.","warn");
 }
 // draw the captured photo onto the crop canvas with the active filter applied,
 // so Colour / B&W switch what you see instantly (preview runs at display
@@ -3881,6 +4784,75 @@ $("scanCancel").onclick = ()=>{
 
 // confirm the page: perspective-correct, filter, JPEG-encode, back to camera
 let cropBusy = false;          // re-entrancy guard: one processing at a time
+
+// v11.32: the page pipeline, lifted out of the "Use page" handler so the auto
+// capture path can run the IDENTICAL processing without the Adjust screen. The
+// two callers differ only in where the quad came from and whether there is a
+// screen to come back from — every pixel decision below is shared, so an auto
+// page and a hand-cropped page are byte-for-byte comparable.
+//   frame  : canvas holding the full-res capture
+//   q      : 4 corners in frame px, already ordered and inset as appropriate
+//   opts.returnToCamera : true when we are on the Adjust screen and must go back
+async function commitScanPage(frame, q, opts){
+  const returnToCamera = !!(opts && opts.returnToCamera);
+  const Q = SCAN_Q[scanQuality] || SCAN_Q.std;
+  let out, c;
+  if (scanIdMode){
+    // Photo ID: warp just the card, enhance it light + colour-true, then
+    // composite it onto a clean white A4 page (Epson-style ID scan).
+    showSpin(true,"Placing ID on a white page…");
+    out = warpPerspective(frame, q, 1800);              // card long side ≤1800
+    idCardEnhance(out.data, out.width, out.height);
+    const card=document.createElement("canvas"); card.width=out.width; card.height=out.height;
+    card.getContext("2d").putImageData(out,0,0);
+    if (idTwoSide){
+      // v11.34: the first side is held back and composited with the second, so
+      // the pair lands on ONE page. Returns null while still waiting.
+      const both = takeIdSide(card, returnToCamera);
+      if (!both) return;
+      c = both;
+    } else {
+      c = compositeCardOnA4(card);
+    }
+    out = { width:c.width, height:c.height };           // page dims for the record
+  } else {
+    // preferred path: warp + filter in the worker (UI stays responsive)
+    const sctx = frame.getContext("2d",{willReadFrequently:true});
+    out = await processPageOffThread(
+      sctx.getImageData(0,0,frame.width,frame.height), q, cropFilter, Q.maxDim, scanEnhance);
+    if (!out){                                 // fallback: same math, main thread
+      out = warpPerspective(frame, q, Q.maxDim);
+      colourBalanceCore(out.data, out.width, out.height);
+      if (scanEnhance){ flattenIllumination(out.data, out.width, out.height);
+        documentEnhance(out.data, out.width, out.height); }   // natural Lens polish (v10.75)
+    }
+    c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
+    c.getContext("2d").putImageData(out,0,0);
+  }
+  await pushScanPage(c, out.width, out.height);
+  capFrame=null;
+  updateScanCount();
+  if (returnToCamera){
+    $("scanCrop").classList.remove("show");
+    $("scanCam").classList.add("show");
+    if (!scanFallback) await resumeCamera();
+  }
+  setStatus("Page "+scanPages.length+" added — "
+    + (scanAuto && !returnToCamera ? "hold the camera over the next one."
+                                   : "scan the next page or tap Create PDF."), "ok");
+}
+// encode + record one finished page canvas
+async function pushScanPage(c, w, h){
+  const QQ = SCAN_Q[scanQuality] || SCAN_Q.std;
+  const blob = await encodeScanJpeg(c, QQ.jpeg, QQ.budget, QQ.qFloor);
+  // small thumbnail (112px tall ≈ 56 css px at 2×) for the review strip
+  const tc=document.createElement("canvas");
+  tc.height=112; tc.width=Math.max(8,Math.round(w*112/h));
+  tc.getContext("2d").drawImage(c,0,0,tc.width,tc.height);
+  scanPages.push({ bytes:new Uint8Array(await blob.arrayBuffer()), w, h,
+                   thumb:tc.toDataURL("image/jpeg",0.7), rot:0 });
+}
+
 $("cropUse").onclick = async ()=>{
   if (!capFrame || cropBusy) return;
   cropBusy = true;
@@ -3893,56 +4865,37 @@ $("cropUse").onclick = async ()=>{
     const q = cropUserAdjusted
       ? orderQuad(cropQuad)
       : insetQuad(orderQuad(cropQuad), 0.008);
-    const Q = SCAN_Q[scanQuality] || SCAN_Q.std;
-    let out, c;
-    if (scanIdMode){
-      // Photo ID: warp just the card, enhance it light + colour-true, then
-      // composite it onto a clean white A4 page (Epson-style ID scan).
-      showSpin(true,"Placing ID on a white page…");
-      out = warpPerspective(capFrame, q, 1800);          // card long side ≤1800
-      idCardEnhance(out.data, out.width, out.height);
-      const card=document.createElement("canvas"); card.width=out.width; card.height=out.height;
-      card.getContext("2d").putImageData(out,0,0);
-      c = compositeCardOnA4(card);
-      out = { width:c.width, height:c.height };           // page dims for the record
-    } else {
-      // preferred path: warp + filter in the worker (UI stays responsive)
-      const sctx = capFrame.getContext("2d",{willReadFrequently:true});
-      out = await processPageOffThread(
-        sctx.getImageData(0,0,capFrame.width,capFrame.height), q, cropFilter, Q.maxDim, scanEnhance);
-      if (!out){                                 // fallback: same math, main thread
-        out = warpPerspective(capFrame, q, Q.maxDim);
-        colourBalanceCore(out.data, out.width, out.height);
-        if (scanEnhance){ flattenIllumination(out.data, out.width, out.height);
-          documentEnhance(out.data, out.width, out.height); }   // natural Lens polish (v10.75)
-      }
-      c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
-      c.getContext("2d").putImageData(out,0,0);
-    }
-    const QQ = SCAN_Q[scanQuality] || SCAN_Q.std;
-    const blob = await encodeScanJpeg(c, QQ.jpeg, QQ.budget, QQ.qFloor);
-    // small thumbnail (112px tall ≈ 56 css px at 2×) for the review strip
-    const tc=document.createElement("canvas");
-    tc.height=112; tc.width=Math.max(8,Math.round(out.width*112/out.height));
-    tc.getContext("2d").drawImage(c,0,0,tc.width,tc.height);
-    scanPages.push({ bytes:new Uint8Array(await blob.arrayBuffer()), w:out.width, h:out.height,
-                     thumb:tc.toDataURL("image/jpeg",0.7) });
-    capFrame=null;
-    updateScanCount();
-    $("scanCrop").classList.remove("show");
-    $("scanCam").classList.add("show");
-    setStatus("Page "+scanPages.length+" added — scan the next page or tap Create PDF.","ok");
-    if (!scanFallback) await resumeCamera();
+    await commitScanPage(capFrame, q, { returnToCamera:true });
   } catch(err){ setStatus("Could not finish this page: "+friendly(err),"err"); }
   showSpin(false);
   cropBusy = false;
 };
 
-// build the PDF (pages scaled to A4-ish point sizes) and open it in the editor
+// build the PDF (pages on a real paper size) and open it in the editor — or,
+// when the session was started with "Scan more pages", append to what's open.
 $("scanDone").onclick = ()=>{
   if (!scanPages.length) return;
+  if (scanAppendTo){ appendScanToDoc(); return; }   // v11.35: nothing to discard
   confirmDiscard("create the scanned PDF", createScanPdf);
 };
+// Draw one scanned page into `doc`, on a real paper size, honouring its turn.
+// Shared by createScanPdf and the v11.35 append path so a page added to an
+// existing document is built exactly like a page in a brand-new one.
+async function addScanPageTo(doc, p){
+  const img = await doc.embedJpg(p.bytes);
+  const box = fitToPaper(p.w, p.h, scanPaper);
+  const pg = doc.addPage([box.pageW, box.pageH]);
+  // The white letterbox margin: pdf-lib pages have no background, and a page
+  // with a transparent margin prints as whatever the printer decides. Paint it.
+  if (box.letterboxed)
+    pg.drawRectangle({ x:0, y:0, width:box.pageW, height:box.pageH, color:rgb(1,1,1) });
+  pg.drawImage(img, { x:box.x, y:box.y, width:box.w, height:box.h });
+  // v11.33: rotation is recorded as /Rotate rather than by re-encoding the
+  // JPEG, so turning a page costs nothing and loses nothing.
+  const r = normaliseRot(p.rot);
+  if (r) pg.setRotation(degrees(r));
+  return pg;
+}
 async function createScanPdf(){
   if (!scanPages.length) return;
   const pages=scanPages.slice();
@@ -3950,12 +4903,7 @@ async function createScanPdf(){
   showSpin(true,"Creating PDF from "+pages.length+" page(s)…");
   try {
     const doc=await PDFDocument.create();
-    for (const p of pages){
-      const img=await doc.embedJpg(p.bytes);
-      const sPt=842/Math.max(p.w,p.h);          // A4 long side = 842pt
-      const pg=doc.addPage([p.w*sPt, p.h*sPt]);
-      pg.drawImage(img,{x:0,y:0,width:p.w*sPt,height:p.h*sPt});
-    }
+    for (const p of pages) await addScanPageTo(doc, p);
     workingBytes=new Uint8Array(await doc.save());
     // dated default name ("Scan 5 Jul 2026 14.30.pdf") so saved scans are
     // findable in Files instead of a pile of identical "scan.pdf"s
@@ -3964,10 +4912,58 @@ async function createScanPdf(){
       +" "+String(d.getHours()).padStart(2,"0")+"."+String(d.getMinutes()).padStart(2,"0")+".pdf";
     undoStack=[]; setMode(null);
     reopen(); setDirty(true); await render(); enableDocButtons(true);
-    setStatus("Scanned "+pages.length+" page(s) — tap Save to keep it as “"+fileName+"”.","ok");
+    const sz = PAPER_SIZES[scanPaper];
+    setStatus("Scanned "+pages.length+" page(s)"+(sz?" at "+sz.label:"")
+      +" — tap Save to keep it as “"+fileName+"”.","ok");
   } catch(err){ setStatus("Could not create the PDF: "+friendly(err),"err"); }
   showSpin(false);
 };
+
+// ---- v11.35: add the scanned pages to the document already open -----------
+// The everyday case this fixes: a contract is open, one page comes back signed
+// on paper, and it has to go on the end. Before v11.35 that meant saving the
+// scan as its own PDF, reopening the original, then Combine — three round trips
+// through the Files app for one page.
+//
+// The pages are built into a temporary PDF with the SAME addScanPageTo used for
+// a brand-new document (so an appended page is identical to a scanned one), and
+// then grafted with mupdf's graftPage — the same primitive Combine uses, which
+// carries the page's resources across properly rather than re-rasterising it.
+async function appendScanToDoc(){
+  if (!scanPages.length) return;
+  if (!workingBytes || !MDOC){       // the document went away while scanning
+    setStatus("That document is no longer open — creating a new PDF instead.","warn");
+    scanAppendTo = null; await createScanPdf(); return;
+  }
+  const pages = scanPages.slice(), target = (scanAppendTo && scanAppendTo.name) || fileName;
+  endScan();
+  showSpin(true,"Adding "+pages.length+" page(s) to “"+target+"”…");
+  let base = null, add = null;
+  try {
+    // Build and validate the scanned pages FIRST, before anything touches the
+    // open document. If this throws, the document is left exactly as it was —
+    // no undo step, no dirty flag, no half-appended file.
+    const doc = await PDFDocument.create();
+    for (const p of pages) await addScanPageTo(doc, p);
+    const addBytes = new Uint8Array(await doc.save());
+    add  = mupdf.Document.openDocument(addBytes, "application/pdf").asPDF();
+    base = mupdf.Document.openDocument(workingBytes.slice(0), "application/pdf").asPDF();
+    if (!add || !base) throw new Error("Could not read the pages back.");
+    const before = base.countPages(), n = add.countPages();
+    const undoKept = pushUndoGuarded();      // committed from here
+    for (let i=0;i<n;i++) base.graftPage(-1, add, i);
+    workingBytes = u8(base.saveToBuffer("garbage").asUint8Array());
+    reopen(); setDirty(true); await render(); enableDocButtons(true);
+    setStatus("Added "+n+" page(s) to “"+target+"” — now "+(before+n)+" pages. Tap Save to keep it."
+      + (undoKept ? "" : " (Too large to keep an undo step.)"), "ok");
+  } catch(err){
+    setStatus("Could not add those pages: "+friendly(err),"err");
+  } finally {
+    try{ if(add)  add.destroy();  }catch(e){}
+    try{ if(base) base.destroy(); }catch(e){}
+    showSpin(false);
+  }
+}
 
 // ---- document edge detection ----
 // detectQuad and its helpers now live in scan-core.js (imported above), so the
@@ -4076,6 +5072,48 @@ function openSaveSheet(after){
 $("saveBtn").onclick = ()=> openSaveSheet();
 
 // ---------------- compress ----------------
+// v11.36 changed what "compress" means here.
+//
+// The old pipeline had exactly two moves: a lossless structural pass (which
+// shaves a few percent off a typical file and nothing at all off an
+// already-optimised one), and rasterising every page to a picture (which hits
+// any target but destroys selectable text). A document whose bulk is a few
+// oversized images — a report with screenshots, a scan, an invoice with a logo
+// — therefore had no useful option: you got 5%, or you got your text destroyed.
+//
+// What actually makes those files big is that the images inside them are
+// stored at far higher resolution than they are ever drawn at. A 12-megapixel
+// phone photo placed in a 5cm box carries roughly 25x the pixels that box can
+// show. So images are now recompressed INDIVIDUALLY and in place, and
+// everything else in the file — text, fonts, vectors, links, annotations, form
+// fields, the page tree — is left byte-for-byte alone. That is what Acrobat and
+// the online tools do, and it is why they shrink a text document by 70% while
+// leaving its text perfectly selectable.
+//
+// Rasterisation still exists, demoted to what it always should have been: a
+// last resort, reached only if the file is still over target afterwards.
+
+// Per-level image policy. `dpi` is the resolution an image is reduced to,
+// measured against the size it is actually DRAWN at, not against its pixel
+// count. 200dpi is past what most eyes resolve in print, 150 is the usual
+// "ebook" setting, and 110 is visibly softer but still readable.
+const IMG_LEVELS = {
+  high:   { dpi:200, q:82 },
+  medium: { dpi:150, q:72 },
+  low:    { dpi:110, q:56 },
+};
+// Re-encoding a JPEG is lossy, so doing it for a 3% gain spends real image
+// quality on nothing. An object has to give back a tenth of itself to be worth
+// rewriting, and must never grow.
+const IMG_MIN_GAIN  = 0.10;
+const IMG_MIN_BYTES = 6 * 1024;
+// An image we could not measure — only referenced from an unused resource, or
+// drawn inside an annotation appearance we do not walk — still gets a ceiling,
+// so a stray 40-megapixel object cannot sit in the file untouched. Generous on
+// purpose: with no placement to compare against, guessing low would damage
+// something that might legitimately be full-page. A4 at 200dpi is 1654 x 2339.
+const IMG_UNMEASURED_MAX = 2400;
+
 const COMPRESS = {
   high:   { targetKB:1024, steps:[ {dpi:170,q:88}, {dpi:140,q:80}, {dpi:120,q:72} ] },
   medium: { targetKB:700,  steps:[ {dpi:150,q:72}, {dpi:120,q:62}, {dpi:100,q:52} ] },
@@ -4086,10 +5124,10 @@ $("compBtn").onclick = ()=>{
   if (!workingBytes) return;
   $("sheet").innerHTML = h`
     <h3>Compress</h3>
-    <p class="hint">Pick a size to aim for. These are targets — a PDF with real text may stay larger so the text stays selectable, and a file that's already small is left unchanged.</p>
-    <div class="row"><button class="full" id="cpHigh">High quality — aim for ~1 MB</button></div>
-    <div class="row"><button class="full" id="cpMed">Balanced — aim for ~700 KB</button></div>
-    <div class="row"><button class="full" id="cpLow">Smallest — aim for ~200 KB</button></div>
+    <p class="hint">Pictures inside the document are reduced to a sensible resolution for the size they are printed at. Text, fonts and drawings are never touched, so the document stays selectable and searchable.</p>
+    <div class="row"><button class="full" id="cpHigh">High quality — pictures at 200 dpi</button></div>
+    <div class="row"><button class="full" id="cpMed">Balanced — pictures at 150 dpi</button></div>
+    <div class="row"><button class="full" id="cpLow">Smallest — pictures at 110 dpi</button></div>
     <div class="row"><button class="ghost full" id="cpCancel">Cancel</button></div>`;
   $("cpHigh").onclick = ()=>{ closeSheet(); runCompress("high"); };
   $("cpMed").onclick  = ()=>{ closeSheet(); runCompress("medium"); };
@@ -4097,6 +5135,455 @@ $("compBtn").onclick = ()=>{
   $("cpCancel").onclick = closeSheet;
   openSheet();
 };
+
+// ---- v11.36: image geometry (pure) ---------------------------------------
+// What pixel size should this image be reduced to, given the size it is drawn
+// at? Returns null when it is already at or below target and must be left
+// alone.
+//   pxW/pxH         the image's own pixel dimensions
+//   drawWpt/drawHpt the size it is DRAWN at on the page, in points (1/72 inch)
+//   targetDpi       the resolution we want
+// The 10% slack band stops a 158dpi image being re-encoded to reach 150dpi:
+// that trades a real generation of JPEG loss for a saving nobody can see.
+function imageTargetSize(pxW, pxH, drawWpt, drawHpt, targetDpi){
+  if (!(pxW > 0) || !(pxH > 0) || !(targetDpi > 0)) return null;
+  if (!(drawWpt > 0) || !(drawHpt > 0)){
+    if (Math.max(pxW, pxH) <= IMG_UNMEASURED_MAX) return null;
+    const s = IMG_UNMEASURED_MAX / Math.max(pxW, pxH);
+    return { w: Math.max(1, Math.round(pxW*s)), h: Math.max(1, Math.round(pxH*s)) };
+  }
+  // Effective resolution on each axis; take the HIGHER, so an image squashed
+  // on one axis is not over-reduced on the other.
+  const eff = Math.max(pxW/(drawWpt/72), pxH/(drawHpt/72));
+  if (!(eff > targetDpi * 1.10)) return null;
+  const s = targetDpi / eff;
+  return { w: Math.max(1, Math.round(pxW*s)), h: Math.max(1, Math.round(pxH*s)) };
+}
+
+// Area-average (box filter) downsample of raw pixmap bytes. Deliberately NOT
+// canvas drawImage: the browser's scaler is bilinear, which on a large
+// reduction samples a sparse subset of source pixels and turns small type into
+// a shimmer. Averaging every source pixel that falls inside a destination cell
+// is both the correct answer and visibly cleaner on text at 3-4x reductions.
+function boxDownsample(src, sw, sh, sstride, n, tw, th){
+  const out = new Uint8Array(tw*th*n);
+  const acc = new Float32Array(n);
+  for (let y=0; y<th; y++){
+    const y0 = Math.floor(y*sh/th), y1 = Math.min(sh, Math.max(y0+1, Math.floor((y+1)*sh/th)));
+    for (let x=0; x<tw; x++){
+      const x0 = Math.floor(x*sw/tw), x1 = Math.min(sw, Math.max(x0+1, Math.floor((x+1)*sw/tw)));
+      acc.fill(0);
+      let cnt = 0;
+      for (let sy=y0; sy<y1; sy++){
+        const row = sy*sstride;
+        for (let sx=x0; sx<x1; sx++){
+          const i = row + sx*n;
+          for (let c=0;c<n;c++) acc[c] += src[i+c];
+          cnt++;
+        }
+      }
+      const o = (y*tw + x)*n;
+      if (cnt) for (let c=0;c<n;c++) out[o+c] = ((acc[c]/cnt) + 0.5)|0;
+    }
+  }
+  return out;
+}
+
+// ---- v11.36: bilevel detection -------------------------------------------
+// Some images are ALREADY black and white — a fax, a stamp, a signature, a line
+// drawing, a page someone thresholded long before it reached us — but are
+// stored as 8-bit grey or 24-bit colour, which is 8 to 24 times the data they
+// actually carry. For those, CCITT Group 4 (the fax standard) beats JPEG by a
+// wide margin: typically 5-15x smaller, and unlike JPEG it is EXACT, with none
+// of the ringing that makes a JPEG of black text on white look dirty.
+//
+// The test below is deliberately severe, because this is only safe as a change
+// of CONTAINER, not of appearance. An anti-aliased grey scan — which is what
+// this app's own scanner produces — has a broad spread of mid-tones, fails the
+// test, and stays a JPEG. Thresholding one of those would visibly wreck it.
+function bilevelProfile(px, w, h, stride, n){
+  if (n !== 1 && n !== 3 && n !== 4) return null;
+  if (!(w > 0) || !(h > 0)) return null;
+  let extreme = 0, dark = 0, total = 0, chroma = 0;
+  const step = Math.max(1, Math.floor(Math.sqrt((w*h)/200000)) || 1);
+  for (let y=0; y<h; y+=step){
+    const row = y*stride;
+    for (let x=0; x<w; x+=step){
+      const i = row + x*n;
+      let L, c = 0;
+      if (n === 1) L = px[i];
+      else {
+        const r=px[i], g=px[i+1], b=px[i+2];
+        L = (r*77 + g*151 + b*28) >> 8;
+        c = Math.max(r,g,b) - Math.min(r,g,b);
+      }
+      chroma += c;
+      if (L <= 40 || L >= 215) extreme++;
+      if (L <= 40) dark++;
+      total++;
+    }
+  }
+  if (!total) return null;
+  const extremeFrac = extreme/total, darkFrac = dark/total, meanChroma = chroma/total;
+  return { extremeFrac, darkFrac, meanChroma,
+    // Two-valued already, essentially grey, and carrying a plausible amount of
+    // ink. The ink bounds exclude a solid black rectangle and a blank frame:
+    // neither is a document, and JPEG handles both perfectly well.
+    isBilevel: extremeFrac >= 0.995 && meanChroma <= 12
+               && darkFrac >= 0.002 && darkFrac <= 0.45 };
+}
+// Flatten to one byte per pixel, 1 = white. That matches CCITT with BlackIs1
+// false, and also DeviceGray, where sample 1 is white.
+function toBilevelBits(px, w, h, stride, n, threshold){
+  const bits = new Uint8Array(w*h);
+  for (let y=0; y<h; y++){
+    const row = y*stride, o = y*w;
+    for (let x=0; x<w; x++){
+      const i = row + x*n;
+      const L = n === 1 ? px[i] : ((px[i]*77 + px[i+1]*151 + px[i+2]*28) >> 8);
+      bits[o+x] = L >= threshold ? 1 : 0;
+    }
+  }
+  return bits;
+}
+
+// --- T.4 modified-Huffman run-length codes, as bit strings. -----------------
+// Written out as "0"/"1" text rather than packed hex on purpose: these tables
+// are transcribed from ITU-T T.4, and a single wrong bit produces a file that
+// decodes to plausible-looking garbage rather than an error. In this form each
+// entry can be checked against the spec by eye — and the encoder as a whole is
+// round-tripped through MuPDF's own CCITT decoder by the tests, on random
+// bitmaps, which is what actually proves it.
+const CCITT_WHITE_TERM = [
+"00110101","000111","0111","1000","1011","1100","1110","1111","10011","10100",
+"00111","01000","001000","000011","110100","110101","101010","101011","0100111","0001100",
+"0001000","0010111","0000011","0000100","0101000","0101011","0010011","0100100","0011000","00000010",
+"00000011","00011010","00011011","00010010","00010011","00010100","00010101","00010110","00010111","00101000",
+"00101001","00101010","00101011","00101100","00101101","00000100","00000101","00001010","00001011","01010010",
+"01010011","01010100","01010101","00100100","00100101","01011000","01011001","01011010","01011011","01001010",
+"01001011","00110010","00110011","00110100"];
+const CCITT_WHITE_MAKEUP = [
+"11011","10010","010111","0110111","00110110","00110111","01100100","01100101","01101000","01100111",
+"011001100","011001101","011010010","011010011","011010100","011010101","011010110","011010111","011011000","011011001",
+"011011010","011011011","010011000","010011001","010011010","011000","010011011"];
+const CCITT_BLACK_TERM = [
+"0000110111","010","11","10","011","0011","0010","00011","000101","000100",
+"0000100","0000101","0000111","00000100","00000111","000011000","0000010111","0000011000","0000001000","00001100111",
+"00001101000","00001101100","00000110111","00000101000","00000010111","00000011000","000011001010","000011001011","000011001100","000011001101",
+"000001101000","000001101001","000001101010","000001101011","000011010010","000011010011","000011010100","000011010101","000011010110","000011010111",
+"000001101100","000001101101","000011011010","000011011011","000001010100","000001010101","000001010110","000001010111","000001100100","000001100101",
+"000001010010","000001010011","000000100100","000000110111","000000111000","000000100111","000000101000","000001011000","000001011001","000000101011",
+"000000101100","000001011010","000001100110","000001100111"];
+const CCITT_BLACK_MAKEUP = [
+"0000001111","000011001000","000011001001","000001011011","000000110011","000000110100","000000110101","0000001101100","0000001101101","0000001001010",
+"0000001001011","0000001001100","0000001001101","0000001110010","0000001110011","0000001110100","0000001110101","0000001110110","0000001110111","0000001010010",
+"0000001010011","0000001010100","0000001010101","0000001011010","0000001011011","0000001100100","0000001100101"];
+// 1792..2560 in steps of 64, shared by both colours
+const CCITT_EXT_MAKEUP = [
+"00000001000","00000001100","00000001101","000000010010","000000010011","000000010100","000000010101",
+"000000010110","000000010111","000000011100","000000011101","000000011110","000000011111"];
+// vertical modes indexed by (a1-b1)+3: VL3 VL2 VL1 V0 VR1 VR2 VR3
+const CCITT_VCODE = ["0000010","000010","010","1","011","000011","0000011"];
+
+// Minimal MSB-first bit writer.
+function ccittBitWriter(){
+  return { bytes:[], cur:0, n:0,
+    put(s){
+      for (let i=0;i<s.length;i++){
+        this.cur = (this.cur << 1) | (s.charCodeAt(i) === 49 ? 1 : 0);
+        if (++this.n === 8){ this.bytes.push(this.cur); this.cur = 0; this.n = 0; }
+      }
+    },
+    finish(){
+      if (this.n) this.bytes.push((this.cur << (8 - this.n)) & 255);
+      return new Uint8Array(this.bytes);
+    } };
+}
+// One run of `len` pixels of a single colour: zero or more makeup codes then
+// exactly one terminating code. Runs of 2624+ repeat the largest makeup code,
+// which is what the spec requires for very wide images.
+function ccittPutRun(bw, len, white){
+  const term   = white ? CCITT_WHITE_TERM   : CCITT_BLACK_TERM;
+  const makeup = white ? CCITT_WHITE_MAKEUP : CCITT_BLACK_MAKEUP;
+  while (len >= 2624){ bw.put(CCITT_EXT_MAKEUP[12]); len -= 2560; }
+  if (len >= 1792){
+    const idx = (len - 1792) >> 6;
+    bw.put(CCITT_EXT_MAKEUP[idx]); len -= 1792 + idx*64;
+  } else if (len >= 64){
+    const idx = (len >> 6) - 1;
+    bw.put(makeup[idx]); len -= (idx+1)*64;
+  }
+  bw.put(term[len]);
+}
+// Changing elements of one row: the positions where a pixel differs from the
+// one to its left, with an imaginary WHITE pixel before the row. Because of
+// that imaginary pixel the elements strictly alternate in the colour they
+// change TO: even index changes to black, odd index changes to white. All the
+// b1/b2 lookups below are built on that parity, which is what keeps this
+// readable — the alternative is re-reading pixel values at every step.
+function ccittChanges(bits, off, w){
+  const t = [];
+  let prev = 1;
+  for (let x=0; x<w; x++){ const v = bits[off+x]; if (v !== prev){ t.push(x); prev = v; } }
+  return t;
+}
+// CCITT Group 4 (ITU-T T.6) encoder. `bits` is ONE BYTE PER PIXEL, 1 = white,
+// row-major, w*h long. Returns the encoded bytes, EOFB included.
+function ccittG4Encode(bits, w, h){
+  const bw = ccittBitWriter();
+  let ref = [];                                  // imaginary all-white line above row 0
+  for (let y=0; y<h; y++){
+    const cur = ccittChanges(bits, y*w, w);
+    let a0 = -1, colour = 1;                     // start white, just left of the row
+    let guard = 0;
+    for (;;){
+      if (++guard > 4*w + 32) throw new Error("ccitt: row did not terminate");
+      // We want the next change TO the opposite of the current run colour.
+      // white run -> next change to black -> even index; black run -> odd.
+      const wantParity = colour === 1 ? 0 : 1;
+      let a1 = w;
+      for (let i=0;i<cur.length;i++)
+        if (cur[i] > a0 && (i & 1) === wantParity){ a1 = cur[i]; break; }
+      let b1 = w, b2 = w;
+      for (let i=0;i<ref.length;i++)
+        if (ref[i] > a0 && (i & 1) === wantParity){
+          b1 = ref[i]; b2 = (i+1 < ref.length) ? ref[i+1] : w; break;
+        }
+      if (b2 < a1){
+        bw.put("0001");                          // pass mode
+        a0 = b2;
+      } else if (Math.abs(a1 - b1) <= 3){
+        bw.put(CCITT_VCODE[(a1 - b1) + 3]);      // vertical mode
+        a0 = a1; colour = colour === 1 ? 0 : 1;
+      } else {
+        let a2 = w;
+        for (let i=0;i<cur.length;i++) if (cur[i] > a1){ a2 = cur[i]; break; }
+        bw.put("001");                           // horizontal mode: two runs
+        const s = a0 < 0 ? 0 : a0;
+        ccittPutRun(bw, a1 - s, colour === 1);
+        ccittPutRun(bw, a2 - a1, colour !== 1);
+        a0 = a2;                                 // colour is unchanged after a pair
+      }
+      if (a0 >= w) break;
+    }
+    ref = cur;
+  }
+  bw.put("000000000001000000000001");            // EOFB
+  return bw.finish();
+}
+
+// ---- v11.36: walking the document for images ------------------------------
+// Every image XObject reachable from a page, following Form XObjects too (a
+// stamp, a logo placed through a form, an imported page all live there). Keyed
+// by object number, so an image shared across twenty pages is handled once and
+// every reference to it picks up the smaller version automatically.
+function collectImageXObjects(pdf){
+  const out = new Map();
+  const seenForms = new Set();
+  const walkRes = (res, depth)=>{
+    if (!res || depth > 8) return;
+    let xo = null;
+    try { xo = res.get("XObject"); } catch(e){ return; }
+    if (!xo || !xo.isDictionary || !xo.isDictionary()) return;
+    xo.forEach((val)=>{
+      try {
+        if (!val || !val.isIndirect || !val.isIndirect()) return;
+        const num = val.asIndirect();
+        const sub = val.get("Subtype");
+        const st = (sub && sub.isName && sub.isName()) ? sub.asName() : "";
+        if (st === "Image"){ if (!out.has(num)) out.set(num, val); }
+        else if (st === "Form"){
+          if (seenForms.has(num)) return;        // guards recursive forms
+          seenForms.add(num);
+          walkRes(val.get("Resources"), depth+1);
+        }
+      } catch(e){}
+    });
+  };
+  const n = pdf.countPages();
+  for (let i=0;i<n;i++){
+    let page = null;
+    try { page = pdf.loadPage(i); walkRes(page.getObject().getInheritable("Resources"), 0); }
+    catch(e){}
+    finally { try{ if(page) page.destroy(); }catch(e){} }
+  }
+  return out;
+}
+
+// How big is each image actually DRAWN? This is the number the whole feature
+// turns on, and it cannot be read off the image object: it lives in the
+// content stream's transformation matrix. Rather than parse content streams,
+// run each page through a render device that draws nothing and only notes the
+// matrix it is handed. For an image the CTM maps the unit square onto the
+// placed rectangle, so its column lengths ARE the drawn width and height in
+// points.
+//
+// Images are keyed by their intrinsic shape (pixels, components, bit depth)
+// because the device is handed a decoded image, not the object number it came
+// from. Two DIFFERENT images that share all four properties therefore share an
+// entry, and the largest placement wins — deliberately, because a larger
+// placement means a higher DPI target, which means LESS reduction. A collision
+// can only ever be conservative.
+function measureImagePlacements(pdf){
+  const max = new Map();
+  const note = (image, ctm)=>{
+    try {
+      const key = image.getWidth()+":"+image.getHeight()+":"
+                + image.getNumberOfComponents()+":"+image.getBitsPerComponent();
+      const wpt = Math.hypot(ctm[0], ctm[1]), hpt = Math.hypot(ctm[2], ctm[3]);
+      if (!(wpt > 0) || !(hpt > 0)) return;
+      const prev = max.get(key);
+      if (!prev || wpt*hpt > prev.wpt*prev.hpt) max.set(key, { wpt, hpt });
+    } catch(e){}
+  };
+  const n = pdf.countPages();
+  for (let i=0;i<n;i++){
+    let page = null, dev = null;
+    try {
+      page = pdf.loadPage(i);
+      dev = new mupdf.Device({
+        fillImage:     (im, ctm)=> note(im, ctm),
+        fillImageMask: (im, ctm)=> note(im, ctm),
+        clipImageMask: (im, ctm)=> note(im, ctm),
+      });
+      page.run(dev, mupdf.Matrix.identity);
+    } catch(e){
+      // A page we cannot render leaves its images unmeasured, which the
+      // IMG_UNMEASURED_MAX ceiling then handles conservatively. One bad page
+      // must not abort the whole pass.
+    } finally {
+      try{ if(dev) dev.close(); }catch(e){}
+      try{ if(dev) dev.destroy(); }catch(e){}
+      try{ if(page) page.destroy(); }catch(e){}
+    }
+  }
+  return max;
+}
+
+// Colour space name for a pixmap component count. Anything else is refused
+// rather than guessed at.
+function csNameFor(n){
+  return n === 1 ? "DeviceGray" : n === 3 ? "DeviceRGB" : n === 4 ? "DeviceCMYK" : null;
+}
+
+// ---- v11.36: the recompression pass --------------------------------------
+// Rewrites oversized image streams IN PLACE. Returns a small report so the
+// status line can say something true about what happened.
+async function recompressImages(pdf, level, onProgress){
+  const cfg = IMG_LEVELS[level] || IMG_LEVELS.medium;
+  const placements = measureImagePlacements(pdf);
+  const imgs = collectImageXObjects(pdf);
+  const rep = { total: imgs.size, changed: 0, bilevel: 0, before: 0, after: 0 };
+  let idx = 0;
+  for (const ref of imgs.values()){
+    idx++;
+    if (onProgress) await onProgress(idx, imgs.size);
+    let im = null, pm = null;
+    try {
+      // A stencil mask is 1-bit by definition, already tiny, and JPEG cannot
+      // represent it at all.
+      const imask = ref.get("ImageMask");
+      if (imask && imask.isBoolean && imask.isBoolean() && imask.asBoolean()) continue;
+      // /JPXDecode is JPEG 2000. Round-tripping one through a pixmap can shift
+      // colour, and they are rare enough not to be worth that risk.
+      const filt = ref.get("Filter");
+      const filtName = (filt && filt.isName && filt.isName()) ? filt.asName() : "";
+      if (filtName === "JPXDecode") continue;
+
+      const rawLen = ref.readRawStream().asUint8Array().length;
+      if (rawLen < IMG_MIN_BYTES) continue;
+
+      im = pdf.loadImage(ref);
+      const pxW = im.getWidth(), pxH = im.getHeight();
+      const key = pxW+":"+pxH+":"+im.getNumberOfComponents()+":"+im.getBitsPerComponent();
+      const place = placements.get(key);
+      const t = imageTargetSize(pxW, pxH, place ? place.wpt : 0, place ? place.hpt : 0, cfg.dpi);
+
+      // Already at a sensible resolution. If it is also already a JPEG there is
+      // nothing to gain and a generation of quality to lose, so leave it. If it
+      // is stored uncompressed or Flate, re-encoding at FULL size is still a
+      // large, one-generation win.
+      if (!t && filtName === "DCTDecode") continue;
+      const tw = t ? t.w : pxW, th = t ? t.h : pxH;
+
+      pm = im.toPixmap();
+      // An alpha channel cannot survive a JPEG. Images with soft masks keep
+      // their transparency in a separate /SMask object, which this pass leaves
+      // alone; a pixmap that carries alpha directly is skipped outright.
+      if (pm.getAlpha()) continue;
+      const sw = pm.getWidth(), sh = pm.getHeight(), stride = pm.getStride();
+      const n = pm.getNumberOfComponents();
+      const csName = csNameFor(n);
+      if (!csName) continue;
+      const src = pm.getPixels();
+
+      const prof = bilevelProfile(src, sw, sh, stride, n);
+      const down = (tw === sw && th === sh && stride === sw*n)
+        ? src.slice(0)
+        : boxDownsample(src, sw, sh, stride, n, tw, th);
+
+      // --- candidate A: JPEG ------------------------------------------------
+      let bestBytes = null, bestFilter = null, bestParms = null, bestN = n, bestCs = csName;
+      let out = null;
+      try {
+        out = new mupdf.Pixmap(
+          n === 1 ? mupdf.ColorSpace.DeviceGray : n === 4 ? mupdf.ColorSpace.DeviceCMYK : mupdf.ColorSpace.DeviceRGB,
+          [0, 0, tw, th], false);
+        const dp = out.getPixels(), ds = out.getStride();
+        for (let y=0; y<th; y++) dp.set(down.subarray(y*tw*n, (y+1)*tw*n), y*ds);
+        const jpg = new Uint8Array(out.asJPEG(cfg.q));
+        bestBytes = jpg; bestFilter = "DCTDecode"; bestParms = null;
+      } catch(e){ bestBytes = null; }
+      finally { try{ if(out) out.destroy(); }catch(e){} }
+
+      // --- candidate B: CCITT G4, only for images that are ALREADY bilevel ---
+      if (prof && prof.isBilevel){
+        try {
+          const bits = toBilevelBits(down, tw, th, tw*n, n, 128);
+          const g4 = ccittG4Encode(bits, tw, th);
+          if (!bestBytes || g4.length < bestBytes.length){
+            bestBytes = g4; bestFilter = "CCITTFaxDecode"; bestParms = { K:-1, Columns:tw, Rows:th };
+            bestN = 1; bestCs = "DeviceGray";
+          }
+        } catch(e){ /* keep the JPEG candidate */ }
+      }
+
+      if (!bestBytes) continue;
+      // Never grow, and never spend a generation of quality on a token saving.
+      if (bestBytes.length > rawLen * (1 - IMG_MIN_GAIN)) continue;
+
+      ref.put("Width",  pdf.newInteger(tw));
+      ref.put("Height", pdf.newInteger(th));
+      ref.put("ColorSpace", pdf.newName(bestCs));
+      ref.put("BitsPerComponent", pdf.newInteger(bestFilter === "CCITTFaxDecode" ? 1 : 8));
+      ref.put("Filter", pdf.newName(bestFilter));
+      // /Decode and the old /DecodeParms describe the OLD encoding. Leaving
+      // either behind is how an image comes back inverted or unreadable.
+      ref.delete("Decode");
+      ref.delete("DecodeParms");
+      if (bestParms){
+        const dp2 = pdf.newDictionary();
+        dp2.put("K", pdf.newInteger(bestParms.K));
+        dp2.put("Columns", pdf.newInteger(bestParms.Columns));
+        dp2.put("Rows", pdf.newInteger(bestParms.Rows));
+        dp2.put("BlackIs1", pdf.newBoolean(false));
+        ref.put("DecodeParms", dp2);
+      }
+      ref.writeRawStream(bestBytes);
+      rep.changed++;
+      rep.before += rawLen;
+      rep.after  += bestBytes.length;
+      if (bestFilter === "CCITTFaxDecode") rep.bilevel++;
+    } catch(e){
+      // One unreadable image must not abandon the other forty.
+    } finally {
+      try{ if(pm) pm.destroy(); }catch(e){}
+      try{ if(im) im.destroy(); }catch(e){}
+    }
+  }
+  return rep;
+}
+
 // Roughly how much real, extractable text the document has, sampled across the
 // first few pages. A scanned / image-only PDF returns ~0; a born-digital text
 // page returns hundreds. Used to protect text PDFs from being silently
@@ -4126,13 +5613,13 @@ function sampledTextLength(maxPages=8, stopAt=80){
   return chars;
 }
 // Asked before rasterising a document that contains real text. Resolves:
-//   false → keep the text-safe lossless result;  true → rasterise to pictures;
+//   false → keep the text-safe result;  true → rasterise to pictures;
 //   null  → cancel the whole operation.
 function confirmRasterise(before, losslessLen){
   return new Promise(resolve=>{
     $("sheet").innerHTML = h`
       <h3>This PDF contains real text</h3>
-      <p class="hint">Making it this small turns every page into a picture, so the text can no longer be selected, searched or read aloud. A text-safe version is ${fmtKB(losslessLen)} (from ${fmtKB(before)}).</p>
+      <p class="hint">The pictures inside it have already been reduced as far as this setting allows — that version is ${fmtKB(losslessLen)} (from ${fmtKB(before)}) and its text is still selectable. Going smaller means turning every page into a picture, after which the text can no longer be selected, searched or read aloud.</p>
       <div class="row"><button class="full" id="crKeep">Keep text · ${fmtKB(losslessLen)}</button></div>
       <div class="row"><button class="full" id="crGo">Make smallest (as pictures)</button></div>
       <div class="row"><button class="ghost full" id="crCancel">Cancel</button></div>`;
@@ -4148,15 +5635,44 @@ function confirmRasterise(before, losslessLen){
 async function runCompress(level){
   const cfg=COMPRESS[level], before=workingBytes.length;
   showSpin(true,"Compressing…");
+  let imgRep = null;
   try {
-    // 1) lossless structural pass FIRST. This does not mutate MDOC or
-    //    workingBytes, so we can decide what to do before committing — and
-    //    before taking the Undo snapshot, which keeps peak memory down.
+    // 1) Lossless structural pass. Cheap, safe, and on some files enough on its
+    //    own. It does not mutate MDOC or workingBytes, so we can still decide
+    //    what to do before committing — and before taking the Undo snapshot,
+    //    which keeps peak memory down.
     let best = u8(MDOC.saveToBuffer("compress,compress-images,compress-fonts,garbage").asUint8Array());
     let bestLen = best.length;
     let rasterised = false;
-    // 2) only if that still misses the target do we consider rasterising pages
+
+    // 2) v11.36: per-image recompression. This is the step that does the real
+    //    work on the files people actually want to shrink, and it keeps every
+    //    piece of text, every font and every vector exactly as it was.
+    //    It runs on a SEPARATE copy of the document: if anything goes wrong the
+    //    lossless result from step 1 is still there, untouched.
     if (bestLen > cfg.targetKB*1024){
+      let work = null;
+      try {
+        work = mupdf.Document.openDocument(workingBytes.slice(0), "application/pdf").asPDF();
+        if (work){
+          imgRep = await recompressImages(work, level, async (i, n)=>{
+            showSpin(true, "Compressing… picture "+i+" of "+n);
+            await new Promise(r=>setTimeout(r,0));     // keep the UI alive
+          });
+          if (imgRep && imgRep.changed){
+            const cand = u8(work.saveToBuffer("compress,compress-fonts,garbage").asUint8Array());
+            if (cand.length < bestLen){ best = cand; bestLen = cand.length; }
+          }
+        }
+      } catch(e){ imgRep = null; }
+      finally { try{ if(work) work.destroy(); }catch(e){} }
+    }
+
+    // 3) Rasterising is now the LAST resort, not the second move. It is only
+    //    considered when the images have already been dealt with and the file
+    //    is still over target.
+    if (bestLen > cfg.targetKB*1024){
+      showSpin(true,"Compressing…");
       const rasterAll = async ()=>{
         for (const step of cfg.steps){
           const bytes = await rasterize(step.dpi, step.q);
@@ -4165,35 +5681,41 @@ async function runCompress(level){
         }
       };
       if (sampledTextLength() >= 80){
-        // real text present: rasterising would destroy selectable/searchable
+        // Real text present: rasterising would destroy selectable/searchable
         // text. Let the user choose instead of doing it silently.
         showSpin(false);
         const choice = await confirmRasterise(before, bestLen);
         if (choice === null){ setStatus("Compression cancelled.","warn"); return; }
         showSpin(true,"Compressing…");
         if (choice === true) await rasterAll();
-        // choice === false: keep the text-safe lossless result (best/bestLen)
       } else {
         // no meaningful text (scanned / image PDF): rasterise freely as before
         await rasterAll();
       }
     }
-    // 3) never grow the file. An already-optimised PDF can come back the same
-    //    size or a few bytes LARGER from the lossless structural pass; committing
-    //    that would grow the document, mark it dirty and add a pointless undo
-    //    step, and report a negative "% smaller". Leave it untouched instead.
+
+    // 4) Never grow the file. An already-optimised PDF can come back the same
+    //    size or a few bytes LARGER; committing that would grow the document,
+    //    mark it dirty, add a pointless undo step and report a negative
+    //    "% smaller". Leave it untouched instead.
     if (bestLen >= before){
       showSpin(false);
       setStatus(`Already about as small as it usefully gets — ${fmtKB(before)} left unchanged.`, "ok");
       return;
     }
-    // 4) commit — snapshot for Undo now (skipped on very large files, #5)
+    // 5) commit — snapshot for Undo now (skipped on very large files)
     const undoKept = pushUndoGuarded();
     workingBytes = best instanceof Uint8Array ? best : new Uint8Array(best);
     reopen(); await render();
     const met = bestLen <= cfg.targetKB*1024, pct=Math.round(100*(1-bestLen/before));
-    setStatus(`Done: ${fmtKB(before)} → ${fmtKB(bestLen)} (${pct}% smaller).`
-      + (rasterised ? "" : " Text stays selectable.")
+    let how = "";
+    if (rasterised) how = " Pages were turned into pictures, so the text is no longer selectable.";
+    else if (imgRep && imgRep.changed)
+      how = " "+imgRep.changed+" picture"+(imgRep.changed>1?"s":"")+" reduced"
+          + (imgRep.bilevel ? " ("+imgRep.bilevel+" stored as black-and-white)" : "")
+          + "; all text stays selectable.";
+    else how = " Text stays selectable.";
+    setStatus(`Done: ${fmtKB(before)} → ${fmtKB(bestLen)} (${pct}% smaller).` + how
       + (met||rasterised ? "" : " That\'s the smallest it can go and stay readable.")
       + (undoKept ? "" : " (Too large to keep an undo step.)"), "ok");
   } catch(err){ setStatus("Could not compress: "+friendly(err),"err"); }

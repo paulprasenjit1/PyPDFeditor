@@ -4,6 +4,427 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.38] — 2026-07-27 — Sign with your finger
+
+**Signing used to require an image file.** You had to sign paper, photograph it,
+get the photo onto the phone, and then pick it — every single time, because
+nothing was remembered. Every competing app lets you draw with a finger and
+keeps what you drew. Tapping Sign now opens a sheet with your saved signatures
+first, then "Draw a signature", with the photo import kept as a secondary path.
+
+- **Up to three signatures are kept on the device** (IndexedDB, alongside the
+  rest of the app's on-device storage; nothing leaves the phone) and there is a
+  "Forget saved signatures" button, because a signature is the one thing in this
+  app a person may want gone immediately.
+- **The stroke tapers with speed** — a fast stroke is drawn thinner, the way a
+  pen behaves. Without it a finger-drawn signature reads as rope rather than as
+  ink.
+- **The export is cropped to the ink**, with a 12pt margin, and keeps its
+  transparent background. Cropping matters as much as transparency: an untrimmed
+  pad places a mostly-empty box on the page, and the user then has to fight the
+  aspect ratio to get the signature to the right size. A test asserts the crop
+  rectangle is the ink and not the whole board; reverting it fails that test.
+- **The pad is a light panel, not a dark one.** The sheet is OLED black and a
+  signature is drawn in dark ink, so a dark pad would be invisible while
+  drawing.
+- Placement is completely unchanged: the same drag-a-box overlay, the same
+  transparency handling, the same rotated-page warning. Only where the picture
+  comes from is new.
+
+Tests: 3 checks added to `tests/editor-tests.mjs` (37 total) covering the export,
+the crop rectangle, and an empty pad exporting nothing rather than a blank box.
+Whole suite green: 13 + 15 + 59 + 37 + 60 + 67 + 30 + 17 + 104.
+
+## [v11.37] — 2026-07-27 — Edit a whole paragraph, and choose size, colour and typeface
+
+Backup: `backups/restore.zip` (re-taken at v11.36, before this release).
+
+**Until now one LINE was the largest thing that could be edited.** That is fine
+for a form field and useless for a sentence: changing "twelve" to "twenty-four"
+in the middle of a paragraph left that line short and every line below it
+untouched, so the text stopped reading as a paragraph. Tapping any line of a
+paragraph now offers to edit the whole thing, and re-wraps it.
+
+- **Finding the paragraph is the hard part, and the risk is being too eager.**
+  A grouping that over-reaches is worse than none at all: it would sweep a
+  heading, a caption or the next column into the edit and re-flow them away. A
+  paragraph is therefore only a run of lines that overlap horizontally, are set
+  at the same size *and* the same colour, are spaced at a consistent pitch, and
+  are not separated by a paragraph-sized gap. Anything less clear comes back as
+  the single line it started from, which is exactly the pre-v11.37 behaviour.
+- **Side-by-side columns needed their own fix.** Sorting a page by baseline
+  interleaves them — a two-column layout gives left1, right1, left2, right2 at
+  equal baselines — so a walk down that list stops at the very first neighbour
+  and a paragraph in a two-column document could never be found at all. The
+  candidate lines are now filtered to the tapped line's own column *before* the
+  walk, which also makes the pitch check meaningful: it then measures the gap
+  to the next line of this column rather than to whatever sits beside it. This
+  was found by a test (ED8), not by reasoning.
+- **The block width comes from the full lines, not the short last one.** Taking
+  the widest extent would work; taking the last line's would re-wrap every
+  paragraph to the width of its own final line and make it a line taller on
+  every single edit. The 75th percentile of the line widths is used instead.
+- **Leading is the median step between baselines**, not the mean, so one line
+  carrying a superscript cannot stretch the whole paragraph's setting.
+- **A paragraph that outgrows its space is shrunk, not spilled.** Text that
+  needs more lines than the original had is set progressively smaller, down to
+  70% of the original size. If even that will not fit, it is allowed to run on
+  and the status line says so plainly, because text that silently lands on
+  whatever is underneath is something the user cannot see coming.
+- **The re-wrapped lines keep the paragraph's own first baseline and its own
+  leading**, so an edited paragraph sits exactly where the old one did. Every
+  line is measured in the face it will actually be drawn in — measuring in one
+  font and drawing in another is the v11.29 bug, and it is not being repeated.
+- The whole paragraph is erased in one redaction pass, using the same
+  line-clamped bands as v11.30, so the lines above and below it survive.
+
+**Type controls.** The edit sheet now has size (half-point steps, tap the
+readout to return to the original), seven colours, and a typeface choice.
+Choosing a typeface deliberately stops the document's own embedded font being
+reused — that is the whole point of the choice — while "Same" keeps the v11.29
+embedded-font path exactly as it was. Size and colour both default to the
+original, so an edit that touches neither is byte-identical to v11.36.
+
+### Tests
+
+New `tests/editor-tests.mjs` (34 checks) added to `npm test`: paragraph grouping
+against hand-built fixtures (heading, coloured line, paragraph gap, neighbouring
+column, changed leading, short last line, tapping any line of the block,
+malformed input), greedy wrapping, shrink-to-fit and honest overflow, plus the
+grouping run against **real structured text** from a laid-out page, where the
+four body lines must group and the heading and the caption must not.
+
+Six mutations were checked and all six now fail the suite: dropping the size
+check, the colour check, the column filter, the paragraph-gap check, taking the
+block width from the last line, and removing shrink-to-fit. The size-check
+mutation initially did *not* bite, which showed ED5 was passing for the wrong
+reason — the heading was being rejected by the pitch guard rather than by the
+size rule — so the fixture was re-cut to isolate the one rule under test.
+
+**A note on process.** Bumping the version, I truncated `index.html` and `sw.js`
+to zero bytes with a bad one-liner (`open(f,"w").write(open(f).read()…)` opens
+for writing, and therefore truncates, before it reads). The test suite caught it
+one command later and both files were restored from `backups/restore.zip`. This
+is recorded because it is the clearest argument yet for keeping the restore
+point current and the suite fast.
+
+Whole suite green: 13 + 15 + 59 + 34 + 60 + 67 + 30 + 17 + 104.
+
+## [v11.36] — 2026-07-27 — Compress shrinks the pictures, not the text
+
+Backup: `backups/restore.zip` (re-taken at v11.35, before this release).
+
+**The old compressor had two moves and nothing in between.** A lossless
+structural pass, worth a few percent on a typical file and nothing at all on an
+already-optimised one; and rasterising every page to a picture, which hits any
+target but destroys selectable text. A document whose bulk is a handful of
+oversized images — a report with screenshots, a scan, an invoice with a logo —
+therefore had no useful option: you got 5%, or you got your text destroyed.
+
+**What actually makes those files big is that their images are stored at far
+higher resolution than they are ever drawn at.** A 12-megapixel phone photo
+placed in a 5cm box on the page carries roughly 25 times the pixels that box can
+show. Compress now recompresses each image individually and in place, against
+the size it is actually drawn at, and leaves everything else in the file
+byte-for-byte alone: text, fonts, vectors, links, annotations, form fields, the
+page tree. Rasterisation still exists but is demoted to what it should always
+have been — a last resort, reached only if the file is still over target after
+the images have been dealt with.
+
+Measured on a synthetic photo-heavy A4 page (a 1200×1600 photo drawn at 400pt
+wide, plus real text): **2.92 MB → 705 KB, 76% smaller, with every character of
+text still selectable and searchable.** The old pipeline on the same file
+offered 5% or a rasterised page.
+
+- **The drawn size is read off the content stream's own transformation matrix.**
+  This is the number the whole feature turns on and it cannot be read from the
+  image object — it lives in the page's drawing instructions. Rather than parse
+  content streams, each page is run through a MuPDF render device that draws
+  nothing and only notes the matrix it is handed. For an image that matrix maps
+  the unit square onto the placed rectangle, so its column lengths *are* the
+  drawn width and height in points. Effective DPI is then just pixels over
+  inches. This is the same vendored MuPDF that was already in the app; the JS
+  device interface it exposes was simply never used.
+- **Images are keyed by their intrinsic shape** (pixels, components, bit depth),
+  because the device is handed a decoded image rather than the object number it
+  came from. Two genuinely different images sharing all four properties
+  therefore share an entry and the largest placement wins — deliberately, since
+  a larger placement means a higher DPI target, which means *less* reduction. A
+  collision can only ever be conservative.
+- **Downsampling is an area average, not a canvas `drawImage`.** The browser's
+  scaler is bilinear, which on a 3–4× reduction samples a sparse subset of
+  source pixels and turns small type into a shimmer; a one-pixel rule can vanish
+  entirely. Averaging every source pixel that falls inside a destination cell is
+  both correct and visibly cleaner. It is also pure JavaScript over the pixmap
+  bytes, so it runs identically in the tests.
+- **Nothing is rewritten unless the saving is real.** A replacement must be at
+  most 90% of the stream it replaces, or the original is kept. Re-encoding a
+  JPEG costs a generation of quality, and spending that for a 3% gain is a bad
+  trade. An image already at a sensible resolution *and* already a JPEG is
+  skipped outright; one stored as Flate or uncompressed is still re-encoded at
+  full size, because that is a large one-generation win.
+- **Skipped on purpose, each for a reason:** stencil masks (`/ImageMask true` —
+  1-bit by definition, already tiny, and JPEG cannot represent them), JPEG 2000
+  (`/JPXDecode` — round-tripping one can shift colour, and they are too rare to
+  be worth that risk), anything whose pixmap carries an alpha channel (JPEG has
+  no alpha; soft masks live in a separate `/SMask` object, which is left alone
+  and keeps working because the PDF spec allows it to differ in size from the
+  image it masks), and anything under 6 KB.
+- **`/Decode` and the old `/DecodeParms` are cleared before rewriting.** They
+  describe the *old* encoding; leaving either behind is exactly how an image
+  comes back inverted or unreadable.
+- **The whole pass runs on a separate copy of the document.** If anything throws
+  — one unreadable image, one page that will not render — the lossless result
+  from step one is still there untouched, and a single bad image never abandons
+  the other forty.
+- **Images shared across pages are handled once.** Keyed by object number, so a
+  logo on all forty pages is rewritten once and every reference picks up the
+  smaller version. The resource walk follows Form XObjects too, with a
+  seen-set so a self-referencing form cannot loop.
+- **The status line now says what actually happened** — how many pictures were
+  reduced, how many were stored as black-and-white, and whether text survived —
+  instead of a bare percentage.
+
+### CCITT Group 4 for images that are already black and white
+
+Some images are *already* two-valued — a fax, a stamp, a signature, a line
+drawing, a page someone thresholded long before it reached us — but are stored
+as 8-bit grey or 24-bit colour, which is 8 to 24 times the data they carry. For
+those, Group 4 (the fax standard) is the right container, and a full T.6 encoder
+is now included.
+
+- **Measured against the alternative it replaces, the win is large: 42 KB versus
+  387 KB for the JPEG the pass would otherwise have written — about 9×** — and
+  unlike JPEG it is *exact*, with none of the ringing that makes a JPEG of black
+  text on white look dirty. Against a Flate-stored original the gain is a more
+  modest ~23%: Flate already exploits long runs of identical pixels, so the
+  "5–15×" figure usually quoted for fax compression is against raw bits, not
+  against a zipped image. The changelog says the smaller number because it is
+  the true one.
+- **The test for "already bilevel" is deliberately severe**, because this is only
+  safe as a change of container, not of appearance: at least 99.5% of pixels at
+  the extremes, near-zero chroma, and an ink coverage between 0.2% and 45%. An
+  anti-aliased grey scan — which is what this app's own scanner produces — has a
+  broad spread of mid-tones, fails the test, and stays a JPEG; thresholding one
+  would visibly wreck it. A two-valued *coloured* image (a blue stamp) is refused
+  by the chroma guard rather than having its colour thrown away. A blank page and
+  a solid black block are both refused: neither is a document.
+- Group 4 legitimately *expands* random noise, which is why the never-grow guard
+  is not optional.
+
+### Tests
+
+New `tests/compress-tests.mjs` (67 checks) added to `npm test`.
+
+The Group 4 encoder is verified by handing its output to **MuPDF's own CCITT
+decoder** and comparing every pixel — all white, all black, vertical and
+horizontal stripes, diagonals at odd dimensions, random noise, a sparse
+text-like page, a single row, a single column, and a run longer than 2560 that
+exercises the extended makeup codes. That is the only honest way to check a
+bit-level codec: a single wrong entry in the T.4 tables produces a stream that
+decodes to plausible garbage rather than to an error, and the mutation test
+below confirms it.
+
+The rest covers the effective-DPI arithmetic (including the slack band, the
+unmeasured-image ceiling, and degenerate input), the box filter, bilevel
+detection across five image types, and end-to-end runs on real PDFs: a 60%+
+reduction with text compared character by character before and after, the
+picture genuinely smaller in pixels and landing near the requested DPI, the
+three quality levels genuinely differing, a small image left completely
+untouched, a shared image rewritten once, a text-and-vector document untouched,
+and font objects compared byte for byte. Eleven source guards assert the call
+sites.
+
+Every fix was mutation-tested: removing the never-grow guard fails CP40;
+replacing the box filter with point sampling fails CP10, CP11 and CP12;
+flipping one bit in a single white run-length code fails four round-trips;
+removing the chroma guard fails CP16; removing the DPI slack fails CP4; and
+skipping the image pass in `runCompress` fails CP46. Two of these mutations
+initially failed to bite, which exposed two weak tests — the box-filter check
+and the coloured-bilevel check — and both were rewritten until they did.
+
+Whole suite green: 13 + 15 + 59 + 60 + 67 + 30 + 17 + 104.
+
+## [v11.32–v11.35] — 2026-07-27 — Scanner: hands-free capture, real paper sizes, two-sided ID cards, scan into an open document
+
+Backup: `backups/restore.zip` (snapshot of v11.31, taken before this batch).
+
+Housekeeping first: the `backups/` folder held 58 files and 138 MB of
+per-version zips and dated per-file copies going back to v10.80. All deleted.
+There is now exactly ONE rollback snapshot, `backups/restore.zip`, and
+`backups/RESTORE.md` says how to roll back to it and how to take a new one. The
+changelog is the version history; the backups folder is not. `.gitignore` was
+rewritten to match: it now names every shape that junk took
+(`*-restore-point.zip`, `*_pre_*.js`, the extension-less `zi……` temp files the
+zip tool left behind) so none of it can return on a future branch. `tests/` is
+no longer git-ignored — that was a deployment concern, and `npm test` depends on
+it. The stale `AUDIT-v10.94.md` moved into `backups/`.
+
+### v11.32 — Auto capture
+
+The shutter now fires itself. Point the camera at a page, hold it steady, and
+the page is taken and added — no tap, and no trip through the Adjust screen.
+A ten-page document goes from about forty taps to about twelve.
+
+- **The decision to fire is a separate, much stricter gate than the one that
+  draws the green box.** `detectQuad` always returns its best candidate, which
+  is right for an outline the user can correct on the next screen, but wrong as
+  a licence to commit a page unreviewed. The new `autoCaptureReady` in
+  `scan-core.js` re-checks the geometry from scratch and refuses: a quad
+  touching the frame edge (the document is already cropped, and the outline
+  running along the edge of the screen does not make that obvious), one covering
+  under 22% or over 97% of the frame, any side under 18% of the short edge, a
+  non-convex quad, and corner angles outside 72°–108° — tighter than the
+  detector's 65°–115°, because a steep view stretches the far edge and softens
+  its text, and that cannot be undone later without rescanning. The asymmetry is
+  deliberate: a false negative costs one tap on the shutter, a false positive
+  files a bad page the user may not notice until the PDF is built.
+- **"Held still" needed a new measurement.** The existing `liveStable` counter
+  looked like it was already there for this, and it is not: it counts frames the
+  detection stayed within `quadClose`'s tolerance, which is 18% of the quad's
+  span. That tolerance exists so the outline does not flicker, and it means a
+  slow, steady hand drift keeps incrementing `liveStable` while the page is
+  visibly moving. `smoothQuad` now also records the largest per-frame corner
+  shift, and the gate requires it under 1.2% of the frame diagonal. A brand-new
+  or re-snapped quad reports `Infinity` — no previous frame means "moving",
+  which is the safe direction, since the first frame of a new document is
+  exactly when the detection is least trustworthy.
+- **A countdown ring, drawn on the overlay at the centre of the document**,
+  fills over 0.9s on top of the ~0.9s lock. Every refusal path disarms, so the
+  ring resets the instant you move: the shot is visible before it happens and is
+  cancelled by moving. While the countdown runs, the detect loop stops skipping
+  every other tick (a v10.94 battery optimisation) — halving the rate would
+  halve the resolution of the motion check, the one gate that stops a moving
+  page being taken. The ring itself is redrawn on animation frames only while
+  armed, so the 300ms tick does not make it move in three visible jumps and
+  there is no standing battery cost.
+- **One page cannot be taken twice.** After firing, capture latches until the
+  document is *released* — the detection is lost, or it jumps to a different
+  quad. That covers both ways a person actually works: lifting the phone off the
+  stack, and sliding the next sheet under it without moving the phone at all.
+- **The Auto toggle sits in the scan title bar and is remembered.** On by
+  default. The shutter still works by hand at any time, and a hand-tapped
+  shutter still goes through the Adjust screen — Auto is for working through a
+  stack, the shutter is for the one awkward page. The toggle hides itself on the
+  native-camera fallback path, where there is no live preview to detect on and
+  it would be a control that silently does nothing.
+- Auto pages run the IDENTICAL pipeline as hand-cropped ones: `commitScanPage`
+  was lifted out of the "Use page" handler and both callers share it, so the two
+  differ only in where the quad came from.
+- **A refusal that persists says why.** An automatic feature that declines in
+  silence is the worst kind — nothing happens and there is no way to know what
+  to change. When the same reason holds for about 1.8s, one plain-language line
+  appears ("Hold the phone flatter over the page", "Move back a little — part of
+  the page is outside the frame"), at most once every six seconds so it cannot
+  become a running commentary on every camera wobble, and always ending with the
+  reminder that the shutter is right there. Tapping the shutter cancels a
+  countdown in progress: a deliberate tap means the user wants to frame this one
+  themselves.
+
+### v11.33 — Scanned pages are a real paper size
+
+- **Every scanned page used to be a size that is not any real paper.** The page
+  was built as `s = 842/max(w,h)`, then `addPage([w*s, h*s])` — which scales the
+  long side to A4's 842pt but keeps whatever aspect ratio the detected quad
+  happened to have. A hand-cropped A4 sheet is never exactly 1:1.414, so a
+  typical scan came out 612.4 × 842 rather than 595.28 × 841.89. Three visible
+  consequences: the print dialog rescales it and the margins come out uneven,
+  merging a scan with a born-digital PDF gives a document whose pages are all
+  slightly different sizes, and anything stamped or numbered later lands at
+  inconsistent offsets.
+- **The page is now a real size and the image is fitted inside it**, letterboxed
+  with white where the aspect does not match. Nothing is cropped and nothing is
+  stretched: the captured aspect ratio is preserved exactly. White margins are
+  what a flatbed produces too, and they compress to almost nothing. The
+  letterbox is explicitly painted white rather than left transparent, because a
+  pdf-lib page has no background and a transparent margin prints as whatever the
+  printer decides.
+- **A new Page control in the Adjust filter bar** cycles A4 → Letter → Legal →
+  As captured, and is remembered. A4 is the default. "As captured" reproduces
+  the old behaviour exactly, for anyone who wants it.
+- **A landscape capture turns the PAPER, not the image** — a landscape shot gets
+  a landscape A4 page instead of being letterboxed into portrait with large
+  white bands top and bottom.
+- **Any scanned page can be turned a quarter at a time from its review sheet.**
+  This matters more than it used to: with auto capture the Adjust screen, and
+  its Rotate button, is skipped entirely, so previously a sideways page could
+  only be fixed after the PDF was built. The turn is stored per page and written
+  as `/Rotate` at build time, so it is lossless — the JPEG is never re-encoded
+  to rotate it — and the thumbnail shows it (through the CSSOM, since the CSP is
+  `style-src 'self'` with no `unsafe-inline`).
+- **Auto-rotate-to-portrait was planned for this release and deliberately NOT
+  built.** A landscape certificate, a spreadsheet printout and a sideways-held
+  capture of a portrait sheet all produce exactly the same output shape; no
+  amount of geometry distinguishes them, because telling them apart means
+  reading the text direction, which is an OCR job. Rotating on aspect alone
+  would have silently turned every genuinely landscape document on its side. The
+  paper-turning above and the per-page manual turn cover the real cases without
+  guessing. This is written down in the source at the point where the check
+  would have gone.
+
+### v11.34 — Both sides of an ID card on one page
+
+- **"Both sides" in Photo ID mode** captures the front, holds it, then combines
+  it with the back onto a single A4 page — what every print shop produces for an
+  Aadhaar, PAN, licence or voter card. Before this each side became its own
+  page, so a card came out as a two-page PDF with two-thirds of each page blank,
+  which then had to be printed twice.
+- The two sides are fitted independently. They are rarely framed identically,
+  and a shared scale would shrink whichever side was photographed from further
+  away; each is capped at 30% of the page height so a tall card (a passport page
+  rather than an ID-1 card) still cannot overrun the sheet.
+- **One-sided output is unchanged to the pixel.** `compositeCardOnA4` now
+  delegates to the shared two-slot placement, and passing a single card
+  reproduces the previous geometry exactly (46% width, 42% height cap, top at
+  17% of the page) — asserted by a test.
+- The toggle is hidden outside Photo ID mode rather than merely disabled, which
+  also keeps the filter row from wrapping to a third line on a small phone. A
+  held front side is dropped when ID mode or the toggle is switched off, and
+  when the scan session ends, so a stale side can never be welded onto an
+  unrelated card later. While a side is held the page counter says "Front held —
+  scan the back", because otherwise the count not moving after a capture looks
+  like the capture failed.
+
+### v11.35 — Scan straight into the document you already have open
+
+- **"Scan more pages"** in More → Create, and **"Scan more pages into this"** on
+  a Recents card, start a scan session whose pages are added to the end of the
+  open document instead of replacing it. The everyday case: a contract is open,
+  one page comes back signed on paper, and it has to go on the end. That
+  previously meant saving the scan as its own PDF, reopening the original, then
+  Combine — three round trips through the Files app for one page.
+- The button relabels itself to "Add to document (n)" so it is clear before you
+  commit, and the append path skips the discard prompt, since nothing is being
+  discarded.
+- **Ordering is chosen so a failure cannot damage the open document.** The
+  scanned pages are built and validated into a temporary PDF first; only then is
+  the undo snapshot taken and the graft performed. If anything throws, the
+  document is left exactly as it was — no undo step, no dirty flag, no
+  half-appended file. Pages are grafted with mupdf's `graftPage`, the same
+  primitive Combine uses, which carries page resources across properly instead
+  of re-rasterising. If the document went away while the camera was up, the
+  session falls back to creating a new PDF rather than losing the pages.
+- Appended pages are built with the same `addScanPageTo` as a brand-new
+  document, so a page added to an existing file is identical to a freshly
+  scanned one.
+
+### Tests
+
+New `tests/scan-tests.mjs` (60 checks) added to `npm test`, running the shipped
+helpers out of `app.js` and `scan-core.js`: the auto-capture gate (framing,
+motion, off-frame, angle, convexity, malformed input, and that it is strictly
+tighter than the detector), paper fitting (real sizes, aspect preservation,
+centring, letterbox, landscape paper turn, "as captured" parity with the old
+formula, degenerate input), end-to-end page geometry read back out of the built
+PDF with MuPDF, `/Rotate` being used for turns, the one- and two-card layouts,
+and the append graft. Fifteen source guards assert the call sites the features
+depend on. Each fix was mutation-tested: removing the motion gate fails SC2 and
+SC2c, reverting `fitToPaper` to the old formula fails SC11/12/14/16/17/18, and
+collapsing the two-card layout fails SC28.
+
+The harness and scenario tests were taught about the three new `scan-core.js`
+exports. Whole suite green: 13 + 15 + 59 + 60 + 30 + 17 + 104.
+
 ## [v11.31] — 2026-07-27 — Green document outline no longer dies after the first page
 
 Backup: `backups/pypdf-pwa-v11.30-pre-v1131-scanoverlay-restore-point.zip`.

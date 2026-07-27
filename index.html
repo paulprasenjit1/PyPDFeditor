@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.31">
+<html lang="en" data-build="11.38">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -205,6 +205,12 @@
   <div class="scantop">
     <span class="ttl">Scan document</span>
     <span class="tools">
+      <!-- v11.32: auto capture on/off. Default on; the choice is remembered.
+           With it on the shutter fires itself once the page is framed and
+           still, and the Adjust screen is skipped; the shutter still works by
+           hand and always goes through Adjust. -->
+      <button class="ghost mini on" id="autoBtn" aria-pressed="true"
+              aria-label="Automatic capture">Auto</button>
       <button class="ghost mini" id="torchBtn" aria-label="Camera torch" hidden>Torch</button>
       <span class="pgct" id="scanCount" aria-live="polite"></span>
     </span>
@@ -256,6 +262,13 @@
     <button id="qSmall">Small file</button>
     <button id="enhToggle" class="on" aria-pressed="true">Whiten</button>
     <button id="idToggle" aria-pressed="false">Photo ID</button>
+    <!-- v11.34: both sides of one card on a single A4 page. Only shown while
+         Photo ID mode is on, since it means nothing otherwise. -->
+    <button id="idBothToggle" aria-pressed="false" hidden>Both sides</button>
+    <!-- v11.33: output paper size. Cycles A4 → Letter → Legal → As captured.
+         Scanned pages are now a REAL paper size, letterboxed with white where
+         the captured shape doesn't match, so they print and merge correctly. -->
+    <button id="paperBtn" aria-label="Output paper size">Page: A4</button>
   </div>
   <div class="scanctl">
     <button class="ghost" id="cropRetake">Retake</button>

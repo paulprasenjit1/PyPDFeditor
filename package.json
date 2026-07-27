@@ -2,7 +2,7 @@
   "name": "pypdf-editor-pwa",
   "private": true,
   "scripts": {
-    "test": "node tests/colour-tests.mjs && node tests/detect-tests.mjs && node tests/guard-tests.mjs && node tests/textedit-tests.mjs && node tests/scenario-tests.mjs && node tests/version-tests.mjs && node tests/harness.mjs"
+    "test": "node tests/colour-tests.mjs && node tests/detect-tests.mjs && node tests/guard-tests.mjs && node tests/textedit-tests.mjs && node tests/editor-tests.mjs && node tests/scan-tests.mjs && node tests/compress-tests.mjs && node tests/scenario-tests.mjs && node tests/version-tests.mjs && node tests/harness.mjs"
   },
   "devDependencies": {
     "jsdom": "^29.1.1"

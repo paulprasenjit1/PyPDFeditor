@@ -18,7 +18,31 @@ always server-side: get ALL files of one build live together.
 - icon-180.png, icon-192.png, icon-512.png
 - vendor/  (only when the engine changes — rarely)
 
-`backups/` and `tests/` should NOT be published (see .gitignore).
+`backups/` and `node_modules/` should NOT be published — the app never fetches
+anything from them, and both are git-ignored. `tests/` IS tracked and published
+(v11.35): `npm test` depends on it, it is 250 KB of text, and nothing loads it
+at runtime, so it costs nothing to leave in place.
+
+## GitHub Pages notes
+
+- **`.nojekyll` must stay in the repo root.** Without it, Pages runs the site
+  through Jekyll, which silently drops any file or folder whose name starts with
+  an underscore and can rewrite others. Nothing in the app needs Jekyll.
+- **Every path in the app is relative** (`./app.js`, `./vendor/…`, `./sw.js`, and
+  `"start_url": "."` / `"scope": "."` in the manifest), so the app works
+  unchanged at a user page (`user.github.io`) or a project page
+  (`user.github.io/repo/`). Do not "tidy" any of these into absolute `/…` paths:
+  on a project page that would resolve to the wrong origin root and the service
+  worker would fail to register.
+- **Pages is case-sensitive** where macOS is not. A reference typed as
+  `Icon-192.png` works locally and 404s once deployed.
+- The 10 MB `vendor/mupdf/mupdf-wasm.wasm` is well inside Pages' 100 MB
+  per-file and 1 GB per-repo limits. It is fetched on first launch and then
+  lives in `VENDOR_CACHE`, so it is downloaded once per vendor-version, not once
+  per release.
+- Pages serves `.wasm` as `application/wasm` and `.webmanifest` correctly; no
+  custom headers are needed. The app requires no COOP/COEP headers (which Pages
+  cannot set), because the engine does not use `SharedArrayBuffer`.
 
 ## Deploy steps
 

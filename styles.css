@@ -653,3 +653,30 @@ input[type=file] { display:none; }
 .mgrid.mgrid2 { grid-template-columns:repeat(2,1fr); }
 /* narrow phones (SE / mini): 3 across keeps labels from truncating */
 @media (max-width: 360px){ .mgrid:not(.mgrid2) { grid-template-columns:repeat(3,1fr); } }
+
+/* ---------------- v11.37: text editor controls ---------------- */
+/* Segmented rows in the edit sheet (scope, size, colour, typeface). Sized for
+   a thumb: 40px tall, which is the same target the toolbar buttons use. */
+.teseg { display:flex; gap:6px; }
+.teseg.tewrap { flex-wrap:wrap; }
+.segb { flex:1 1 0; min-width:60px; min-height:40px; padding:8px 6px;
+        background:var(--panel2); border:0.5px solid var(--line); color:var(--txt);
+        border-radius:12px; font-size:13px; font-weight:600; }
+.teseg.tewrap .segb { flex:1 1 28%; }
+.segb.on { background:var(--accent2); border-color:var(--accent2); color:#fff; }
+.segb:active:not(:disabled){ background:var(--panel); }
+.telbl { font-size:10px; color:var(--muted); text-transform:uppercase;
+         letter-spacing:.5px; margin:10px 2px 2px; }
+
+/* ---------------- v11.38: signature pad + saved signatures ---------------- */
+/* The pad is a light panel because a signature is drawn in dark ink; on the
+   OLED-black sheet a dark-on-dark pad would be invisible while drawing. */
+.sigpad { width:100%; height:auto; aspect-ratio:1000/380; display:block;
+          background:#f4f6fa; border:0.5px solid var(--line); border-radius:14px;
+          touch-action:none; }
+.sigrow { display:flex; gap:8px; flex-wrap:wrap; }
+.sigcard { flex:1 1 30%; min-width:96px; min-height:56px; padding:6px;
+           background:#f4f6fa; border:0.5px solid var(--line); border-radius:12px;
+           display:flex; align-items:center; justify-content:center; }
+.sigcard img { max-width:100%; max-height:48px; object-fit:contain; }
+.sigcard:active { background:#e6eaf2; }
