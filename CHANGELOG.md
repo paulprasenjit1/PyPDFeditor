@@ -4,6 +4,24 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.49] — 2026-07-28 — Clear recents keeps starred documents
+
+A star means "keep this around", and one tap on Clear must not silently break
+that promise.
+
+- **Clear recents** now removes only unstarred entries (and their stored
+  bytes). Starred documents stay, and the status says how many were kept.
+- A **starred** document leaves the list exactly one way: long-press its card
+  → **Remove from Recents** (which always worked and is unchanged), or unstar
+  it first, after which Clear applies.
+- Clearing when everything is starred does nothing and says why instead of
+  pretending.
+
+Tested behaviourally in the booted app (scenario-tests 30 → 34): star an
+entry, click the real Clear button, starred survives with its bytes while the
+rest are gone; a second Clear is a no-op; recentsRemove still takes the
+starred one off.
+
 ## [v11.48] — 2026-07-27 — Phase 6: OCR — scanned PDFs become searchable
 
 The last roadmap phase, and the biggest Acrobat paid feature left: recognise

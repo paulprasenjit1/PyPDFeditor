@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.48";
+const APP_BUILD = "11.49";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.48
+const BUILD_DATETIME = "27 Jul 2026";   // v11.49
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "scanned PDFs can now be made searchable: More → Recognise text reads every scanned page on-device (English) and lays real, invisible text over the image — Find, Select and copy then work here and in any PDF app. First use downloads the recogniser once (~17 MB).";
+const WHATS_NEW = "Clear recents now keeps your starred documents — a star means keep. To take a starred one off the list, long-press its card and choose Remove from Recents (or unstar it first).";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -559,8 +559,28 @@ async function renderRecents(){
     }
     showSpin(false);
   });
+  // v11.49: Clear recents spares STARRED documents. A star means "keep this
+  // around", and one tap on Clear must not silently break that promise — so
+  // only unstarred entries (and their stored bytes) are removed. A starred
+  // document leaves the list exactly one way: long-press it → Remove from
+  // Recents (or unstar it first, after which Clear applies).
   $("rcClear").onclick = async ()=>{
-    try { for (const r of await recentsGet()) idbDel(r.id).catch(()=>{}); await idbDel("recents"); } catch(e){}
+    try {
+      const list = await recentsGet();
+      const starred = list.filter(r=>r.pinned);
+      const gone = list.filter(r=>!r.pinned);
+      if (!gone.length){
+        setStatus(starred.length
+          ? "All "+starred.length+" are starred, so Clear keeps them. Long-press a card and choose Remove from Recents to take one off."
+          : "Nothing to clear.","warn");
+        return;
+      }
+      for (const r of gone) idbDel(r.id).catch(()=>{});
+      if (starred.length) await idbSet("recents", starred);
+      else await idbDel("recents");
+      setStatus("Cleared "+gone.length+" recent"+(gone.length>1?"s":"")
+        + (starred.length ? " — "+starred.length+" starred kept. Long-press a starred card to remove it." : "."),"ok");
+    } catch(e){}
     renderRecents();
   };
 }
