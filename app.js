@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.38";
+const APP_BUILD = "11.41";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -96,10 +96,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.38
+const BUILD_DATETIME = "27 Jul 2026";   // v11.41
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "you can now sign with your finger instead of hunting for a photo of your signature, and the app remembers it for next time.";
+const WHATS_NEW = "sharper scans: the camera now uses its full-height sensor mode (up to 40% more detail on a page) and auto capture demands better framing before it fires. Narrow captures like receipts keep their own page shape instead of shrinking inside an A4 letterbox.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -2121,10 +2121,12 @@ function openTextEditorSheet(pageIndex, sp){
   const idx = spans.indexOf(sp);
   const block = idx >= 0 ? paragraphBlock(spans, idx) : null;
   const canBlock = !!(block && block.multi);
-  // Paragraph mode is the default WHEN there is a paragraph, because that is
-  // almost always what someone means by "edit this text"; the single-line
-  // behaviour is one tap away and is still what a form field gets.
-  let asBlock = canBlock;
+  // v11.39: paragraph mode is OPT-IN. v11.37 defaulted it on whenever a block
+  // was detected, which meant one tap on an invoice re-flowed a stack of
+  // fields into a sentence before the user had agreed to anything. Editing one
+  // line is the safe, predictable, pre-v11.37 behaviour and is therefore what
+  // a tap does; re-wrapping a paragraph is a deliberate second choice.
+  let asBlock = false;
   let size = null;            // null = keep the original
   let colour = "keep", fontK = "keep";
 
@@ -2136,8 +2138,8 @@ function openTextEditorSheet(pageIndex, sp){
         ? "The whole paragraph ("+block.lines.length+" lines) is replaced and re-wrapped to its own width."
         : "This line is replaced, keeping its position, size and colour."} Leave it empty to delete the text.</p>
       ${raw(canBlock ? `<div class="row teseg" id="teScope">
-          <button class="segb${asBlock?" on":""}" data-v="1">Whole paragraph</button>
           <button class="segb${asBlock?"":" on"}" data-v="0">This line only</button>
+          <button class="segb${asBlock?" on":""}" data-v="1">Whole paragraph (${block.lines.length} lines)</button>
         </div>` : "")}
       <div class="row"><textarea id="teIn"></textarea></div>
       <div class="row telbl">Size</div>
@@ -2383,6 +2385,54 @@ function paragraphBlock(spans, idx){
   if (picked.length < 2) return single;
   picked.sort((a,b)=> a.s.origin[1] - b.s.origin[1]);
   const lines = picked.map(p=>p.s);
+
+  // ---- v11.39: is this actually PROSE? ------------------------------------
+  // v11.37 shipped without this and it was wrong on the first real document it
+  // met: a pharmacy invoice. Address blocks, label/value pairs and table rows
+  // all satisfy every rule above — same size, same colour, even pitch, same
+  // column — so the editor grouped a stack of unrelated fields into one
+  // "paragraph" and re-flowed them into a running sentence. Getting the
+  // grouping rules right is not enough; the content has to be the KIND of
+  // thing that can be re-wrapped at all.
+  //
+  // Two tests, both of which a form fails and prose passes.
+
+  // 1) Is anything sitting BESIDE these lines? A table row and a label/value
+  //    pair have a neighbour on the same baseline; a paragraph never does.
+  //    This is the single strongest signal on an invoice, where every row is
+  //    "Payment Method | Transaction Time | Amount".
+  for (const l of lines){
+    const cy = (l.y0 + l.y1) / 2, half = (l.y1 - l.y0) / 2;
+    for (const o of spans){
+      if (o === l || !o.origin) continue;
+      const ocy = (o.y0 + o.y1) / 2;
+      if (Math.abs(ocy - cy) > half*0.7) continue;          // not on this line
+      if (o.x1 <= l.x0 + 1 || o.x0 >= l.x1 - 1) return single;   // beside it
+    }
+  }
+  // 2) Do the non-final lines AGREE on a right edge? Wrapped prose runs to the
+  //    same right margin on every line but its last, because that margin is
+  //    what caused the wrap. A stacked address, or any list of values, is a set
+  //    of lines each as long as its own content, which stop wherever they stop.
+  //    That is the difference between
+  //        "…intact for" / "…and customer." / "…terms-and-conditions."   (prose)
+  //    and "Ground floor,, Block F, Godown No 7," / "Plinth Area, 153F, S.M
+  //    Bose Road," / "Duckback Factory. P.O"                            (address)
+  //    whose first two lines differ by 15pt on a 250pt measure.
+  //
+  //    The tolerance is 4% of the measure and deliberately tight. It will
+  //    occasionally decline a real paragraph whose lines end on an unusually
+  //    long word, and that is the right way to be wrong: declining costs the
+  //    user nothing but a line-by-line edit, whereas accepting a form re-flows
+  //    it into a sentence and destroys the layout.
+  if (lines.length >= 2){
+    const body  = lines.slice(0, -1);
+    const left  = Math.min(...lines.map(l=>l.x0));
+    const rights = body.map(l=>l.x1);
+    const maxR  = Math.max(...rights);
+    const measure = Math.max(1, maxR - left);
+    for (const r of rights) if ((maxR - r) > measure*0.04) return single;
+  }
   // Leading is the MEDIAN step, not the mean: one line carrying a superscript
   // or an inline image can stretch a single gap without changing the setting.
   const steps = [];
@@ -2508,18 +2558,66 @@ function pickFontKeyed(name, key){
 // The ordering is the same as the single-line path and for the same reason:
 // everything that reads getSpans is read BEFORE the redaction, because the
 // redaction invalidates that cache.
+// v11.39: ask BEFORE anything is changed. v11.37 reported an overflow in the
+// status bar after the paragraph had already been re-flowed past its bounds,
+// which is a report, not a choice.
+function confirmOverflow(need, had){
+  return new Promise(resolve=>{
+    $("sheet").innerHTML = h`
+      <h3>That text needs more room</h3>
+      <p class="hint">The replacement needs ${need} lines but the paragraph only had ${had}, even after reducing the size as far as it safely goes. Going ahead will push the extra lines over whatever sits below the paragraph.</p>
+      <div class="row"><button class="full" id="ovBack">Go back and shorten it</button></div>
+      <div class="row"><button class="ghost danger full" id="ovGo">Do it anyway</button></div>`;
+    let settled = false;
+    const done = v=>{ if (settled) return; settled = true; sheetOnDismiss = null; closeSheet(); resolve(v); };
+    $("ovBack").onclick = ()=> done(false);
+    $("ovGo").onclick   = ()=> done(true);
+    openSheet();
+    sheetOnDismiss = ()=> done(false);      // backdrop / Esc = don't do it
+  });
+}
+
 async function applyBlockEdit(pageIndex, block, newText, opts){
   opts = opts || {};
   showSpin(true, "Editing paragraph…");
   try {
-    pushUndo();
     const first = block.lines[0];
     const bg    = sampleSpanBg(pageIndex, first);
     const fres  = (opts.font && opts.font !== "keep") ? null : capturePdfFont(pageIndex, first.font);
     const align = blockAlignFor(pageIndex, first);
     const bands = block.lines.map(l=> redactBandFor(pageIndex, l));
 
-    // 1) erase every line of the paragraph in ONE redaction pass
+    // 0) v11.39: DRY RUN. Work out whether the replacement fits BEFORE anything
+    //    is redacted, so "it doesn't fit" is a question we can still answer with
+    //    "then don't do it". A throwaway load of the current bytes gives the
+    //    same font metrics the real pass will use, and costs one parse.
+    const dryText = String(newText == null ? "" : newText);
+    if (dryText.trim() !== ""){
+      try {
+        const probe = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+        const ppg   = probe.getPage(pageIndex);
+        const pEnc  = fres && pdfFontStillOnPage(ppg, fres.key);
+        const pB14  = pEnc ? null : await probe.embedFont(pickFontKeyed(first.font, opts.font));
+        const pMeasure = (s, size)=>{
+          if (pEnc){ const e = encodeWithPdfFont(fres, s); return e ? e.width*size : Infinity; }
+          try { return pB14.widthOfTextAtSize(sanitizeForFont(s), size); } catch(e){ return Infinity; }
+        };
+        const startSize = opts.size != null ? opts.size : (block.size || first.size || 11);
+        const pFit = fitBlockSize(dryText, Math.max(12, block.x1 - block.x0),
+                                  block.lines.length, startSize, pMeasure, startSize*0.7);
+        if (pFit.overflow){
+          showSpin(false);
+          const go = await confirmOverflow(pFit.lines.length, block.lines.length);
+          if (!go){ setStatus("Left unchanged.","warn"); return; }
+          showSpin(true, "Editing paragraph…");
+        }
+      } catch(e){ /* if the probe fails, fall through and edit as before */ }
+    }
+
+    // 1) erase every line of the paragraph in ONE redaction pass. The undo
+    //    snapshot is taken HERE, not at the top: everything above this line is
+    //    measurement, and a cancelled edit must not leave an undo step behind.
+    pushUndo();
     const page = MDOC.loadPage(pageIndex);
     for (const b of bands){
       const an = page.createAnnotation("Redact");
@@ -3559,6 +3657,27 @@ function fitToPaper(imgW, imgH, key){
   const landscape = imgW > imgH;
   const pageW = landscape ? paper.h : paper.w;
   const pageH = landscape ? paper.w : paper.h;
+  // v11.41: snap to the paper only when the capture is actually SHAPED like
+  // that paper. A capture of a real A4/Letter sheet lands within a few percent
+  // of the paper's aspect (perspective + corner error account for the spread),
+  // and those pages print and merge best on a true paper size. But a receipt,
+  // an ID slip or a deliberately part-page crop is nowhere near it — forcing
+  // one into A4 buries a 337pt-wide strip of image in a 595pt page of white,
+  // and the viewer (which fits the PAGE to the screen width) then shows the
+  // image ~30% smaller than v11.31 did. That is the "viewing quality reduced"
+  // complaint: same pixels, drawn smaller inside a sea of letterbox. Odd
+  // shapes now keep their own page size (exactly the pre-v11.33 behaviour);
+  // paper-shaped captures still snap. The 20% tolerance is set by the papers
+  // themselves: an A4-shaped capture with Legal selected is 16.5% off and must
+  // still snap (the user chose Legal), while the nearest common non-paper
+  // shapes — a 2:1 till roll (41% off), a square label (41%), an ISO ID card
+  // (12% off A4 landscape, but ID has its own mode) — stay well outside it.
+  const imgAspect  = imgW / imgH, pageAspect = pageW / pageH;
+  const ratio = imgAspect / pageAspect;
+  if (Math.max(ratio, 1/ratio) > 1.20){
+    const s = 842/Math.max(imgW, imgH);
+    return { pageW:imgW*s, pageH:imgH*s, x:0, y:0, w:imgW*s, h:imgH*s, letterboxed:false };
+  }
   // contain-fit: the larger of the two scale factors would crop, so take the smaller
   const s = Math.min(pageW/imgW, pageH/imgH);
   const w = imgW*s, h = imgH*s;
@@ -3867,13 +3986,22 @@ function openScanPageSheet(i){
 async function startCamera(){
   stopCamera();
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ enterFallback(); return; }
-  // v10.74: request the full sensor resolution the device can give. iPhone Pro
-  // models stream up to 4K (3840×2160) — ~2.25× the pixels of the old 1440p
-  // request — which is the single biggest driver of scan sharpness (the warp +
-  // filters were never the bottleneck; capture resolution was). We try 4K first
-  // and walk down a fallback chain so older/locked-down devices still get a
-  // stream. `continuous` focus keeps handheld captures crisp.
+  // v10.74: request the full sensor resolution the device can give — capture
+  // resolution is the single biggest driver of scan sharpness (the warp +
+  // filters were never the bottleneck).
+  // v11.41: ask for the 4:3 sensor mode (4032×3024) FIRST, not 16:9 4K. A
+  // document is portrait; on a landscape stream its long side is bounded by
+  // the frame's SHORT side, so the 3024px of a 4:3 mode beats the 2160px of
+  // 16:9 4K by 40% linear — an A4 page that could only ever reach ~180 dpi
+  // from a 2160-tall frame can reach ~250 dpi from a 3024-tall one. iOS
+  // exposes the camera's native 4:3 formats through getUserMedia; `ideal`
+  // constraints never reject, so a device without such a mode simply gets the
+  // closest it has (4K, then on down) — this line cannot lose resolution,
+  // only gain it. ImageCapture.takePhoto() would be better still (12MP), but
+  // Safari on iOS does not ship it (checked caniuse, June 2026 data).
+  // `continuous` focus keeps handheld captures crisp.
   const camTries = [
+    { facingMode:{ideal:"environment"}, width:{ideal:4032}, height:{ideal:3024}, focusMode:"continuous" },
     { facingMode:{ideal:"environment"}, width:{ideal:3840}, height:{ideal:2160}, focusMode:"continuous" },
     { facingMode:{ideal:"environment"}, width:{ideal:2560}, height:{ideal:1440} },
     { facingMode:{ideal:"environment"} }
@@ -4061,6 +4189,7 @@ const AUTO_HINTS = {
   "angled":      "Hold the phone flatter over the page.",
   "not-convex":  "The detected shape isn't a page — try moving the phone.",
   "moving":      "Hold still for a moment.",
+  "too-far":     "Move closer — fill the screen with the page for a sharper scan.",
 };
 function autoHint(why){
   // Only after the same reason has held for ~1.8s, and at most once every 6s,
@@ -4119,11 +4248,29 @@ async function autoFire(){
   if (autoBusy || capFrame || !liveQuad || !v || !v.videoWidth) return;
   autoBusy = true;
   try {
-    const q = insetQuad(orderQuad(liveQuad.map(p=>({x:p.x,y:p.y}))), 0.008);
     const c = document.createElement("canvas");
     c.width = v.videoWidth; c.height = v.videoHeight;
     c.getContext("2d").drawImage(v,0,0);
     flashCapture();
+    // v11.40: RE-DETECT the edges on the captured frame at full working
+    // resolution. v11.32 warped straight from the live preview quad, and that
+    // was the cause of "auto scans look worse than manual ones":
+    //
+    //   * the live quad is detected at a 300px working size, the Adjust
+    //     screen's at 520px. On a 4K frame that is a corner accuracy of ~12.8
+    //     source pixels against ~7.4 — and corner error does not blur the
+    //     image, it SHEARS it, because those four points define the homography
+    //     the whole page is warped through; and
+    //   * the live quad is an exponential average of successive detections
+    //     (a = 0.35), which by design lags the truth and rounds corners, so it
+    //     is deliberately the wrong thing to crop by.
+    //
+    // The live quad's job is to decide WHEN to fire. Where to cut is a
+    // different question and now gets the same answer the manual path gets.
+    // The smoothed quad is kept only as a fallback for the case where the
+    // still-frame detector finds nothing at all.
+    const live = orderQuad(liveQuad.map(p=>({x:p.x,y:p.y})));
+    const q = insetQuad(detectQuadOnFrame(c) || live, 0.008);
     // Keep the preview running while the page is processed. The worker does the
     // heavy warp, so the camera does not need to stop — and not stopping is
     // what makes a stack of pages feel continuous instead of stuttery.
@@ -4301,16 +4448,26 @@ $("camInput").onchange = e=>{
 // ---- adjust / crop screen ----
 // auto-detect the document edges on the current capFrame (downscaled), falling
 // back to a 6% inset rectangle. Sets cropQuad. Returns true if edges were found.
+// v11.40: edge detection on a STILL frame, at the 520px working size. Shared by
+// the Adjust screen and by auto capture, so an automatic page is cut exactly as
+// accurately as a hand-tapped one. Returns the quad in frame pixels, ordered,
+// or null when nothing was found.
+const CROP_DETECT_PX = 520;         // v10.20: finer edges for low-contrast docs
+function detectQuadOnFrame(frame){
+  try {
+    const s = CROP_DETECT_PX/Math.max(frame.width, frame.height);
+    const sw=Math.max(2,Math.round(frame.width*s)), sh=Math.max(2,Math.round(frame.height*s));
+    const ctx = scratch(sw,sh).getContext("2d",{willReadFrequently:true});
+    ctx.drawImage(frame,0,0,sw,sh);
+    const q = detectQuad(ctx.getImageData(0,0,sw,sh));
+    return q ? orderQuad(q.map(p=>({x:p.x/s, y:p.y/s}))) : null;
+  } catch(e){ return null; }
+}
 function autoDetectCropQuad(){
   const frame = capFrame;
-  const s = 520/Math.max(frame.width, frame.height);  // v10.20: finer edges for low-contrast docs
-  const sw=Math.max(2,Math.round(frame.width*s)), sh=Math.max(2,Math.round(frame.height*s));
-  const ctx = scratch(sw,sh).getContext("2d",{willReadFrequently:true});
-  ctx.drawImage(frame,0,0,sw,sh);
-  let q = detectQuad(ctx.getImageData(0,0,sw,sh));
+  let q = detectQuadOnFrame(frame);
   const found = !!q;
-  if (q) q = q.map(p=>({x:p.x/s, y:p.y/s}));
-  else {
+  if (!q){
     const mx=frame.width*0.06, my=frame.height*0.06;
     q=[{x:mx,y:my},{x:frame.width-mx,y:my},
        {x:frame.width-mx,y:frame.height-my},{x:mx,y:frame.height-my}];

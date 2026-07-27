@@ -804,6 +804,16 @@ export const AUTO = {
   MAX_ANGLE: 108,    //   a steep angle means an oblique view the warp will smear
   MARGIN:    0.012,  // corners must sit this far inside the frame (fraction of each axis)
   MOTION:    0.012,  // max per-frame corner drift, as a fraction of the frame diagonal
+  MIN_LONG_PX: 2400, // v11.41: the warp's long side must come out at least this
+                     //   many pixels — see below. Raised from 1600: measured on
+                     //   the real pipeline, 1600px is only 137 dpi on an A4
+                     //   page, and even a page filling 85% of a 16:9 4K frame
+                     //   only reaches ~1830px (~156 dpi). In practice the
+                     //   0.75×short-side term below is what binds on today's
+                     //   streams, which is intended — the gate should demand
+                     //   the best the frame can physically give, and this
+                     //   constant is just a ceiling so a future higher-res
+                     //   stream is not asked for more than is useful.
 };
 
 // Largest distance any one corner moved between two quads. Infinity when either
@@ -852,6 +862,28 @@ export function autoCaptureReady(q, vw, vh, motionFrac){
   const area = quadArea(q)/(vw*vh);
   if (area < AUTO.MIN_AREA) return { ok:false, why:"too-small" };
   if (area > AUTO.MAX_AREA) return { ok:false, why:"whole-frame" };
+
+  // 3b) v11.40: will the RESULT be a usable resolution? This is the gate that
+  //     was missing, and it is the reason an auto scan could come back visibly
+  //     softer than a hand-taken one. The warp's output size is the quad's own
+  //     edge lengths, so a page filling a quarter of a 4K frame warps to about
+  //     1900px — an A4 sheet at only 160dpi. Nothing downstream can put that
+  //     detail back. Framing the page to fill the viewfinder is the single
+  //     biggest thing the user can do for scan quality, so refuse until they
+  //     do, and say so (the "too-far" hint). The area test alone does not cover
+  //     this: a wide, short receipt can pass on area while its long edge is
+  //     still short.
+  const edge = (a,b)=> Math.hypot(q[a].x-q[b].x, q[a].y-q[b].y);
+  const longSide = Math.max((edge(0,1)+edge(3,2))/2, (edge(0,3)+edge(1,2))/2);
+  // Never demand more than the frame can physically deliver, and measure that
+  // against the frame's SHORT side. A portrait page inside a landscape video
+  // frame has its long side bounded by the frame's HEIGHT, so a ceiling keyed
+  // to the frame's long side is unreachable — on 1080p it would work out at 98%
+  // of the frame height and auto capture would simply never fire. On today's
+  // streams (2160 or 3024 short side) the 0.75×frame term binds — the gate
+  // demands the page genuinely fill the view; MIN_LONG_PX is just a ceiling.
+  const cap = Math.min(AUTO.MIN_LONG_PX, Math.min(vw, vh) * 0.75);
+  if (longSide < cap) return { ok:false, why:"too-far" };
 
   // 4) Corner angles near 90 degrees — i.e. the phone is roughly square-on.
   //    A perspective correction from a steep angle stretches the far edge and

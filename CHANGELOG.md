@@ -4,6 +4,198 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.41] — 2026-07-27 — Sharper capture source + receipts keep their shape
+
+Independent review of the v11.32–v11.40 session, prompted by "it broke my app"
+with all three complaints (scan quality, viewing quality, text editing) still
+reported. The v11.39 and v11.40 fixes were re-verified — v11.39 by line-by-line
+review (paragraph mode is opt-in, table/label rows are refused, overflow asks
+first), v11.40 by running the shipped `scan-core.js` against a simulated 4K
+capture (still-frame detection at 520px measured 11.9px worst-corner error vs
+25.6px for the live-quad path it replaced). Both fixes are sound. But the same
+measurement exposed what v11.40 missed:
+
+### 1. Scan sharpness has a hard ceiling, and the gate was under it
+
+The app captures the getUserMedia VIDEO frame — 16:9, at most 3840×2160. A
+portrait page in a landscape frame is bounded by the frame's SHORT side, so
+even a page filling 85% of a 4K view warps to ~1830px ≈ **156 dpi on A4**. The
+v11.40 resolution gate (1600px) passed that happily; the user's 183 dpi sample
+was near the ceiling of the design, not below it. Two changes:
+
+- **The camera now asks for the 4:3 sensor mode first** (4032×3024). iOS
+  exposes the camera's native 4:3 formats through getUserMedia, and 3024px of
+  frame height against 2160 is a 40% linear gain — an A4 page can now reach
+  ~250 dpi instead of ~180. `ideal` constraints never reject, so a device
+  without such a mode gets exactly what it got before; this cannot lose
+  resolution, only gain it. (`ImageCapture.takePhoto()` — the real 12MP path —
+  is still unshipped in iOS Safari as of June 2026 caniuse data, so a video
+  frame remains the only capture source.)
+- **`AUTO.MIN_LONG_PX` raised 1600 → 2400**, so the 0.75×short-side term is
+  what binds on every current stream: auto capture now demands the best the
+  frame can physically give rather than a number below the frame's floor.
+
+### 2. "Viewing quality reduced" — reproduced, and fixed
+
+Not a render-path change (renderStage and viewerCssWidth are byte-identical to
+v11.31) — it is v11.33's paper snapping. A capture that is not paper-shaped (a
+receipt, a part-page crop) was letterboxed into A4: a 1:2.4 till roll becomes a
+337pt strip of image centred in a 595pt page. The viewer fits the PAGE to the
+screen, so the same pixels drew ~30% smaller than v11.31, surrounded by white.
+`fitToPaper` is now **aspect-gated at 20%**: paper-shaped captures still snap
+(including the furthest legitimate case, an A4 sheet with Legal selected at
+16.5% off), and anything further out keeps its own page size — exactly the
+pre-v11.33 behaviour for exactly the shapes that behaviour suited.
+
+### Tests
+
+scan-tests: 72 → 78 (receipt/square keep their shape, A4-on-Legal still snaps,
+the 4:3 constraint and raised gate are wired). All nine suites green. The
+fixtures remain synthetic — the standing caveat from the handover applies: none
+of this substitutes for a real document on a real iPhone.
+
+## [v11.40] — 2026-07-27 — Fix: auto capture cut pages with the wrong outline
+
+Reported with a sample scan: "scan quality also ruined than before". Measuring
+the file rather than guessing found two defects, both introduced in v11.32, both
+in auto capture. The submitted page came out **2142 x 1494px drawn at 841.9pt —
+183 dpi** — with a visibly skewed crop.
+
+### 1. Auto capture cropped using the live preview outline
+
+`autoFire` warped straight from the smoothed live-preview quad. That quad is the
+wrong thing to cut by, for two independent reasons:
+
+- **It is detected at a 300px working size; the Adjust screen uses 520px.** On a
+  4K frame that is a corner accuracy of about 12.8 source pixels against 7.4.
+  Corner error does not blur a scan, it **shears** it: those four points define
+  the homography the entire page is warped through, so a corner off by 13px
+  tilts and stretches everything, worst at the far edge.
+- **It is an exponential average of successive detections** (a = 0.35). It is
+  designed to lag and to round corners, because its job is to stop the green
+  outline flickering.
+
+The live quad's job is to decide *when* to fire. Where to cut is a different
+question, and it now gets the same answer the manual path gets: the edges are
+**re-detected on the captured frame** through one shared `detectQuadOnFrame`
+helper at the shared 520px working size. The smoothed quad survives only as a
+fallback for when the still-frame detector finds nothing at all.
+
+Measured on a synthetic page with a known quad, using the shipped detector:
+**7.4px worst-corner error at 520px against 12.6px at 300px.** That is the test,
+not an argument.
+
+### 2. Auto capture fired on pages that were too far away
+
+The gate required the page to cover 22% of the frame. A page filling a quarter
+of a 4K frame warps to a long side of roughly 1900px — an A4 sheet at 160 dpi —
+and nothing downstream can put that detail back. The submitted scan is exactly
+this: the document occupied a little over half the frame, so it warped to 2142px
+and landed at 183 dpi.
+
+The gate now also requires the **warp's own long side** to reach 1600px, since
+the output size is the quad's edge lengths. The ceiling is measured against the
+frame's **short** side (`min(vw,vh) * 0.75`): a portrait page inside a landscape
+video frame has its long side bounded by the frame's height, so a ceiling keyed
+to the long side would work out at 98% of the frame height on 1080p and auto
+capture would never fire at all. On 4K the 1600px target binds; on 720p the
+frame does. The refusal surfaces as "Move closer — fill the screen with the page
+for a sharper scan", which is the single most useful thing anyone can be told
+about scan quality.
+
+### On the viewing quality
+
+Honestly reported: **no change since v11.31 could be found that reduces it.**
+The submitted page is a landscape A4 (841.89 x 595.28pt) because the capture
+itself was landscape-shaped, and v11.31 would have produced a page of the same
+shape (842 x 587.3pt) at the same 183 dpi from the same capture. A landscape
+page on a portrait phone is fitted to the screen width, so it is shown smaller
+and therefore softer, and that is inherent to the page being landscape rather
+than to any change here. The remedies are to hold the phone in portrait, or to
+turn the page from its review sheet (v11.33). If a specific document still reads
+worse than it did on v11.31, that is a separate defect and needs its own sample.
+
+**Getting exactly the v11.31 scan behaviour back**, for comparison: turn **Auto**
+off in the scan title bar (every capture then goes through the Adjust screen, as
+before) and set **Page: As captured** in the filter row (no paper snapping, no
+letterbox). Both settings are remembered.
+
+### Tests
+
+`tests/scan-tests.mjs` grows to 72 checks. The new ones drive the resolution
+gate (a too-far page sized to pass the area test so only the new rule can reject
+it, the reachability of the cap on 1080p, and the 1600px target binding on 4K)
+and measure the detector's corner error at both working sizes on a synthetic
+page with a known quad.
+
+All four mutations bite: reverting auto capture to the live quad fails SC63,
+removing the resolution gate fails SC56/SC59/SC66, keying the cap to the frame's
+long side fails SC1/SC2/SC2b (auto capture becomes impossible to satisfy), and
+dropping the still-frame detector to 300px fails SC64.
+
+Whole suite green: 13 + 15 + 59 + 46 + 72 + 67 + 30 + 17 + 104.
+
+## [v11.39] — 2026-07-27 — Fix: v11.37 re-flowed forms as if they were prose
+
+**Regression report, with screenshots, on a pharmacy tax invoice.** Tapping text
+re-flowed a block of unrelated fields into a running sentence and pushed it past
+the space it had. This is a defect introduced in v11.37 and it is the worst kind:
+it damaged a document on a single tap.
+
+**What went wrong.** v11.37's paragraph rules were correct in isolation and
+useless as a test of what may be re-wrapped. An address block, a label/value
+stack and a table column all satisfy every one of them: same size, same colour,
+even pitch, same column. So the grouping fired on an invoice, and because
+paragraph mode was made the DEFAULT whenever a block was detected, one tap
+committed to it. The overflow was then reported in the status bar *after* the
+re-flow, which is a report, not a choice. Three separate mistakes, all mine, all
+pointing the same way: the feature was allowed to act before the user had agreed
+to what it was about to do.
+
+The tests did not catch it because every fixture I wrote was prose. The rules
+were tested against exactly the content they were designed for.
+
+### The fix
+
+- **Paragraph mode is opt-in.** A tap edits one line, which is the safe,
+  predictable, pre-v11.37 behaviour. Re-wrapping is a deliberate second choice,
+  and the button now says how many lines it would take ("Whole paragraph (4
+  lines)") so the scope is visible before committing.
+- **Anything with a neighbour on its own baseline is refused outright.** A table
+  row and a label/value pair have something beside them; a line of a paragraph
+  never does. On an invoice this alone rejects almost everything, which is the
+  point. It also declines genuine two-column magazine prose, and that trade is
+  deliberate: declining costs a line-by-line edit, accepting a table destroys it.
+- **The body lines must agree on a right edge**, within 4% of the measure. That
+  margin is what caused the wrap in the first place, so prose has it and a list
+  of values does not. On the reported invoice the address block's first two lines
+  differ by 15pt on a 250pt measure and are now refused; the footer's genuine
+  wrapped prose differs by 5pt on 825pt and is still offered. The tolerance is
+  tight enough to occasionally decline a real paragraph ending on a long word,
+  which is the right way to be wrong.
+- **Overflow is asked about before anything is redacted**, not reported after.
+  A dry run measures the replacement against the block using the same font
+  metrics the real pass will use; if it will not fit, the sheet says how many
+  lines it needs versus how many it has and offers to go back. Declining leaves
+  the document untouched.
+- **The undo snapshot moved to after that decision**, so a cancelled edit no
+  longer leaves a pointless undo step behind.
+
+### Tests
+
+`tests/editor-tests.mjs` grows to 46 checks. Five new fixtures are cut from the
+reported invoice's actual shape: a table column, a label/value stack, a ragged
+address block, a short line in the middle of a block, and — as the control —
+the genuine wrapped prose from the same document's footer, which must still be
+offered. Every prose test from v11.37 still passes, so the rules got sharper
+rather than merely blunter.
+
+All five mutations bite: removing the neighbour rule fails ED8/ED36/ED43,
+removing the right-edge agreement fails ED38/ED40/ED44, and restoring paragraph
+mode as the default fails ED33.
+
+Whole suite green: 13 + 15 + 59 + 46 + 60 + 67 + 30 + 17 + 104.
+
 ## [v11.38] — 2026-07-27 — Sign with your finger
 
 **Signing used to require an image file.** You had to sign paper, photograph it,
