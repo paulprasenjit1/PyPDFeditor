@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.47";
+const APP_BUILD = "11.48";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.47
+const BUILD_DATETIME = "27 Jul 2026";   // v11.48
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "fill real forms: the new Form tool in Markup finds the document’s actual fillable fields — text boxes, checkboxes, choices, dropdowns — and writes your answers into them, readable by any PDF app. More → Flatten form makes the answers permanent.";
+const WHATS_NEW = "scanned PDFs can now be made searchable: More → Recognise text reads every scanned page on-device (English) and lays real, invisible text over the image — Find, Select and copy then work here and in any PDF app. First use downloads the recogniser once (~17 MB).";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -3016,6 +3016,133 @@ async function flattenForm(){
 }
 $("formBtn").onclick = ()=> setMode(mode==="form" ? null : "form");
 
+// ---- v11.48 (Phase 6): OCR — recognise text in scanned pages ---------------
+// On-device Tesseract (LSTM, WASM), vendored like the PDF engine: no cloud,
+// no account, cached after the first use. The output is Acrobat's "searchable
+// PDF": an INVISIBLE text layer laid word-by-word over the page image, so the
+// scan looks identical but Find, Select, and copy all work — in this app and
+// in every other PDF viewer.
+//
+// A plain statement, kept from the roadmap: Adobe's own OCR engine is
+// proprietary and cannot be licensed or rebuilt; Tesseract 5 is what every
+// serious non-Adobe tool uses. On clean ~250dpi captures its accuracy is
+// close; capture quality (v11.41's work) matters more than the engine.
+const OCR_RENDER_MAX = 2600;    // raster long side for recognition (memory cap)
+const OCR_SKIP_CHARS = 20;      // a page already carrying this much text is skipped
+let ocrBusy = false;
+function loadScriptOnce(src){
+  return new Promise((res, rej)=>{
+    if (document.querySelector('script[src="'+src+'"]')) return res();
+    const s = document.createElement("script");
+    s.src = src; s.onload = ()=>res(); s.onerror = ()=>rej(new Error("could not load "+src));
+    document.head.appendChild(s);
+  });
+}
+// Convert one recognised word into the drawText call that places its
+// invisible twin. Pure, so the maths is testable in Node: bbox is in raster
+// px, scale is raster px per PDF pt, pageH in pt. The word is drawn at the
+// box's baseline (slightly above its bottom edge) at the box's own height.
+function ocrWordPlacement(bbox, scale, pageH){
+  const hPt = Math.max(2, (bbox.y1 - bbox.y0) / scale);
+  return {
+    x: bbox.x0 / scale,
+    y: pageH - (bbox.y1 / scale) + hPt * 0.18,   // baseline ≈ 18% above box bottom
+    size: hPt,
+  };
+}
+async function runOcr(){
+  if (!workingBytes || ocrBusy) return;
+  const n = MDOC.countPages();
+  // which pages need it? (born-digital pages are skipped, not double-texted)
+  const todo = [];
+  for (let i=0;i<n;i++){
+    try {
+      const page = MDOC.loadPage(i);
+      const st = page.toStructuredText("preserve-spans");
+      let c = 0; st.walk({ onChar(ch){ if (ch && ch.trim()) c++; } });
+      st.destroy(); page.destroy();
+      if (c < OCR_SKIP_CHARS) todo.push(i);
+    } catch(e){ todo.push(i); }
+  }
+  if (!todo.length){
+    setStatus("Every page already has real text — nothing to recognise.","ok");
+    return;
+  }
+  $("sheet").innerHTML = h`
+    <h3>Recognise text (OCR)</h3>
+    <p class="hint">${todo.length} of ${n} page${n>1?"s":""} look scanned. Each gets an invisible text layer laid over the image, so the document becomes searchable and selectable — here and in any PDF app. Runs entirely on this device (English). The first use downloads the recogniser (~17 MB, kept for next time). Roughly a few seconds per page.</p>
+    <div class="row"><button class="full" id="ocGo">Recognise ${todo.length} page${todo.length>1?"s":""}</button></div>
+    <div class="row"><button class="ghost full" id="ocNo">Cancel</button></div>`;
+  $("ocGo").onclick = ()=>{ closeSheet(); doOcr(todo); };
+  $("ocNo").onclick = closeSheet;
+  openSheet();
+}
+async function doOcr(todo){
+  ocrBusy = true;
+  let worker = null;
+  showSpin(true,"Loading the text recogniser…");
+  try {
+    await loadScriptOnce("./vendor/ocr/tesseract.min.js");
+    worker = await Tesseract.createWorker("eng", 1, {
+      workerPath: "./vendor/ocr/worker.min.js",
+      corePath:   "./vendor/ocr",
+      langPath:   "./vendor/ocr",
+      gzip: true,
+    });
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    const helv = await doc.embedFont(StandardFonts.Helvetica);
+    let words = 0, pagesDone = 0;
+    for (let k=0;k<todo.length;k++){
+      const i = todo[k];
+      showSpin(true,"Recognising… page "+(k+1)+" of "+todo.length);
+      await new Promise(r=>setTimeout(r,0));
+      // render the page for recognition
+      const page = MDOC.loadPage(i);
+      const [x0,y0,x1,y1] = page.getBounds();
+      const wPt = x1-x0, hPt = y1-y0;
+      const scale = Math.min(300/72, OCR_RENDER_MAX/Math.max(wPt,hPt));
+      const pix = page.toPixmap(mupdf.Matrix.scale(scale,scale), mupdf.ColorSpace.DeviceRGB, false);
+      const pngBin = u8(pix.asPNG());
+      pix.destroy(); page.destroy();
+      const blobUrl = URL.createObjectURL(new Blob([pngBin], { type:"image/png" }));
+      let data = null;
+      try {
+        const r = await worker.recognize(blobUrl, {}, { blocks:true });
+        data = r.data;
+      } finally { URL.revokeObjectURL(blobUrl); }
+      const pg = doc.getPage(i);
+      const pageH = pg.getHeight();
+      const ws = (data && data.blocks || []).flatMap(b=>(b.paragraphs||[])
+        .flatMap(p=>(p.lines||[]).flatMap(l=>l.words||[])));
+      for (const wd of ws){
+        const t = (wd.text||"").trim();
+        if (!t || (wd.confidence||0) < 40) continue;   // noise threshold
+        const pl = ocrWordPlacement(wd.bbox, scale, pageH);
+        try {
+          pg.drawText(sanitizeForFont(t), { x:pl.x, y:pl.y, size:pl.size,
+                                            font:helv, opacity:0 });
+          words++;
+        } catch(e){}
+      }
+      pagesDone++;
+    }
+    if (!words){
+      setStatus("No readable text was found on the scanned page"+(todo.length>1?"s":"")+" — if the scan is faint or skewed, rescan closer and straighter.","warn");
+      return;
+    }
+    pushUndo();
+    workingBytes = new Uint8Array(await doc.save());
+    reopen(); await render();
+    setStatus("Recognised "+words+" word"+(words>1?"s":"")+" across "+pagesDone+" page"
+      +(pagesDone>1?"s":"")+" — the text is invisible but real: Find, Select and copy now work, here and in any PDF app. Undo removes it.","ok");
+  } catch(e){ setStatus("Could not recognise text: "+friendly(e),"err"); }
+  finally {
+    try { if (worker) await worker.terminate(); } catch(e){}
+    ocrBusy = false;
+    showSpin(false);
+  }
+}
+
 // ---------------- modes ----------------
 function setMode(m){
   mode = m;
@@ -3509,6 +3636,7 @@ $("moreBtn").onclick = ()=>{
       <button class="mtile" id="mComp" ${d}>${ic("compress")}<span>Compress</span></button>
       <button class="mtile" id="mUnlock">${ic("unlock")}<span>Unlock a PDF</span></button>
       <button class="mtile" id="mFlat" ${d}>${ic("grid")}<span>Flatten form</span></button>
+      <button class="mtile" id="mOcr" ${d}>${ic("info")}<span>Recognise text</span></button>
       <button class="mtile" id="mPng" ${d}>${ic("download")}<span>Save image</span></button>
     </div>
     <div class="mgrid mgrid2 mt12">
@@ -3529,6 +3657,7 @@ $("moreBtn").onclick = ()=>{
     $("unlockBtn").onclick();
   };
   $("mPng").onclick   = ()=>{ closeSheet(); exportVisiblePng(); };
+  $("mOcr").onclick   = ()=>{ closeSheet(); runOcr(); };       // v11.48
   // v11.47: flatten asks first — it is a one-way door (undo aside)
   $("mFlat").onclick  = ()=>{
     if (!workingBytes) return;

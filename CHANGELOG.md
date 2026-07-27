@@ -4,6 +4,33 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.48] — 2026-07-27 — Phase 6: OCR — scanned PDFs become searchable
+
+The last roadmap phase, and the biggest Acrobat paid feature left: recognise
+the text in a scanned document so Find, Select and copy work — in this app
+and in every other PDF viewer the file is opened in.
+
+- **More → Recognise text.** Pages that carry no real text are rendered at up
+  to 300 dpi and read by an on-device Tesseract 5 (LSTM) engine — vendored
+  like the PDF engine, downloaded once (~17 MB), cached in VENDOR_CACHE for
+  offline use, never touching any server. Each recognised word is laid over
+  the page image as INVISIBLE real text (opacity 0) at its exact position —
+  Acrobat's "searchable PDF". Born-digital pages are skipped, low-confidence
+  junk (<40) is dropped rather than embedded, the undo snapshot is only taken
+  once words were actually found, and the worker is terminated afterwards to
+  release its WASM heap. English first; other languages are a data file away.
+- Honesty note kept from the roadmap: Adobe's OCR engine is proprietary and
+  cannot be used or rebuilt. Tesseract is what every serious non-Adobe tool
+  ships. Measured on a 200 dpi scan of the invoice seed: **95% confidence,
+  100/100 words** — capture quality (v11.41) matters more than the engine.
+- sw.js: `.gz` joined the cacheable types so the language data self-caches.
+
+New suite: ocr-tests (15) — the full loop against the VENDORED wasm and
+language data: render a real scanned fixture (zero extractable chars), OCR it,
+place the invisible layer with the shipped `ocrWordPlacement`, then prove via
+MuPDF that the text extracts, `search()` finds it at its position, and the
+page renders pixel-identical (diff 0.000). All thirteen suites green.
+
 ## [v11.47] — 2026-07-27 — Phase 5: fill real forms (AcroForm)
 
 The feature that most often sends people back to Acrobat. Until now a

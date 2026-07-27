@@ -6,7 +6,7 @@
    - VENDOR_CACHE (~12MB: MuPDF wasm + pdf-lib) — bump ONLY when vendor/ files
      actually change. Kept across app releases, so updates no longer re-download
      the engine and the first load after an update is fast. */
-const APP_CACHE    = "pypdf-app-v11.47";
+const APP_CACHE    = "pypdf-app-v11.48";
 const VENDOR_CACHE = "pypdf-vendor-v1";
 
 const APP_SHELL = [
@@ -74,7 +74,10 @@ self.addEventListener("fetch", (e)=>{
       // v10.88: only runtime-cache known app/vendor asset types. Previously ANY
       // same-origin GET was stored in APP_CACHE forever (cache-first, no expiry),
       // so a stray request could pin a stale response across releases.
-      const cacheable = /\.(html|css|js|mjs|json|webmanifest|png|svg|wasm|woff2?)$/.test(url.pathname)
+      // v11.48: .gz covers the OCR language data (vendor/ocr/eng.traineddata.gz)
+      // so the recogniser, like the PDF engine, downloads once and then works
+      // offline. It lands in VENDOR_CACHE via the /vendor/ rule below.
+      const cacheable = /\.(html|css|js|mjs|json|webmanifest|png|svg|wasm|woff2?|gz)$/.test(url.pathname)
                      || url.pathname.endsWith("/");
       // v11.06: never runtime-cache query-string URLs (e.g. "./?action=scan")
       // — the shell already serves them via ignoreSearch, so caching each
