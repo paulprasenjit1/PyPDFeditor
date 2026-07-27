@@ -4,6 +4,50 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.31] — 2026-07-27 — Green document outline no longer dies after the first page
+
+Backup: `backups/pypdf-pwa-v11.30-pre-v1131-scanoverlay-restore-point.zip`.
+
+Reported: after adding the first page and returning to the camera to scan the
+next one, the green detection box never appeared again.
+
+- **Root cause: the overlay canvas was left at the wrong size, and a wrong-sized
+  canvas draws nothing.** The outline is a canvas whose backing store is set
+  from the live-preview box (`.scanview`). Adding page 1 makes the thumbnail
+  strip appear, which takes ~72px off that box — and nothing re-sized the canvas
+  when the box changed on its own. Worse, `sizeQuadCanvas` read
+  `clientWidth`/`clientHeight` unconditionally, and a hidden element reports 0:
+  the camera screen is `display:none` for the whole time the Adjust screen is
+  up, so a layout event raised in that window wrote a 0×0 canvas. Nothing
+  reported any of this, because the preview loop swallows every error by design.
+- **The overlay now re-asserts its size on every detection frame.** One layout
+  read, and it writes only when the box actually changed (assigning
+  `canvas.width` resets the bitmap AND the 2D context state, so re-asserting
+  blindly would erase the outline mid-draw). This heals the overlay after any
+  layout change there is no callback for — the thumbnail strip appearing or
+  disappearing, rotation, the iOS URL bar, returning from Adjust.
+- **`sizeQuadCanvas` now refuses a zero size** rather than obeying it, so a
+  mistimed call is a no-op instead of killing the overlay for the rest of the
+  session. It returns whether the preview box is real, and `drawLiveQuad` uses
+  that to skip drawing when the camera screen isn't on screen.
+- **The `resize` handler is guarded like its neighbour.** `layoutCrop()` was
+  already gated on the Adjust screen being visible; `sizeQuadCanvas()` was not,
+  so a resize during Adjust measured a hidden element. Now belt-and-braces on
+  top of the zero-size refusal.
+- **A detection loop that fails every frame says so.** Five consecutive failures
+  raise one warning that capture still works and edges can be dragged on the
+  next screen, instead of the feature silently not existing.
+- Tests: the harness now models two things it previously faked away — an element
+  inside a `display:none` view reports a zero client box, and the thumbnail
+  strip takes height off the preview box. It also presents the document as
+  visible; jsdom reports `visibilityState: "prerender"`, which meant the live
+  detect loop returned on every tick and **the entire green-outline feature was
+  never executed by any test**. 13 new checks (S1–S12) drive the reported flow
+  and assert the outline is drawn on a correctly-sized canvas; strokes on a
+  zero-size canvas deliberately do not count as a draw. Each fix was mutation-
+  tested: reverting the zero-size refusal fails S6/S6b, reverting the per-frame
+  re-assert fails S10. Suite: 13 + 15 + 59 + 30 + 17 + 104.
+
 ## [v11.30] — 2026-07-27 — Text edit stops damaging the lines around it
 
 Backup: `backups/pypdf-pwa-v11.29-pre-v1130-editfix-restore-point.zip`.

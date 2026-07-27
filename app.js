@@ -17,7 +17,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.30";
+const APP_BUILD = "11.31";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -92,10 +92,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.30
+const BUILD_DATETIME = "27 Jul 2026";   // v11.31
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "editing text no longer clips the lines above and below it, and a right-aligned or centred field stays lined up with its column.";
+const WHATS_NEW = "the green document outline no longer disappears after you add a page — it now follows the camera view whenever it changes size.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -3338,9 +3338,28 @@ function enterFallback(){
   setStatus("Live camera unavailable — using the native camera instead.","warn");
   $("camInput").click();
 }
+// Match the overlay canvas to the live-preview box. Returns false when there is
+// no box to match — which is the whole point of the guard:
+//
+// A hidden element reports clientWidth/clientHeight 0, and the camera screen IS
+// hidden for the entire time the Adjust screen is up. The old version wrote
+// those zeros straight into the canvas, and a 0×0 canvas draws nothing at all —
+// silently, because the preview loop swallows every error. That is how the
+// green outline could disappear for the rest of a scan session: one layout
+// event at the wrong moment and the overlay was dead until something happened
+// to re-size it. Refusing to write a zero size means a mistimed call is now a
+// no-op instead of a kill.
+//
+// Only writing on an actual change matters too: assigning canvas.width resets
+// the bitmap AND the whole 2D context state, so re-asserting the same size
+// every frame would throw away the outline mid-draw.
 function sizeQuadCanvas(){
   const view = $("scanView"), q = $("scanQuad");
-  q.width = view.clientWidth; q.height = view.clientHeight;
+  if (!view || !q) return false;
+  const w = view.clientWidth|0, h = view.clientHeight|0;
+  if (w <= 0 || h <= 0) return false;          // hidden or not laid out yet
+  if (q.width !== w || q.height !== h){ q.width = w; q.height = h; }
+  return true;
 }
 
 // live preview: detect the document every 300ms and outline it in green.
@@ -3383,9 +3402,11 @@ function quadClose(a,b){
   for (let i=0;i<4;i++) if (Math.hypot(a[i].x-b[i].x, a[i].y-b[i].y)>tol) return false;
   return true;
 }
+let liveErrs = 0;                  // consecutive failing detect frames (v11.31)
 function startLiveDetect(){
   if (scanLive) clearInterval(scanLive);
   resetLiveQuad();
+  liveErrs = 0;
   let tick = 0;
   scanLive = setInterval(()=>{
     try {
@@ -3396,7 +3417,15 @@ function startLiveDetect(){
       // clears the lock (in smoothQuad/resetLiveQuad) and full rate resumes.
       if (quadLocked() && (tick++ & 1)) return;
       drawLiveQuad(smoothQuad(detectOnVideoFrame(v)));
-    } catch(e){ /* one bad camera frame must not kill the preview loop */ }
+      liveErrs = 0;
+    } catch(e){
+      // one bad camera frame must not kill the preview loop — but a loop that
+      // is failing EVERY frame used to look exactly like "the green box just
+      // doesn't appear", with nothing anywhere to say why. Say it once, and say
+      // what still works.
+      if (++liveErrs === 5)
+        setStatus("Live edge detection isn't working on this device — capture still works, then drag the corners on the next screen.","warn");
+    }
   }, 300);
 }
 // Live-preview detection runs SYNCHRONOUSLY on the main thread. At the 300px
@@ -3418,7 +3447,16 @@ function detectOnVideoFrame(v){
 // manual (the shutter) — there is no auto-capture, so there's no "hold still"
 // state here.
 function drawLiveQuad(q){
-  const cnv=$("scanQuad"), ctx=cnv.getContext("2d");
+  const cnv=$("scanQuad");
+  // v11.31: re-assert the overlay size on every frame. It costs one layout read
+  // and writes nothing unless the preview box actually changed, so it is
+  // effectively free — but it means the outline heals itself after ANY layout
+  // change we don't get a callback for. The one that broke this in practice:
+  // adding the first page makes the thumbnail strip appear, which shortens the
+  // preview box. Anything else that resizes it — rotation, the iOS URL bar,
+  // returning from the Adjust screen — is covered by the same line.
+  if (!sizeQuadCanvas()) return;               // camera screen isn't on screen
+  const ctx=cnv.getContext("2d");
   ctx.clearRect(0,0,cnv.width,cnv.height);
   if (!q) return;
   const v=$("scanVideo");
@@ -3967,7 +4005,12 @@ function warpPerspective(srcCanvas, q, maxDim){
 // keep the scanner layouts in step with rotation / window changes
 window.addEventListener("resize", ()=>{
   if ($("scanCrop").classList.contains("show")) layoutCrop();
-  if (scanStream) sizeQuadCanvas();
+  // v11.31: only when the camera screen is actually on screen. layoutCrop was
+  // already guarded this way; sizeQuadCanvas was not, so a resize raised while
+  // the Adjust screen was up measured a hidden element and collapsed the
+  // overlay. sizeQuadCanvas now refuses a zero size on its own, so this guard
+  // is belt-and-braces rather than the only defence.
+  if (scanStream && $("scanCam").classList.contains("show")) sizeQuadCanvas();
 });
 
 // ---------------- current page -> PNG (mupdf) ----------------
