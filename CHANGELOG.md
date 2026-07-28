@@ -4,6 +4,53 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.77] — 2026-07-28 — 300 dpi, because v11.76 proved the ceiling had moved
+
+### v11.76 worked, and that is measurable
+Comparing five real scans of the same document:
+
+| version | size | resolution | text |
+|---|---|---|---|
+| v11.73 MRC | 201 KB | 133 dpi bg + 1-bit | redrawn, small print merged |
+| v11.74 | 1,139 KB | 219 dpi | good — and 4× the size for nothing |
+| v11.75 | 605 KB | 222 dpi | identical to v11.74 at half the size |
+| **v11.76** | **714 KB** | **274 dpi** | **crispest of the five** |
+
+The 4:3 request paid off — 222 → 274 dpi — and, importantly, **it did not
+over-expose**: blown-highlight fraction 0.321 against v11.75's 0.459. The
+fallback never had to fire, which is the outcome v11.41 assumed and never
+checked.
+
+### The ceiling had moved from the camera to a constant
+v11.76's page came out **2272 × 3200** — exactly `maxDim`. The sensor was
+handing over more than was being kept, so the limit was no longer the camera.
+
+`maxDim` 3200 → **3500**, which is 299 dpi on an A4 long edge: the figure
+Acrobat and Adobe Scan treat as standard for a document.
+
+The budget rises 700 KB → 900 KB with it, because otherwise it would undo the
+resolution it had just been given. Measured: the same page at 3500px and q0.80
+is about 860 KB. Worth noting v11.76 was *not* being stepped down — its 714 KB
+re-encodes to 697 KB at q0.80 — so the old budget was exactly at its useful
+edge, not past it.
+
+Expect about **860 KB a page at 300 dpi**, against 714 KB at 274.
+
+### One thing found while making the change
+The capture path had a hardcoded `3200` sitting beside a constant of the same
+value: `const cap = scanHiQ ? HQ_MAX_DIM : 3200`. Raising one and not the other
+would have quietly left the native-photo path a resolution behind the live one.
+It now reads `SCAN_Q.std.maxDim`, and `SC76b` asserts the number is not
+duplicated as a literal anywhere.
+
+### Tests
+`CP64c` follows the new figures, and two new assertions check the *intent*
+rather than the digits: `CP64d` computes that `maxDim` really is ~300 dpi on
+A4, and `CP64e` that the budget is large enough not to step it back down. Those
+would have caught raising one without the other.
+
+Seventeen suites green (scan 176 → 177, compress 87 → 90), corpus green.
+
 ## [v11.76] — 2026-07-28 — The last gap to Adobe Scan was resolution, not encoding
 
 Reviewing the v11.73/74/75 scans side by side put the remaining difference in

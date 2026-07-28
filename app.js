@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.76";
+const APP_BUILD = "11.77";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -5625,7 +5625,20 @@ let scanRetakeAt = -1;
 // the endoscopy photograph shows no blocking at q78. So the top of that range
 // was buying nothing. qFloor stays at 0.70 so a dense page can still ease down
 // to meet the budget rather than blowing past it.
-const SCAN_Q = { std:{ jpeg:0.80, maxDim:3200, budget:700000, qFloor:0.70 },
+// v11.77: maxDim 3200 -> 3500 and the budget 700KB -> 900KB.
+//
+// v11.76's 4:3 request worked — measured on a real scan, the page came out
+// 2272x3200, which is EXACTLY the old cap. The sensor was handing over more
+// than was being kept, so the ceiling had moved from the camera to this
+// constant. 3500px on the long side is 299 dpi on A4: the figure Acrobat and
+// Adobe Scan treat as standard for a document.
+//
+// The budget rises with it, because it must not undo the resolution it was
+// just given. Measured: the same page at 3500px and q0.80 is about 860KB, so
+// 900KB leaves the encoder at its starting quality instead of stepping down.
+// v11.76's page was 714KB against a 700KB budget and had NOT been stepped down
+// (q0.80 re-encodes to 697KB), so the budget was already at its useful edge.
+const SCAN_Q = { std:{ jpeg:0.80, maxDim:3500, budget:900000, qFloor:0.70 },
                  small:{ jpeg:0.62, maxDim:1400 } };
 // Encode a canvas to JPEG, stepping quality down only if the blob exceeds the
 // byte budget (document scans are mostly white and compress well, so a sparse
@@ -6594,7 +6607,11 @@ async function loadPhotoToCrop(f){
     // v11.61: and in HQ the cap rises to 4600, because 3200 was throwing away
     // most of a 12-megapixel photo the moment it arrived. On an A4 page that
     // cap alone is the difference between 274 and 310 dpi.
-    const cap = scanHiQ ? HQ_MAX_DIM : 3200;
+    // v11.77: read the cap from SCAN_Q rather than repeating it. This was a
+    // hardcoded 3200 sitting beside a constant of the same value — raising one
+    // and not the other would have quietly left the native-photo path a
+    // resolution behind the live one.
+    const cap = scanHiQ ? HQ_MAX_DIM : SCAN_Q.std.maxDim;
     const s = Math.min(1, cap/Math.max(im.naturalWidth, im.naturalHeight));
     const c=document.createElement("canvas");
     c.width=Math.round(im.naturalWidth*s); c.height=Math.round(im.naturalHeight*s);
