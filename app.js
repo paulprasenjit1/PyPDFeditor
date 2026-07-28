@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.75";
+const APP_BUILD = "11.76";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -5746,7 +5746,10 @@ let scanAppendTo = null;
 async function startScan(append){
   // scanPages is kept as-is: it is always [] here except when a previous
   // session was restored from IndexedDB, in which case we continue it
-  capFrame = null; scanFallback = false; scanRetakeAt = -1;
+  // v11.76: the exposure check runs once per scanning session, not once per app
+  // launch — a different room, or a different phone camera state, deserves a
+  // fresh look at whether the high-resolution mode is behaving.
+  capFrame = null; scanFallback = false; scanRetakeAt = -1; exposureChecked = false;
   scanAppendTo = (append && workingBytes) ? { name: fileName } : null;
   idPendingCard = null;
   disarmAuto(); autoBusy = false; autoNeedsRelease = false;
@@ -5976,6 +5979,49 @@ function awaitFirstFrame(v){
   // otherwise a device quirk turns into a permanently black scanner.
   setTimeout(()=> show("timeout"), CAM_FIRST_FRAME_MS);
 }
+// v11.76: the check that v11.41 did not have.
+//
+// The high-resolution 4:3 mode is worth ~40% more detail on a portrait page,
+// but on some iPhones it selects a capture mode whose auto-exposure burns out
+// white paper. That is not a thing to reason about — it is a thing to measure.
+// A few frames in, once auto-exposure has settled, the preview is sampled and
+// the blown-highlight fraction read with the same frameStats()/AUTO.MAX_BLOWN
+// the auto-capture gate already uses. Too blown, and the stream is put back to
+// the 16:9 mode that was known to expose correctly, and the user is told.
+//
+// Deliberately conservative: only a clearly over-exposed frame triggers the
+// fallback, it is tried once per session, and any failure leaves the working
+// stream alone. Resolution is worth nothing on paper that is burnt white.
+const EXPOSURE_SETTLE_MS = 900;   // let auto-exposure finish before judging it
+let exposureChecked = false;
+async function verifyExposure(v, safeConstraint){
+  if (exposureChecked) return;
+  exposureChecked = true;
+  await new Promise(r=> setTimeout(r, EXPOSURE_SETTLE_MS));
+  let blown = 0;
+  try {
+    if (!v.videoWidth || !scanStream) return;
+    const W = 240, H = Math.max(1, Math.round(W * v.videoHeight / v.videoWidth));
+    const c = document.createElement("canvas"); c.width = W; c.height = H;
+    const ctx = c.getContext("2d", { willReadFrequently:true });
+    ctx.drawImage(v, 0, 0, W, H);
+    const st = frameStats(ctx.getImageData(0, 0, W, H));
+    blown = st ? st.blown : 0;
+    if (camDiag) camDiag.blown = blown;
+    if (blown <= AUTO.MAX_BLOWN) return;              // the mode is behaving
+  } catch(e){ return; }                               // never break a working preview
+  // Over-exposed: go back to the mode that was known good.
+  try {
+    const track = scanStream.getVideoTracks()[0];
+    if (!track || !track.applyConstraints) return;
+    await track.applyConstraints(safeConstraint);
+    if (camDiag) camDiag.exposureFallback = true;
+    fitPreviewBox(); sizeQuadCanvas();
+    setStatus("The camera's high-resolution mode was over-exposing the page, so it has "
+            + "been switched back. Scans stay correctly exposed at slightly lower detail; "
+            + "use HQ for maximum resolution.", "warn");
+  } catch(e){ /* the high-res stream still works — leave it running */ }
+}
 async function startCamera(){
   stopCamera();
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ enterFallback(); return; }
@@ -5996,10 +6042,30 @@ async function startCamera(){
   // succeeds on essentially every device and the two fallbacks below it were
   // dead weight paid for at startup. They are kept only for the case where the
   // first call genuinely throws (a device with no environment-facing camera).
+  // v11.76: ask for the 4:3 sensor mode FIRST — but verify it, and back out if
+  // it misbehaves.
+  //
+  // A portrait page in a 16:9 stream is bounded by the 2160 short side, which
+  // caps a scan at about 222dpi. Measured on the same document, the native
+  // still-photo path reaches 308dpi and the preview path 222dpi, so the video
+  // mode is the whole ceiling. The 4:3 mode is 3024 on the short side: roughly
+  // +40% linear, about 310dpi, with the live outline and auto capture intact.
+  //
+  // v11.41 asked for exactly this and shipped it, and on a real iPhone the
+  // capture mode it selects over-exposed white paper — scans came back burnt.
+  // v11.55 reverted it and pinned the revert. What was missing then was not the
+  // idea but the CHECK: nothing measured the result before trusting it.
+  // v11.63 added frameStats(), which reports the blown-highlight fraction, and
+  // AUTO.MAX_BLOWN already defines "too blown". So the request is now made and
+  // then verified against the picture it actually produces — see verifyExposure().
   const camTries = [
+    { facingMode:{ideal:"environment"}, width:{ideal:4032}, height:{ideal:3024}, focusMode:"continuous" },
     { facingMode:{ideal:"environment"}, width:{ideal:3840}, height:{ideal:2160}, focusMode:"continuous" },
     { facingMode:{ideal:"environment"} }
   ];
+  // the 16:9 request, kept by name so the fallback cannot drift from the mode
+  // that was known to expose correctly
+  const CAM_SAFE = camTries[1];
   scanStream = null;
   camDiag = { t0: Date.now(), gum: 0, first: 0, sizes: [] };
   for (const v of camTries){
@@ -6021,6 +6087,7 @@ async function startCamera(){
   awaitFirstFrame(v);
   sizeQuadCanvas();
   refreshScanIdle();
+  verifyExposure(v, CAM_SAFE);
   // torch: only offer the button when the camera actually supports it
   torchOn = false;
   try {
@@ -6045,8 +6112,11 @@ function camDiagText(){
       + " · video " + camDiag.fit.vw + "x" + camDiag.fit.vh
       + " · drawn " + camDiag.fit.w + "x" + camDiag.fit.h
     : " · fit not computed";
+  const e = camDiag.blown === undefined ? " · exposure not checked yet"
+          : " · blown " + (100*camDiag.blown).toFixed(1) + "%"
+            + (camDiag.exposureFallback ? " -> FELL BACK to 16:9" : " (high-res mode kept)");
   return "gUM " + camDiag.gum + "ms · frame " + (camDiag.first || "-") + "ms"
-       + " (" + (camDiag.why || "-") + ") · " + s + f;
+       + " (" + (camDiag.why || "-") + ") · " + s + f + e;
 }
 (function bindCamDiag(){
   // v11.71: this was bound to the page counter, which is EMPTY until a page has

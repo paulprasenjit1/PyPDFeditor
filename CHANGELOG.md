@@ -4,6 +4,61 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.76] — 2026-07-28 — The last gap to Adobe Scan was resolution, not encoding
+
+Reviewing the v11.73/74/75 scans side by side put the remaining difference in
+one place. It is not the filter chain, the JPEG quality or the format — it is
+how many pixels the capture has in the first place.
+
+`corpus/USER-hq-scan.pdf` happens to contain both paths in one document:
+
+| capture | pixels | dpi on A4 |
+|---|---|---|
+| HQ — the iPhone's own still photo | 2633 × 3598 | **308** |
+| preview frame — the default | 1975 × 2599 | **222** |
+
+Adobe Scan takes a full still photo, which is how it reaches ~300. A portrait
+page inside a 16:9 preview is bounded by the **2160** short side, and that is
+the entire ceiling. Everything tuned since v11.72 has been downstream of it.
+
+### Asking for the 4:3 sensor mode again — this time with a check
+iPhones expose a 4:3 mode at 4032×**3024**. A portrait page bounded by 3024
+instead of 2160 is about **+40% linear, roughly 310 dpi**, with the live
+outline and auto capture intact.
+
+v11.41 asked for exactly this and shipped it. On a real iPhone the capture mode
+it selects over-exposed white paper and scans came back burnt, so v11.55
+reverted it and pinned the revert. **What was missing then was not the idea but
+the check** — nothing measured the result before trusting it.
+
+v11.63 added `frameStats()`, which reports the blown-highlight fraction, and
+`AUTO.MAX_BLOWN` already defines "too blown" for the auto-capture gate. So the
+request is now made *and verified*: 900 ms in, once auto-exposure has settled,
+the preview is sampled; if the paper is burning out, `applyConstraints` puts
+the stream back to the 16:9 mode that was known to expose correctly and says
+so. Once per scanning session, and any failure leaves the working preview
+alone — resolution is worth nothing on paper that is white.
+
+The camera diagnostic (press and hold "Scan document") now reports it:
+`… blown 2.3% (high-res mode kept)` or `… blown 11.4% -> FELL BACK to 16:9`.
+
+### SC69 changed meaning, deliberately
+That test existed to stop the 4:3 request coming back. It is rewritten rather
+than deleted, because what it protects still matters — the invariant is no
+longer "4:3 is absent" but **"4:3 is never trusted unchecked"**: the 16:9 mode
+stays reachable by name, the check uses the same measure as the auto-capture
+gate, a failure cannot break the preview, and it re-runs each session.
+`SC69`, `SC69b`, `SC69d`–`SC69h`.
+
+### Honestly stated risk
+This is the change that burnt us once. It is now self-correcting and tested in
+Node, but the failure mode only appears on a real iPhone. **Scan one page and
+press-and-hold the title**: if it reads "high-res mode kept" the page should be
+around 300 dpi; if it says it fell back, the guard worked and nothing is worse
+than v11.75.
+
+Seventeen suites green (scan 171 → 176), corpus green.
+
 ## [v11.75] — 2026-07-28 — Half the size of v11.74, and identical to look at
 
 v11.74 restored v11.31's quality and, with it, v11.31's file sizes — about four
