@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.73";
+const APP_BUILD = "11.74";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -7325,32 +7325,11 @@ async function addScanPageTo(doc, p){
 //
 // Never allowed to make things worse: if the pass fails, or the result is not
 // actually smaller, the original bytes are returned untouched.
-// v11.68: two candidates now — the plain image pass, and MRC. Whichever is
-// smaller wins, and if neither beats the input the input is returned. MRC is
-// dramatically better on a page of text with a few pictures (measured on the
-// user's HQ endoscopy scan: 1983 KB -> 138 KB, against 700 KB for the image
-// pass) but it is not always the winner, so it is a candidate, not a rule.
-async function shrinkScanPdf(bytes, allowMrc){
-  let work = null, best = bytes;
-  try {
-    if (allowMrc !== false){
-      const mrc = mrcRebuild(bytes, null);
-      if (mrc && mrc.length < best.length) best = mrc;
-    }
-  } catch(e){ /* keep the image pass */ }
-  try {
-    work = mupdf.Document.openDocument(bytes.slice(0), "application/pdf").asPDF();
-    if (work){
-      const rep = await recompressImages(work, "scan", null);
-      if (rep && rep.changed){
-        const out = u8(work.saveToBuffer("compress,compress-fonts,garbage").asUint8Array());
-        if (out.length && out.length < best.length) best = out;
-      }
-    }
-  } catch(e){ /* keep whatever we have */ }
-  finally { try{ if(work) work.destroy(); }catch(e){} }
-  return best;
-}
+// v11.74: shrinkScanPdf is gone. It ran on every freshly built scan and
+// re-encoded the page at q68/300dpi, down from the captured q92/3200px — a
+// quality loss applied automatically, which is precisely what v11.31 did not
+// do. Both of its candidates are still available, deliberately, under Compress:
+// the per-image levels, and MRC via runMrcCompress().
 async function createScanPdf(){
   if (!scanPages.length) return;
   const pages=scanPages.slice();
@@ -7359,10 +7338,19 @@ async function createScanPdf(){
   try {
     const doc=await PDFDocument.create();
     for (const p of pages) await addScanPageTo(doc, p);
-    // a Photo ID page opts out of MRC (see the rec above) — one ID page in the
-    // batch is enough, since MRC rebuilds the whole document or none of it
-    const anyId = pages.some(p=>p && p.id);
-    workingBytes = await shrinkScanPdf(new Uint8Array(await doc.save()), !anyId);
+    // v11.74: a new scan is written EXACTLY as captured — q92, up to 3200px,
+    // continuous tone — which is what v11.31 did and what made its scans good.
+    //
+    // Two compression stages had crept in front of this line and both cost
+    // quality that could not be got back:
+    //   v11.62 shrinkScanPdf   re-encoded the page at q68/300dpi, down from the
+    //                          captured q92/3200px (~387dpi)
+    //   v11.68 MRC             replaced continuous-tone text with a 1-bit
+    //                          stencil, which merged 6pt print
+    // Neither belongs in the capture path. Making a scan smaller is a decision
+    // with a cost, so it is now something you ask for under Compress, where the
+    // saving is shown and the original is still on screen to compare against.
+    workingBytes = new Uint8Array(await doc.save());
     // dated default name ("Scan 5 Jul 2026 14.30.pdf") so saved scans are
     // findable in Files instead of a pile of identical "scan.pdf"s
     const d=new Date();
@@ -7675,11 +7663,13 @@ $("compBtn").onclick = ()=>{
     <div class="row"><button class="full" id="cpMed">Balanced — pictures at 150 dpi</button></div>
     <div class="row"><button class="full" id="cpLow">Smallest — pictures at 110 dpi</button></div>
     <div class="row"><button class="full" id="cpTarget">Reach a size… — e.g. under 2 MB for an upload</button></div>
+    <div class="row"><button class="full" id="cpMrc">Scanned pages — much smaller, text redrawn</button></div>
     <div class="row"><button class="ghost full" id="cpCancel">Cancel</button></div>`;
   $("cpHigh").onclick = ()=>{ closeSheet(); runCompress("high"); };
   $("cpMed").onclick  = ()=>{ closeSheet(); runCompress("medium"); };
   $("cpLow").onclick  = ()=>{ closeSheet(); runCompress("low"); };
   $("cpTarget").onclick = ()=>{ openTargetSize(); };
+  $("cpMrc").onclick  = ()=>{ closeSheet(); runMrcCompress(); };
   $("cpCancel").onclick = closeSheet;
   openSheet();
 };
@@ -8621,6 +8611,36 @@ function showCompressReport(before, after, target, how, rasterised, undoKept){
   setStatus("Compressed: "+fmtKB(before)+" → "+fmtKB(after)+"."+(undoKept?" Undo reverses it.":""), met?"ok":"warn");
 }
 
+// v11.74: MRC is now something you ASK for, not something done to every scan.
+//
+// It is the biggest saving the app can make on a photographed document — 90%
+// and more — but it rebuilds the text as a 1-bit stencil, and on small print
+// that is a visible change, not a free one. Automatic compression of a fresh
+// scan is exactly what made the scanner worse than v11.31, so this sits under
+// Compress, states its cost before running, and leaves the result on screen
+// with Undo available.
+async function runMrcCompress(){
+  if (!workingBytes) return;
+  const before = workingBytes.length;
+  showSpin(true,"Rebuilding scanned pages…");
+  let out = null;
+  try {
+    await new Promise(r=>setTimeout(r,0));       // let the spinner paint first
+    out = mrcRebuild(workingBytes, (i,n)=> showSpin(true,"Rebuilding page "+(i+1)+" of "+n+"…"));
+  } catch(e){ out = null; }
+  showSpin(false);
+  if (!out){
+    setStatus("This document is not a photographed scan — its pages carry real text, "
+            + "or they are mostly picture. Nothing was changed; try the picture options instead.","warn");
+    return;
+  }
+  pushUndo();
+  workingBytes = out;
+  reopen(); setDirty(true); await render();
+  setStatus("Scanned pages rebuilt — "+fmtKB(before)+" to "+fmtKB(out.length)
+          + " ("+Math.round(100 - 100*out.length/before)+"% smaller). "
+          + "Text is redrawn sharp at 400 dpi; check the small print, and Undo if you would rather keep the original.","ok");
+}
 async function runCompress(level){
   const cfg=COMPRESS[level], before=workingBytes.length;
   showSpin(true,"Compressing…");

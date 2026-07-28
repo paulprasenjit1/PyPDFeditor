@@ -4,6 +4,62 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.74] — 2026-07-28 — The scanner goes back to what v11.31 did
+
+You were right, and diffing v11.31 against today says exactly what changed.
+
+### The pixel processing never changed
+`colourBalanceCore`, `applyAutoContrast`, `flattenIllumination`,
+`documentEnhance` — all identical to v11.31, called in the same order, from the
+same place. **Nothing about how a captured page is processed has changed since
+the build you liked.**
+
+Which also means my v11.73 diagnosis was wrong. I softened `applyAutoContrast`
+because it clipped 12.6% of the page to pure white. The measurement was right;
+the conclusion was not. That function is byte-for-byte identical in v11.31, so
+the clipping was never the fault — it only became *visible* once a 1-bit
+stencil was laid over it. **Reverted, byte for byte.** I was changing
+known-good behaviour to compensate for something added later.
+
+### What actually changed: two compression stages that v11.31 did not have
+v11.31's `createScanPdf` writes the captured pages into the PDF and stops. No
+`shrinkScanPdf`, no `recompressImages`, no MRC. Since then:
+
+| added | what it did to every new scan |
+|---|---|
+| v11.62 `shrinkScanPdf` | re-encoded the page at **q68 / 300 dpi**, down from the captured **q92 / 3200px** (~387 dpi) |
+| v11.68 MRC | replaced continuous-tone text with a **1-bit stencil**, which merged 6pt print |
+
+Both applied automatically, to every scan, with no way to decline. Everything I
+have been tuning for the last several rounds has been *inside those two
+stages* — trying to make a lossy step look lossless.
+
+### The fix
+`shrinkScanPdf` is **removed**. A new scan is written exactly as captured —
+q92, up to 3200px, continuous tone — which is what v11.31 did.
+
+Making a file smaller is a decision with a cost, so it now lives where you make
+decisions: **Compress → "Scanned pages — much smaller, text redrawn"**. It says
+what it does before running, reports the saving, and leaves Undo available. On
+the endoscopy report that is still 3,965 KB → ~450 KB, but only when asked for.
+
+The MRC tuning from v11.72–73 is kept, because it is real and it makes that
+option better when you choose it: grey fills stay grey, the stencil is 400 dpi,
+strokes are not fattened, and the ink tone is measured rather than assumed.
+
+### What this costs
+A scan is now about **1.9 MB a page** instead of ~130 KB. That is the v11.31
+number, and it is the price of the v11.31 quality you asked for. If a
+particular file needs to be small, Compress is one tap.
+
+### Tests
+`CP63` and `SC141`–`SC142` pinned the removed stage; they now pin the opposite
+invariant — that nothing compresses a freshly created scan, and that MRC is
+reachable only as a deliberate action. `MR29`–`MR30` pin `applyAutoContrast`
+back to the exact v11.31 curve, so it cannot drift again.
+
+Seventeen suites green, corpus green.
+
 ## [v11.73] — 2026-07-28 — Measured against the camera, not against itself
 
 The original 24MP photo of the page made this diagnosable for the first time.
