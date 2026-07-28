@@ -4,6 +4,43 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.61] — 2026-07-28 — HQ: scanning at the resolution the phone can afford
+
+The scanner's quality ceiling was never the processing — it was that a page is
+captured as a frame lifted off the video preview. **HQ** hands the shutter to
+the iPhone's own camera instead, so the page arrives as a full 12-megapixel
+photo. Measured, for an A4 page filling 90% of the frame:
+
+| capture path | phone held to match the page | held the other way |
+|---|---|---|
+| preview frame, 4K 16:9, cap 3200 (before) | 274 dpi | **166 dpi** |
+| 12MP photo, cap 3200 | 274 dpi | 233 dpi |
+| **12MP photo, cap 4600 (HQ)** | **310 dpi** | **233 dpi** |
+
+Adobe Scan aims at 300. Two things were in the way, and both are fixed:
+
+- **The 3200px cap threw most of the photo away the moment it arrived.** It
+  existed to match the preview frame's ceiling, and cost 37 dpi on its own.
+  In HQ it rises to 4600, with the JPEG budget raised to match — at 4600px the
+  old 1.4 MB budget would simply have re-lost the detail as artefacts.
+- **16:9 is a poor shape for a page.** That is where the 166 comes from: hold
+  the phone the "wrong" way and the frame's short side bounds the page. A 4:3
+  still is a much better fit, which is why HQ raises the *floor* by 40% —
+  worth more in daily use than the peak.
+
+**The cost is stated plainly in the app, because it is real:** the iPhone's
+camera UI replaces ours, so there is no green outline and no hands-free
+capture, and it is two more taps per page. Turning HQ on therefore turns Auto
+off rather than leaving a toggle that silently does nothing. Auto remains the
+right choice for working through a stack; HQ is for the page that matters.
+
+**Every scan now reports the resolution it actually reached** ("Page 1 added at
+286 dpi"), and says so when a page lands under 200 dpi, where small print
+starts to break up. The argument for this feature is a number, so the number is
+on screen rather than buried in a changelog.
+
+scan-tests 80 → 89, including the arithmetic above. All sixteen suites green.
+
 ## [v11.60] — 2026-07-28 — Selecting text on a scan
 
 "Nothing highlights, it selects the entire page and offers Copy — just like an

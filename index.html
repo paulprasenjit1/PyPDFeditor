@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.60">
+<html lang="en" data-build="11.61">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -227,6 +227,11 @@
            hand and always goes through Adjust. -->
       <button class="ghost mini on" id="autoBtn" aria-pressed="true"
               aria-label="Automatic capture">Auto</button>
+      <!-- v11.61: route the shutter to the iPhone's own camera for a full
+           12-megapixel photo instead of a frame off the preview. Sharper, at
+           the cost of the live outline and hands-free capture. -->
+      <button class="ghost mini" id="hqBtn" aria-pressed="false"
+              aria-label="High quality capture">HQ</button>
       <button class="ghost mini" id="torchBtn" aria-label="Camera torch" hidden>Torch</button>
       <span class="pgct" id="scanCount" aria-live="polite"></span>
     </span>

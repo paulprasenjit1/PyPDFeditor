@@ -20,14 +20,14 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.60";
+const APP_BUILD = "11.61";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","idToggle","cropReset","cropRetake","cropUse",
     "autoBtn","paperBtn","idBothToggle",
-    "whiteBtn","imgPlaceBtn","insImgInput","formBtn",
+    "whiteBtn","imgPlaceBtn","insImgInput","formBtn","hqBtn",
     "ge0","ge1","ge2","ge3","he0","he1","he2","he3"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.60
+const BUILD_DATETIME = "27 Jul 2026";   // v11.61
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "selecting text on a recognised scan: the picture underneath was taking the touch, so the whole page was copied as an image instead of the words. The word layer now wins, stray recognition marks are skipped, and a scan with no text yet says so and offers to recognise it.";
+const WHATS_NEW = "new HQ button in the scanner: the shutter opens the iPhone camera for a full 12-megapixel photo instead of a frame off the preview, taking an A4 page from about 166-274 dpi up to 233-310. No green outline or hands-free capture in HQ, so Auto stays the fast mode. Every scan now tells you the dpi it reached.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -5523,6 +5523,27 @@ try { if (localStorage.getItem("scanIdMode")==="1") scanIdMode=true; } catch(e){
 // who wants to frame a shot deliberately. Persisted, so the choice sticks.
 let scanAuto = true;
 try { if (localStorage.getItem("scanAuto")==="0") scanAuto=false; } catch(e){}
+// v11.61 "HQ": take the page with the iPhone's OWN camera rather than lifting a
+// frame off the live preview. This is the only change that raises the ceiling
+// on scan sharpness rather than polishing underneath it.
+//
+// Measured, for an A4 page filling 90% of the frame (long side / short side):
+//   preview frame, 4K 16:9, capped at 3200 ....... 274 / 166 dpi
+//   native photo, 12MP, capped at 3200 ........... 274 / 233 dpi
+//   native photo, 12MP, cap raised to 4600 ....... 310 / 233 dpi
+// Adobe Scan aims at 300. The two numbers differ because 16:9 is a poor shape
+// for a page: hold the phone the "wrong" way and the frame's short side bounds
+// the page, which is where the 166 comes from. A 4:3 still is a far better fit,
+// and that is the bigger part of the win — the floor rises, not just the peak.
+//
+// The cost is real and is why this is a MODE, not the default: the iPhone's
+// camera UI replaces ours, so there is no green outline and no hands-free
+// capture, and it is two more taps per page. Auto stays the right choice for
+// working through a stack; HQ is for the page that matters.
+let scanHiQ = false;
+try { if (localStorage.getItem("scanHiQ")==="1") scanHiQ=true; } catch(e){}
+const HQ_MAX_DIM = 4600;     // warp ceiling in HQ (memory-safe on a phone)
+const HQ_BUDGET  = 3200000;  // JPEG byte budget to match the extra detail
 // v11.33 output paper size for scanned pages. "auto" keeps the captured shape
 // (the pre-v11.33 behaviour) and is deliberately NOT the default: a scan of an
 // A4 sheet should come out A4 so it prints with even margins and merges
@@ -6206,6 +6227,9 @@ function captureFrame(){
 }
 $("scanShot").onclick = ()=>{
   if (scanFallback){ $("camInput").click(); return; }
+  // v11.61: in HQ the shutter hands over to the iPhone's camera, which returns
+  // a full-resolution photo instead of a preview frame.
+  if (scanHiQ){ disarmAuto(); $("camInput").click(); return; }
   // v11.32: a deliberate tap cancels any countdown in progress — the user has
   // decided to frame this one themselves, and it goes through Adjust.
   disarmAuto();
@@ -6220,7 +6244,11 @@ async function loadPhotoToCrop(f){
     const im = await loadImage(await fileToDataURL(f));
     // v10.98: 3200 (was 2600) so the native-camera fallback and photo imports
     // match the live path's SCAN_Q.std.maxDim — fallback scans were softer.
-    const s = Math.min(1, 3200/Math.max(im.naturalWidth, im.naturalHeight));
+    // v11.61: and in HQ the cap rises to 4600, because 3200 was throwing away
+    // most of a 12-megapixel photo the moment it arrived. On an A4 page that
+    // cap alone is the difference between 274 and 310 dpi.
+    const cap = scanHiQ ? HQ_MAX_DIM : 3200;
+    const s = Math.min(1, cap/Math.max(im.naturalWidth, im.naturalHeight));
     const c=document.createElement("canvas");
     c.width=Math.round(im.naturalWidth*s); c.height=Math.round(im.naturalHeight*s);
     c.getContext("2d").drawImage(im,0,0,c.width,c.height);
@@ -6606,6 +6634,30 @@ function refreshAutoBtn(){
   b.hidden = scanFallback;
 }
 refreshAutoBtn();
+// v11.61: HQ toggle. Auto capture and HQ are mutually exclusive by nature —
+// the iPhone's camera takes over the screen, so there is no preview to watch
+// and nothing to fire by itself. Turning HQ on therefore turns Auto off, and
+// says so rather than leaving a toggle that silently does nothing.
+$("hqBtn").onclick = ()=> setScanHiQ(!scanHiQ);
+function setScanHiQ(on){
+  scanHiQ = !!on;
+  try { localStorage.setItem("scanHiQ", scanHiQ ? "1" : "0"); } catch(e){}
+  if (scanHiQ && scanAuto){ scanAuto = false;
+    try { localStorage.setItem("scanAuto","0"); } catch(e){}
+    disarmAuto(); refreshAutoBtn();
+  }
+  refreshHqBtn(); refreshAutoBtn();
+  setStatus(scanHiQ
+    ? "High quality on — the shutter opens the iPhone's camera for a full-resolution photo. Sharper, but no green outline and no hands-free capture."
+    : "High quality off — back to the live preview, with the outline and hands-free capture.","ok");
+}
+function refreshHqBtn(){
+  const b = $("hqBtn"); if (!b) return;
+  b.classList.toggle("on", scanHiQ);
+  b.setAttribute("aria-pressed", String(scanHiQ));
+  b.hidden = scanFallback;      // the fallback path is already native capture
+}
+refreshHqBtn();
 // ---- v11.34: both sides of a card on ONE page ----------------------------
 // "Both sides" is the single most-requested shape of an ID scan and the one
 // every print shop produces: front and back of the same card, stacked on one
@@ -6742,7 +6794,13 @@ let cropBusy = false;          // re-entrancy guard: one processing at a time
 //   opts.returnToCamera : true when we are on the Adjust screen and must go back
 async function commitScanPage(frame, q, opts){
   const returnToCamera = !!(opts && opts.returnToCamera);
-  const Q = SCAN_Q[scanQuality] || SCAN_Q.std;
+  const Q0 = SCAN_Q[scanQuality] || SCAN_Q.std;
+  // v11.61: in HQ the warp keeps the photo's detail instead of shrinking it to
+  // the preview-frame ceiling, and the JPEG gets a budget to match — a 4600px
+  // page squeezed into the old 1.4MB budget would just be re-lost as artefacts.
+  const Q = (scanHiQ && scanQuality !== "small")
+    ? { jpeg:Q0.jpeg, maxDim:Math.max(Q0.maxDim, HQ_MAX_DIM), budget:HQ_BUDGET, qFloor:Q0.qFloor }
+    : Q0;
   let out, c;
   if (scanIdMode){
     // Photo ID: warp just the card, enhance it light + colour-true, then
@@ -6784,13 +6842,33 @@ async function commitScanPage(frame, q, opts){
     $("scanCam").classList.add("show");
     if (!scanFallback) await resumeCamera();
   }
-  setStatus("Page "+scanPages.length+" added — "
+  // v11.61: say what the page actually came out at. 300dpi is the mark the
+  // paid scanners aim for; below about 200 small print starts to break up, and
+  // that is worth knowing BEFORE the paper goes back in the drawer.
+  const dpi = scanPageDpi(out.width, out.height);
+  const dpiNote = dpi ? " at " + dpi + " dpi" + (dpi < 200 ? " — a bit soft; fill the screen with the page, or turn HQ on" : "") : "";
+  setStatus("Page "+scanPages.length+" added"+dpiNote+" — "
     + (scanAuto && !returnToCamera ? "hold the camera over the next one."
                                    : "scan the next page or tap Create PDF."), "ok");
 }
+// The resolution a finished page actually reached, as dots per inch across its
+// long side once it is laid out on paper. v11.61 shows this after every scan:
+// the whole argument for HQ is a number, so the number is on screen rather
+// than in a changelog.
+function scanPageDpi(w, h){
+  try {
+    const box = fitToPaper(w, h, scanPaper);
+    if (!box) return 0;
+    const longPx = Math.max(w, h), longPt = Math.max(box.w, box.h);
+    if (!(longPt > 0)) return 0;
+    return Math.round(longPx / (longPt/72));
+  } catch(e){ return 0; }
+}
 // encode + record one finished page canvas
 async function pushScanPage(c, w, h){
-  const QQ = SCAN_Q[scanQuality] || SCAN_Q.std;
+  const QQ0 = SCAN_Q[scanQuality] || SCAN_Q.std;
+  const QQ = (scanHiQ && scanQuality !== "small")
+    ? { jpeg:QQ0.jpeg, budget:HQ_BUDGET, qFloor:QQ0.qFloor } : QQ0;
   const blob = await encodeScanJpeg(c, QQ.jpeg, QQ.budget, QQ.qFloor);
   // small thumbnail (112px tall ≈ 56 css px at 2×) for the review strip
   const tc=document.createElement("canvas");
