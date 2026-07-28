@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.74";
+const APP_BUILD = "11.75";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -5561,7 +5561,13 @@ const HQ_MAX_DIM = 4600;     // warp ceiling in HQ (memory-safe on a phone)
 // and stops a dense one running away. Text at 300 dpi survives q70 easily;
 // what it cannot survive is being stored at 96 dpi, which is the trade the old
 // "Small file" setting made.
-const HQ_BUDGET  = 1100000;
+// v11.75: 1.1MB -> 1.3MB, which is a LOOSENING, not a licence to balloon. The
+// starting quality just dropped to 0.80, and an HQ page carries about 2.1x the
+// pixels of a standard one (4600 vs 3200 on the long side), so at the new
+// quality it lands near 1.2MB on its own. Holding the old 1.1MB ceiling would
+// force the encoder to step down and spend HQ's extra detail on meeting a
+// budget — which is the one thing HQ exists not to do.
+const HQ_BUDGET  = 1300000;
 // v11.33 output paper size for scanned pages. "auto" keeps the captured shape
 // (the pre-v11.33 behaviour) and is deliberately NOT the default: a scan of an
 // A4 sheet should come out A4 so it prints with even margins and merges
@@ -5603,7 +5609,23 @@ let scanRetakeAt = -1;
 // check by encodeUnderBudget() (size-budgeted adaptive JPEG) rather than a
 // fixed quality, so sparse document pages stay well under ~1.45 MB while dense
 // pages settle to a slightly lower quality automatically. "small" is unchanged.
-const SCAN_Q = { std:{ jpeg:0.92, maxDim:3200, budget:1400000, qFloor:0.78 },
+// v11.75: the starting quality drops 0.92 -> 0.80 and the budget 1.4MB ->
+// 700KB. Nothing else about the page changes — same resolution, same
+// continuous tone, same processing.
+//
+// Measured by re-encoding a real v11.74 scan (a 219dpi endoscopy report, one
+// page) at its own resolution:
+//
+//   q92  967 KB   <- what v11.74 shipped, and it never stepped down because
+//   q85  749 KB      the page was already inside the old 1.4MB budget
+//   q80  590 KB
+//   q74  501 KB
+//
+// The same line of text at q92, q82 and q74 is indistinguishable at 100%, and
+// the endoscopy photograph shows no blocking at q78. So the top of that range
+// was buying nothing. qFloor stays at 0.70 so a dense page can still ease down
+// to meet the budget rather than blowing past it.
+const SCAN_Q = { std:{ jpeg:0.80, maxDim:3200, budget:700000, qFloor:0.70 },
                  small:{ jpeg:0.62, maxDim:1400 } };
 // Encode a canvas to JPEG, stepping quality down only if the blob exceeds the
 // byte budget (document scans are mostly white and compress well, so a sparse

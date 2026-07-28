@@ -4,6 +4,51 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.75] — 2026-07-28 — Half the size of v11.74, and identical to look at
+
+v11.74 restored v11.31's quality and, with it, v11.31's file sizes — about four
+times v11.73. Comparing the two real scans showed the size was not coming from
+the *format* at all. It was the JPEG quality.
+
+A standard scan started at **q0.92** against a 1.4 MB budget, so a page that
+came in under 1.4 MB never stepped down and was simply stored at q92 — far more
+than a document needs. Re-encoding a real v11.74 page (a 219 dpi endoscopy
+report) at its own resolution:
+
+| quality | page image |
+|---|---|
+| q92 — what v11.74 shipped | 1,138 KB |
+| q85 | 749 KB |
+| **q80** | **561 KB** |
+| q74 | 501 KB |
+
+The same line of text at q92, q82 and q74 is **indistinguishable at 100%**, and
+the endoscopy photograph shows no blocking at q78. The top of that range was
+buying nothing.
+
+Standard scans now start at **q0.80 against a 700 KB budget**, with the floor at
+q0.70 so a dense page can still ease down rather than blow past. Nothing else
+changes: same resolution, same continuous tone, same processing as v11.74.
+
+Measured on your own file: **1,140 KB → about 563 KB**, settling at q80 without
+needing to step down at all.
+
+`HQ_BUDGET` moved 1.1 MB → 1.3 MB, which is a loosening and deliberate: an HQ
+page carries about 2.1× the pixels, so at the new quality it lands near 1.2 MB
+by itself. Holding the old ceiling would have made the encoder spend HQ's extra
+detail on meeting a budget, which is the one thing HQ exists not to do. `CP64`
+now also asserts it stays under 2 MB, so the guard against the v11.61 balloon
+(2.73 MB for one page) is still real.
+
+### Where that leaves the three options
+| | size | text |
+|---|---|---|
+| v11.74 | ~1,140 KB | continuous tone |
+| **v11.75 (now)** | **~563 KB** | **identical to v11.74** |
+| MRC, under Compress | ~200 KB | redrawn 1-bit |
+
+Seventeen suites green, corpus green.
+
 ## [v11.74] — 2026-07-28 — The scanner goes back to what v11.31 did
 
 You were right, and diffing v11.31 against today says exactly what changed.
