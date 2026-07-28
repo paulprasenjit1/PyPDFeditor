@@ -96,6 +96,24 @@ After Phase 0 has proven correctness: a **target-size mode** ("get under
 2 MB" — binary-search the existing quality levels), a **before/after report**
 (pictures reduced, text kept), and font subsetting via MuPDF's clean options.
 
+**Done, and extended in v11.68 with MRC** (mixed raster content) — the
+technique the paid scanners actually use for small files. A scanned page is
+stored as two layers: a 1-bit 300 dpi CCITT G4 stencil of the text, over a
+100 dpi colour background carrying the photographs and paper. Measured on the
+corpus: `USER-hq-scan.pdf` 3,965 KB → 261 KB (93% smaller),
+`SEED-scan-200dpi.pdf` 881 KB → 167 KB (81%).
+
+It is a candidate rather than a rule — `shrinkScanPdf` weighs it against the
+ordinary image pass and keeps whichever is smaller — and it refuses three
+cases outright, each of which would fail *silently*: any page carrying real
+text (rasterising it would break search, copy and the editor), pages that are
+mostly photograph (smaller **and worse**, which no size check detects), and
+pages over 14 MP (memory).
+
+Still open here: MRC is currently wired into the scan-creation path only.
+Offering it in **Compress** for an already-scanned file would need the text
+layer from a previous OCR run to be carried across rather than discarded.
+
 ### Phase 5 — Fill & sign forms
 
 Two releases. First: read AcroForm fields via the vendored `PDFWidget` API

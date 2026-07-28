@@ -4,6 +4,91 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.68] — 2026-07-28 — MRC: the compression the paid scanners use
+
+### The problem
+An HQ scan of a two-page endoscopy report came to **3,965 KB**. The v11.62
+image pass got it to around 1.4 MB by re-encoding, and could go no further
+without either blurring the text or destroying the photographs — because a
+scan is one big JPEG, where a letter and a photograph cost exactly the same
+per pixel.
+
+### The fix — two layers instead of one
+**MRC (mixed raster content)** splits the page:
+
+| layer | what | how stored |
+|---|---|---|
+| stencil | the text, and only the text | 1-bit at 300 dpi, CCITT G4 |
+| background | photographs, colour, paper texture | colour at 100 dpi, JPEG q58 |
+
+Text keeps sharp 300 dpi edges for a few KB. Photographs and paper texture,
+where softening is invisible, are stored small. Measured, whole documents,
+through the shipped code path:
+
+```
+corpus/USER-hq-scan.pdf      2pg   3,965 KB  ->  261 KB   (93% smaller)
+corpus/SEED-scan-200dpi.pdf  2pg     881 KB  ->  167 KB   (81% smaller)
+```
+
+MRC is a **candidate, not a rule**: `shrinkScanPdf` now runs both it and the
+ordinary image pass and keeps whichever is smaller, starting from the input
+itself, so a scan can never come back bigger than it went in.
+
+### What it refuses to touch, and why
+Three refusals matter more than the ratio, because each failure would be
+silent — a file that opens fine and is quietly worse.
+
+- **Any page carrying real text.** MRC rasterises. Applying it to a typed PDF
+  would turn selectable text into a picture and break search, copy and the
+  text editor at once. Verified: `USER-merged.pdf`, `SEED-photo-heavy.pdf` and
+  `SEED-invoice-reportlab.pdf` are all declined in under 25 ms.
+- **Pages that are mostly photograph.** The one case where MRC actively hurts:
+  little text to sharpen, and the whole picture stored at a third of its
+  resolution. It would get *smaller and worse*, which no size check can
+  detect, so it is refused and the image pass keeps full resolution.
+- **Pages too large to segment safely** (>14 MP), as a memory guard.
+
+### What went wrong on the way, since it shaped the code
+The first working build produced numbers that looked good — 4.4% ink, 91 KB
+stencil, 216 KB total — and a page that was **wrecked**: the text tore into
+horizontal stripes partway down and the photographs came out as solid black
+blocks. Three things were wrong, and none of them threw an error:
+
+1. **`ccittG4Encode` takes one byte per pixel, not a packed bitmap.** Fed a
+   packed bitmap it emits a stream that decodes for a few hundred rows and
+   then loses sync. The stencil is now round-tripped through **libtiff**, an
+   independent decoder — 9.0 M pixels, zero mismatches.
+2. **A picture is a region, not a pixel.** Deciding per pixel let scattered
+   dark pixels inside an endoscopy photograph into the stencil, where they
+   painted black speckle across the image. Classification is now done on
+   16-px blocks, with an opening to drop lone false positives and a one-block
+   dilation to cover photo edges.
+3. **Ink fraction cannot separate text from pictures.** A block inside a bold
+   stroke measures 1.0 — higher than any photographic block — so using it
+   dragged the headings into the background and blurred them. Measured on the
+   real file, the cues that *do* separate are colour (text 0–10, photographs
+   98–164) and solid mid-tone content.
+
+A fourth, smaller one: the stencil paints a single colour, so coloured ink is
+now left to the background. Otherwise the navy hospital logo rendered black.
+
+### Tests
+New suite `tests/mrc-tests.mjs`, **22 assertions**, asserting on *rendered
+pixels* rather than byte counts — every failure above produced a file of
+plausible size. Both historical bugs were re-injected to confirm the suite
+catches them: removing the region test fails MR6 with "3341 leaked", and
+restoring the packed bitmap fails five tests including MR14 "93% dark", which
+is exactly the black-blob damage seen on screen.
+
+`CP63` was rewritten rather than deleted: `shrinkScanPdf` changed shape, but
+the invariant it guards — never hand back something larger — is pinned again
+in the new form, plus two assertions that each candidate wins only when
+strictly smaller.
+
+Seventeen suites green.
+
+**Not yet verified on the phone.** v11.63–v11.68 are all still device-untested.
+
 ## [v11.67] — 2026-07-28 — Colour modes, and fixing one page without redoing the stack
 
 ### Colour · Greyscale · Black & white

@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.67";
+const APP_BUILD = "11.68";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,7 +97,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.67
+const BUILD_DATETIME = "28 Jul 2026";   // v11.68
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
 const WHATS_NEW = "two scanner additions: a Colour / Greyscale / Black & white button (black & white makes a text page a fraction of the size, with sharper letters), and in the page review you can now retake a single page in place or move it earlier or later.";
@@ -7159,17 +7159,29 @@ async function addScanPageTo(doc, p){
 //
 // Never allowed to make things worse: if the pass fails, or the result is not
 // actually smaller, the original bytes are returned untouched.
+// v11.68: two candidates now — the plain image pass, and MRC. Whichever is
+// smaller wins, and if neither beats the input the input is returned. MRC is
+// dramatically better on a page of text with a few pictures (measured on the
+// user's HQ endoscopy scan: 1983 KB -> 138 KB, against 700 KB for the image
+// pass) but it is not always the winner, so it is a candidate, not a rule.
 async function shrinkScanPdf(bytes){
-  let work = null;
+  let work = null, best = bytes;
+  try {
+    const mrc = mrcRebuild(bytes, null);
+    if (mrc && mrc.length < best.length) best = mrc;
+  } catch(e){ /* keep the image pass */ }
   try {
     work = mupdf.Document.openDocument(bytes.slice(0), "application/pdf").asPDF();
-    if (!work) return bytes;
-    const rep = await recompressImages(work, "scan", null);
-    if (!rep || !rep.changed) return bytes;
-    const out = u8(work.saveToBuffer("compress,compress-fonts,garbage").asUint8Array());
-    return (out.length && out.length < bytes.length) ? out : bytes;
-  } catch(e){ return bytes; }
+    if (work){
+      const rep = await recompressImages(work, "scan", null);
+      if (rep && rep.changed){
+        const out = u8(work.saveToBuffer("compress,compress-fonts,garbage").asUint8Array());
+        if (out.length && out.length < best.length) best = out;
+      }
+    }
+  } catch(e){ /* keep whatever we have */ }
   finally { try{ if(work) work.destroy(); }catch(e){} }
+  return best;
 }
 async function createScanPdf(){
   if (!scanPages.length) return;
@@ -8015,6 +8027,247 @@ function confirmRasterise(before, losslessLen){
     openSheet();
     sheetOnDismiss = ()=> done(null);   // backdrop / Esc = cancel
   });
+}
+// ---- v11.68: MRC (mixed raster content) for scanned pages -----------------
+// A scanned page is one big JPEG, so every pixel costs the same whether it is
+// a letter or a photograph. MRC splits the page in two:
+//
+//   stencil     1-bit, full resolution, CCITT G4  — the TEXT, and only the text
+//   background  colour at a third of that         — everything else
+//
+// Text keeps sharp 300dpi edges for a few KB; photographs and paper texture,
+// where softening is invisible, are stored small. This is the route the paid
+// scanners take to small files.
+//
+// Two rules were learned the hard way on corpus/USER-hq-scan.pdf, and both
+// cost a rebuild when I guessed instead of measuring:
+//
+//  1. A picture is a REGION, not a pixel. Classifying pixel-by-pixel let
+//     scattered dark pixels inside an endoscopy photograph into the stencil,
+//     where they painted solid black speckle across the image.
+//  2. Ink fraction cannot separate text from pictures. A block sitting inside
+//     a bold stroke measures 1.0 — higher than any photographic block. Colour
+//     and solid mid-tone content can: measured on that file, text blocks run
+//     chroma 0–10, photographic blocks 98–164.
+//
+// The per-pixel test that survived is the opposite one: ink that is COLOURFUL
+// stays in the background, because the stencil can only paint a single colour
+// and a navy logo rendered black is a visible loss.
+const MRC = {
+  DPI: 300,          // stencil resolution
+  BG_DIV: 3,         // background is a third of that => 100dpi
+  BG_Q: 58,          // background JPEG quality
+  BLK: 16,           // classification block, pixels at DPI
+  DARK: 18,          // darker than local paper by this => ink
+  CHROMA_PICT: 40,   // block mean chroma above this => pictorial
+  MID_PICT: 0.30,    // block solid mid-tone fraction above this => pictorial
+  INK_CHROMA: 60,    // ink more colourful than this is left to the background
+  MIN_GAIN: 0.15,    // must save at least this share to be worth using
+  MAX_PX: 14e6,      // refuse pages larger than this (memory guard, ~A3@300)
+  MAX_PICT: 0.70,    // mostly picture => MRC is the wrong tool, refuse
+};
+// Separable box blur. Uint8 in, Uint8 out, one Float32 scratch buffer — the
+// full-page Float32 arrays this replaced cost ~150MB on an A4 page at 300dpi,
+// which is not survivable on a phone.
+function mrcBoxBlur(a, w, h, r){
+  const t = new Float32Array(w*h), o = new Uint8Array(w*h), d = 2*r+1;
+  for (let y=0; y<h; y++){
+    let s = 0;
+    for (let x=-r; x<=r; x++) s += a[y*w + Math.min(w-1, Math.max(0, x))];
+    for (let x=0; x<w; x++){
+      t[y*w+x] = s/d;
+      s -= a[y*w + Math.min(w-1, Math.max(0, x-r))];
+      s += a[y*w + Math.min(w-1, Math.max(0, x+r+1))];
+    }
+  }
+  for (let x=0; x<w; x++){
+    let s = 0;
+    for (let y=-r; y<=r; y++) s += t[Math.min(h-1, Math.max(0, y))*w + x];
+    for (let y=0; y<h; y++){
+      o[y*w+x] = s/d + 0.5;
+      s -= t[Math.min(h-1, Math.max(0, y-r))*w + x];
+      s += t[Math.min(h-1, Math.max(0, y+r+1))*w + x];
+    }
+  }
+  return o;
+}
+// Split a rendered page into stencil and background.
+// Returns { bits, paper, ink, pict, gx, gy } where bits is one BYTE per pixel
+// (1 = paper, 0 = ink) — the layout ccittG4Encode expects. Feeding it a packed
+// bitmap instead produces a stream that decodes for a few hundred rows and
+// then tears into stripes, which is exactly what happened the first time.
+function mrcSegment(px, w, h, stride, n, cfg){
+  cfg = cfg || MRC;
+  const N = w*h;
+  const gray = new Uint8Array(N);
+  for (let y=0; y<h; y++)
+    for (let x=0; x<w; x++){
+      const i = y*stride + x*n;
+      gray[y*w+x] = n === 1 ? px[i] : ((px[i]*77 + px[i+1]*151 + px[i+2]*28) >> 8);
+    }
+  // local paper level, so a shadowed corner is not read as ink
+  const paper = mrcBoxBlur(gray, w, h, Math.max(4, Math.round(Math.max(w,h)*0.015)));
+  const dark = new Uint8Array(N), midF = new Uint8Array(N);
+  for (let i=0; i<N; i++){
+    const p = Math.max(1, paper[i]);
+    dark[i] = gray[i] < p - cfg.DARK ? 1 : 0;
+    const v = gray[i]/p;
+    midF[i] = (v > 0.35 && v < 0.80) ? 255 : 0;
+  }
+  // A bold glyph is ringed by anti-aliased mid-tones, so counting mid-tone
+  // pixels alone reads headings as pictures. Keep only mid-tones sitting
+  // INSIDE a mid-tone neighbourhood: photo interiors survive, glyph rims do not.
+  const midN = mrcBoxBlur(midF, w, h, 4);
+  const BLK = cfg.BLK, gx = Math.ceil(w/BLK), gy = Math.ceil(h/BLK), G = gx*gy;
+  const chr = new Float32Array(G), mid = new Float32Array(G), cnt = new Float32Array(G);
+  for (let y=0; y<h; y++)
+    for (let x=0; x<w; x++){
+      const g = ((y/BLK)|0)*gx + ((x/BLK)|0), i = y*stride + x*n, k = y*w + x;
+      const c = n === 1 ? 0
+        : Math.max(px[i],px[i+1],px[i+2]) - Math.min(px[i],px[i+1],px[i+2]);
+      chr[g] += c;
+      mid[g] += (midF[k] && midN[k] > 128) ? 1 : 0;
+      cnt[g]++;
+    }
+  const seed = new Uint8Array(G);
+  for (let g=0; g<G; g++)
+    if (cnt[g]) seed[g] = (chr[g]/cnt[g] > cfg.CHROMA_PICT || mid[g]/cnt[g] > cfg.MID_PICT) ? 1 : 0;
+  const nb = (m, x, y)=>{
+    let c = 0;
+    for (let dy=-1; dy<=1; dy++)
+      for (let dx=-1; dx<=1; dx++){
+        if (!dx && !dy) continue;
+        const ny = y+dy, nx = x+dx;
+        if (ny>=0 && ny<gy && nx>=0 && nx<gx && m[ny*gx+nx]) c++;
+      }
+    return c;
+  };
+  // opening: a lone pictorial block among text is a false positive, drop it…
+  const kept = new Uint8Array(G);
+  for (let y=0; y<gy; y++)
+    for (let x=0; x<gx; x++) kept[y*gx+x] = (seed[y*gx+x] && nb(seed,x,y) >= 3) ? 1 : 0;
+  // …then grow by one block so photo edges and their halos are fully covered
+  const pict = new Uint8Array(G);
+  for (let y=0; y<gy; y++)
+    for (let x=0; x<gx; x++) pict[y*gx+x] = (kept[y*gx+x] || nb(kept,x,y) > 0) ? 1 : 0;
+
+  const bits = new Uint8Array(N).fill(1);
+  let ink = 0;
+  for (let y=0; y<h; y++)
+    for (let x=0; x<w; x++){
+      const k = y*w+x;
+      if (!dark[k]) continue;
+      if (pict[((y/BLK)|0)*gx + ((x/BLK)|0)]) continue;
+      if (n > 1){
+        const i = y*stride + x*n;
+        const c = Math.max(px[i],px[i+1],px[i+2]) - Math.min(px[i],px[i+1],px[i+2]);
+        if (c >= cfg.INK_CHROMA) continue;     // coloured ink keeps its colour
+      }
+      bits[k] = 0; ink++;
+    }
+  return { bits, paper, ink, pict, gx, gy };
+}
+// Build one MRC page into `out`. Returns false if the page could not be done,
+// in which case the caller must fall back rather than ship a broken page.
+function mrcAddPage(out, srcPage, cfg){
+  cfg = cfg || MRC;
+  let pix = null, bpm = null;
+  try {
+    const [x0,y0,x1,y1] = srcPage.getBounds();
+    const PW = x1-x0, PH = y1-y0;
+    if (!(PW > 1 && PH > 1)) return false;
+    const s = cfg.DPI/72;
+    if (PW*s*PH*s > cfg.MAX_PX) return false;
+    pix = srcPage.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false);
+    const w = pix.getWidth(), h = pix.getHeight();
+    const st = pix.getStride(), n = pix.getNumberOfComponents(), px = pix.getPixels();
+    const seg = mrcSegment(px, w, h, st, n, cfg);
+    // A page that is mostly photograph is the one case where MRC HURTS: there
+    // is little text to sharpen and the whole picture would be stored at a
+    // third of its resolution. Size alone would not catch that — the file gets
+    // smaller while the page gets worse — so refuse and let the ordinary image
+    // pass handle it, which keeps full resolution.
+    let pictBlocks = 0;
+    for (let g=0; g<seg.pict.length; g++) pictBlocks += seg.pict[g];
+    if (pictBlocks / seg.pict.length > cfg.MAX_PICT) return false;
+    const g4 = ccittG4Encode(seg.bits, w, h);
+
+    // Lift stencil pixels to the local paper level IN THE PIXMAP, so the ink is
+    // not stored a second time in the background (and does not bleed when the
+    // background is downsampled). Done in place to avoid a second full-page
+    // buffer.
+    for (let y=0; y<h; y++)
+      for (let x=0; x<w; x++){
+        if (seg.bits[y*w+x]) continue;
+        const i = y*st + x*n, v = seg.paper[y*w+x];
+        for (let c=0; c<n; c++) px[i+c] = v;
+      }
+    const bw = Math.max(1, Math.round(w/cfg.BG_DIV)), bh = Math.max(1, Math.round(h/cfg.BG_DIV));
+    const small = boxDownsample(px, w, h, st, n, bw, bh);
+    bpm = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0,0,bw,bh], false);
+    const dp = bpm.getPixels(), ds = bpm.getStride();
+    for (let y=0; y<bh; y++) dp.set(small.subarray(y*bw*n, (y+1)*bw*n), y*ds);
+    const bg = u8(bpm.asJPEG(cfg.BG_Q));
+
+    const D = (pairs)=>{ const o = out.newDictionary(); for (const [k,v] of pairs) o.put(k,v); return o; };
+    const NI = v=>out.newInteger(v), NN = v=>out.newName(v), NB = v=>out.newBoolean(v);
+    const bgObj = out.addRawStream(bg, D([
+      ["Type",NN("XObject")], ["Subtype",NN("Image")], ["Width",NI(bw)], ["Height",NI(bh)],
+      ["ColorSpace",NN("DeviceRGB")], ["BitsPerComponent",NI(8)], ["Filter",NN("DCTDecode")]]));
+    // ImageMask + Decode [0 1]: a 0 bit paints, a 1 bit leaves the page alone.
+    const mkObj = out.addRawStream(g4, D([
+      ["Type",NN("XObject")], ["Subtype",NN("Image")], ["Width",NI(w)], ["Height",NI(h)],
+      ["ImageMask",NB(true)], ["BitsPerComponent",NI(1)], ["Filter",NN("CCITTFaxDecode")],
+      ["DecodeParms", D([["K",NI(-1)],["Columns",NI(w)],["Rows",NI(h)],["BlackIs1",NB(false)]])]]));
+    const xo = out.newDictionary(); xo.put("Bg", bgObj); xo.put("Mk", mkObj);
+    const res = out.newDictionary(); res.put("XObject", xo);
+    const content = "q "+PW+" 0 0 "+PH+" 0 0 cm /Bg Do Q\nq 0 g "+PW+" 0 0 "+PH+" 0 0 cm /Mk Do Q\n";
+    out.insertPage(-1, out.addPage([0,0,PW,PH], 0, res, content));
+    return true;
+  } catch(e){ return false; }
+  finally {
+    try{ if(bpm) bpm.destroy(); }catch(e){}
+    try{ if(pix) pix.destroy(); }catch(e){}
+  }
+}
+// Rebuild a whole document as MRC. Returns null — never a partial or larger
+// document — if anything is unsuitable, so the caller keeps what it had.
+//
+// MRC rasterises, so a page carrying real text is refused outright: turning
+// selectable text into a picture would silently break search, copy and the
+// text editor. That makes this safe for freshly built scans and for
+// image-only pages, and a no-op everywhere else.
+function mrcRebuild(bytes, onProgress){
+  let src = null, out = null;
+  try {
+    src = mupdf.Document.openDocument(bytes.slice(0), "application/pdf").asPDF();
+    if (!src) return null;
+    const n = src.countPages();
+    if (!n) return null;
+    out = new mupdf.PDFDocument();
+    for (let i=0; i<n; i++){
+      if (onProgress) onProgress(i, n);
+      let p = null;
+      try {
+        p = src.loadPage(i);
+        let chars = 0;
+        try {
+          const stx = p.toStructuredText("preserve-spans");
+          stx.walk({ onChar(ch){ if (ch && ch.trim()) chars++; } });
+          stx.destroy();
+        } catch(e){ chars = 0; }
+        if (chars > 0) return null;                 // real text: do not rasterise
+        if (!mrcAddPage(out, p, MRC)) return null;
+      } finally { try{ if(p) p.destroy(); }catch(e){} }
+    }
+    const res = u8(out.saveToBuffer("compress,garbage").asUint8Array());
+    if (!res.length || res.length >= bytes.length*(1-MRC.MIN_GAIN)) return null;
+    return res;
+  } catch(e){ return null; }
+  finally {
+    try{ if(out) out.destroy(); }catch(e){}
+    try{ if(src) src.destroy(); }catch(e){}
+  }
 }
 // ---- v11.46 (Phase 4): compress to a TARGET SIZE ---------------------------
 // "Get it under 2 MB for the portal" is the iLovePDF feature people actually
