@@ -4,6 +4,60 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.72] — 2026-07-28 — Grey is not ink
+
+Three scans from the phone (plain, whiten, HQ) came back harsh, with a
+blackish hue. All three had the same defect, and it was mine — introduced with
+MRC in v11.68.
+
+### What was happening
+On the lab report, the light-grey screened band behind the header came back as
+a **mottled black smear**. Pulling the two MRC layers apart showed why: in the
+background layer the band had been **erased to paper**. Its tone was not stored
+there at all — the whole band had been claimed by the 1-bit stencil, which then
+painted it as speckled black.
+
+The cause was a single ink threshold. `gray < paper - 18` asks only "is this
+darker than the paper", and a 20% grey screen sits about **45 below paper**, so
+all of it qualified. And because a screened band is a halftone pattern plus
+sensor noise rather than a flat tone, it did not fail cleanly — **37%** of it
+crossed the line, which is exactly what produces mottle rather than a solid
+block.
+
+### The fix: two thresholds instead of one
+| | test | meaning |
+|---|---|---|
+| core | below **60%** of local paper | unambiguously ink |
+| soft | **18** below local paper | ink, or a grey fill, or noise |
+
+A soft pixel joins the stencil only within 2px of a core pixel. A glyph keeps
+its anti-aliased edge; a grey fill, which contains no core ink anywhere, stays
+in the background and keeps its real tone. Reproduced first as a failing test —
+band **37.3% → 0.0%**, body text still 100%, and dark text sitting *on* the
+band still 100%.
+
+### Two other causes of "harsh"
+- **The stencil painted pure black.** Real scanned ink is not black: measured
+  on these files it is **46/255** (endoscopy) and **53/255** (200dpi scan). The
+  stencil now paints the page's own measured ink tone, clamped so a faint scan
+  cannot wash out. Text stays crisp without the laser-print hardness.
+- **Background quality 58 → 68.** Grey fills now live in that layer, so it
+  carries more of what the page looks like and is worth spending on. The
+  endoscopy scan goes 258 KB → 293 KB — still **93% below** the 3,965 KB
+  original. A 2.5× background instead of 3× cost +47% for no visible gain on a
+  text page, so it stopped there.
+
+### Tests
+mrc-tests 22 → 29. `MR22`–`MR25` build a halftoned grey band with text on it
+and on the page below it, and assert on the segmentation directly; `MR26`–`MR28`
+pin the mechanism. The grey-band case is now part of the suite, so this cannot
+come back quietly.
+
+Seventeen suites green, corpus green.
+
+**Please re-scan the same report and compare.** The band is the thing to look
+at: it should be a smooth grey with black text on it, not a dark smear.
+
 ## [v11.71] — 2026-07-28 — The viewfinder fills the viewfinder
 
 ### What I got wrong in v11.69

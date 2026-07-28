@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.71";
+const APP_BUILD = "11.72";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -8227,9 +8227,17 @@ function confirmRasterise(before, losslessLen){
 const MRC = {
   DPI: 300,          // stencil resolution
   BG_DIV: 3,         // background is a third of that => 100dpi
-  BG_Q: 58,          // background JPEG quality
+  // v11.72: 58 -> 68. Grey fills now stay in the background instead of being
+  // binarised into the stencil, so this layer carries more of what the page
+  // actually looks like and is worth spending on. Measured: the endoscopy scan
+  // goes 258KB -> 293KB, still 93% below the 3,965KB original. Going further
+  // (a 2.5x background instead of 3x) cost +47% for no visible gain on a
+  // text-dominant page, so it stopped here.
+  BG_Q: 68,          // background JPEG quality
   BLK: 16,           // classification block, pixels at DPI
-  DARK: 18,          // darker than local paper by this => ink
+  DARK: 18,          // soft threshold: darker than local paper by this
+  CORE_FRAC: 0.60,   // hard threshold: below this SHARE of local paper => real ink
+  CORE_NEAR: 2,      // a soft pixel joins the stencil only this close to core ink
   CHROMA_PICT: 40,   // block mean chroma above this => pictorial
   MID_PICT: 0.30,    // block solid mid-tone fraction above this => pictorial
   INK_CHROMA: 60,    // ink more colourful than this is left to the background
@@ -8278,13 +8286,34 @@ function mrcSegment(px, w, h, stride, n, cfg){
     }
   // local paper level, so a shadowed corner is not read as ink
   const paper = mrcBoxBlur(gray, w, h, Math.max(4, Math.round(Math.max(w,h)*0.015)));
-  const dark = new Uint8Array(N), midF = new Uint8Array(N);
+  // v11.72: TWO ink thresholds, not one.
+  //
+  // A single "darker than local paper by 18" test cannot tell real ink from a
+  // light grey fill. On a real lab report the 20%-grey band behind the header
+  // sits about 45 below paper, so every pixel of it qualified — and because a
+  // screened band is a halftone pattern plus sensor noise rather than a flat
+  // tone, 37% of it crossed the line and got painted solid black by the
+  // stencil. That is the "blackish hue" and the harshness: a grey band came
+  // back as a mottled black smear, and its real tone was gone, because the
+  // background had it lifted to paper.
+  //
+  //   core  gray is below 60% of local paper  -> unambiguously ink
+  //   soft  gray is 18 below local paper      -> ink OR a grey fill OR noise
+  //
+  // Soft pixels join the stencil only within CORE_NEAR of a core pixel, so a
+  // glyph keeps its anti-aliased edge while a grey fill — which contains no
+  // core ink at all — stays in the background and keeps its actual tone.
+  const core = new Uint8Array(N), soft = new Uint8Array(N), midF = new Uint8Array(N);
   for (let i=0; i<N; i++){
     const p = Math.max(1, paper[i]);
-    dark[i] = gray[i] < p - cfg.DARK ? 1 : 0;
+    soft[i] = gray[i] < p - cfg.DARK ? 1 : 0;
+    core[i] = gray[i] < p * cfg.CORE_FRAC ? 255 : 0;
     const v = gray[i]/p;
     midF[i] = (v > 0.35 && v < 0.80) ? 255 : 0;
   }
+  const coreNear = mrcBoxBlur(core, w, h, cfg.CORE_NEAR);
+  const dark = new Uint8Array(N);
+  for (let i=0; i<N; i++) dark[i] = (soft[i] && coreNear[i] > 0) ? 1 : 0;
   // A bold glyph is ringed by anti-aliased mid-tones, so counting mid-tone
   // pixels alone reads headings as pictures. Keep only mid-tones sitting
   // INSIDE a mid-tone neighbourhood: photo interiors survive, glyph rims do not.
@@ -8323,7 +8352,7 @@ function mrcSegment(px, w, h, stride, n, cfg){
     for (let x=0; x<gx; x++) pict[y*gx+x] = (kept[y*gx+x] || nb(kept,x,y) > 0) ? 1 : 0;
 
   const bits = new Uint8Array(N).fill(1);
-  let ink = 0;
+  let ink = 0, toneSum = 0, toneN = 0;
   for (let y=0; y<h; y++)
     for (let x=0; x<w; x++){
       const k = y*w+x;
@@ -8335,8 +8364,16 @@ function mrcSegment(px, w, h, stride, n, cfg){
         if (c >= cfg.INK_CHROMA) continue;     // coloured ink keeps its colour
       }
       bits[k] = 0; ink++;
+      toneSum += gray[k]; toneN++;
     }
-  return { bits, paper, ink, pict, gx, gy };
+  // v11.72: what colour the stencil should paint. It used to be pure black,
+  // but scanned ink is not pure black — on these reports the core of a stroke
+  // measures around 40-60 — so every letter came back harder than the document
+  // actually is. Painting the page's own measured ink tone keeps the text
+  // crisp without that laser-print harshness. Clamped so a faint scan cannot
+  // wash the text out.
+  const tone = toneN ? Math.max(0, Math.min(70, Math.round(toneSum/toneN))) : 0;
+  return { bits, paper, ink, pict, gx, gy, tone };
 }
 // Build one MRC page into `out`. Returns false if the page could not be done,
 // in which case the caller must fall back rather than ship a broken page.
@@ -8392,7 +8429,10 @@ function mrcAddPage(out, srcPage, cfg){
       ["DecodeParms", D([["K",NI(-1)],["Columns",NI(w)],["Rows",NI(h)],["BlackIs1",NB(false)]])]]));
     const xo = out.newDictionary(); xo.put("Bg", bgObj); xo.put("Mk", mkObj);
     const res = out.newDictionary(); res.put("XObject", xo);
-    const content = "q "+PW+" 0 0 "+PH+" 0 0 cm /Bg Do Q\nq 0 g "+PW+" 0 0 "+PH+" 0 0 cm /Mk Do Q\n";
+    // the stencil is painted in the page's own ink tone, not pure black
+    const gTone = ((seg.tone || 0)/255).toFixed(3);
+    const content = "q "+PW+" 0 0 "+PH+" 0 0 cm /Bg Do Q\n"
+                  + "q "+gTone+" g "+PW+" 0 0 "+PH+" 0 0 cm /Mk Do Q\n";
     out.insertPage(-1, out.addPage([0,0,PW,PH], 0, res, content));
     return true;
   } catch(e){ return false; }
