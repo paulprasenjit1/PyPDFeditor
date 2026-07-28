@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.70">
+<html lang="en" data-build="11.71">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -219,7 +219,10 @@
 <!-- ---------------- document scanner: camera screen ---------------- -->
 <div class="scanui" id="scanCam" role="dialog" aria-modal="true" aria-label="Scan document">
   <div class="scantop">
-    <span class="ttl">Scan document</span>
+    <!-- v11.71: press and hold this title for the camera diagnostic (what the
+         stream reported, and how the preview was fitted). It was on the page
+         counter, which is empty until a page exists — nothing to press. -->
+    <span class="ttl" id="scanTitle">Scan document</span>
     <span class="tools">
       <!-- v11.32: auto capture on/off. Default on; the choice is remembered.
            With it on the shutter fires itself once the page is framed and

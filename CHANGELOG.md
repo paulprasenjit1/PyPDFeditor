@@ -4,6 +4,60 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.71] — 2026-07-28 — The viewfinder fills the viewfinder
+
+### What I got wrong in v11.69
+I read "opens as a small window, then becomes normal" as a *transient* — iOS
+switching capture mode mid-open — and fixed it by hiding the preview until the
+first frame. A screenshot then showed the real problem: the preview is a small
+narrow window in a large black area **permanently**. The fade-in was a fix for
+something that was at most half the story.
+
+### The actual geometry
+The stream is 9:16 — iOS returns the 4K capture rotated to portrait — and the
+viewfinder box is roughly 0.61 wide-to-tall. A contain fit should therefore
+letterbox it slightly at the *sides* and fill the height. On the device it was
+doing neither, which means `height:100%` was resolving against something
+smaller than the box on screen.
+
+I could not determine what, from a screenshot, and guessing again was not worth
+another round. So the preview no longer depends on it: `fitPreviewBox()`
+measures the viewfinder box, computes the fit, and sets explicit pixel
+geometry. Whatever the percentage was resolving against, the result is now the
+same everywhere. It is recomputed on rotation and when the box changes, not set
+once.
+
+### The part that may explain an older report
+The preview is now positioned with **`containFit()` — the same function the
+green document outline is positioned with.** The outline is drawn at
+`containFit(video, canvas)` on a canvas matching the viewfinder box, so if the
+video is drawn to any *other* fit, the outline lands somewhere other than the
+image. That is indistinguishable from "the green box never appears", which was
+reported back in v11.55 and never fully explained. One fit function for both
+now, pinned by `SC144`.
+
+### The diagnostic I shipped was unreachable
+v11.69 put the camera diagnostic on a long-press of the page counter. That
+counter is **empty until a page has been captured** — so on the screen where
+you need it, there was nothing to press. It is now on the "Scan document"
+title, and also reports the viewfinder box, the stream size, and the size the
+preview was actually drawn at.
+
+**Press and hold "Scan document"** to see, for example:
+`gUM 210ms · frame 480ms (frame) · 2160x3840 @480ms · box 398x650 · video
+2160x3840 · drawn 366x650`.
+
+### Tests
+scan-tests 160 → 171. `SC143` runs the real `containFit` from app.js against
+the reported geometry (a 9:16 stream in a 398×650 box) and asserts it fills the
+height at 366×650 with zero vertical offset — a computed result, not a source
+grep. `SC144` pins that the preview and the outline share one fit function.
+
+Seventeen suites green, corpus green.
+
+**Still device-untested** from v11.63 onward — and this one in particular needs
+your eyes, since the cause was never reproduced here.
+
 ## [v11.70] — 2026-07-28 — Four settings become one, because MRC did their job
 
 The scanner's review row is now a single **Look** control (Plain · Whiten ·

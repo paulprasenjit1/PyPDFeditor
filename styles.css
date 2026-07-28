@@ -588,9 +588,16 @@ input[type=file] { display:none; }
 .scanui .scantop .mini { padding:6px 10px; font-size:12px; }
 .scanui .scantop .mini.on { background:var(--accent2); border-color:var(--accent2); }
 .scanview { position:relative; flex:1; overflow:hidden; background:#000; }
-.scanview video, .scanview canvas.cam, .scanview canvas.quad {
+.scanview canvas.cam, .scanview canvas.quad {
           position:absolute; inset:0; width:100%; height:100%; }
-.scanview video { object-fit:contain; }
+/* v11.71: the preview is NOT sized with percentages any more. On the phone the
+   viewfinder rendered as a small window floating in a large black area, which
+   means height:100% was resolving against something smaller than the box on
+   screen. fitPreviewBox() measures the box and sets explicit pixel geometry
+   using the same containFit() the green outline is positioned with, so the two
+   can never disagree. These are the pre-first-frame defaults only. */
+.scanview video { position:absolute; left:0; top:0; width:100%; height:100%;
+          object-fit:contain; }
 /* v11.69: the preview is held back until there is a real frame. iOS starts the
    camera in a lower-resolution mode and switches up to the one we asked for,
    and with object-fit:contain each size change resizes the letterboxed image —

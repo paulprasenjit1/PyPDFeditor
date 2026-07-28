@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.70";
+const APP_BUILD = "11.71";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,7 +97,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "28 Jul 2026";   // v11.70
+const BUILD_DATETIME = "28 Jul 2026";   // v11.71
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
 const WHATS_NEW = "two scanner additions: a Colour / Greyscale / Black & white button (black & white makes a text page a fraction of the size, with sharper letters), and in the page review you can now retake a single page in place or move it earlier or later.";
@@ -5880,6 +5880,47 @@ function openScanPageSheet(i){
 // time, the numbers come off the device.
 let camDiag = null;
 const CAM_FIRST_FRAME_MS = 1200;   // never hide the preview longer than this
+// v11.71: size the preview OURSELVES instead of trusting `width:100%;
+// height:100%` plus object-fit inside a flex column.
+//
+// Reported symptom: the viewfinder is a small window floating in a large black
+// area — permanently, not as a transient. The stream is 9:16 (iOS hands back
+// the 4K capture rotated to portrait) and the viewfinder box is about 0.61, so
+// contain should letterbox it slightly at the sides and fill the height. It
+// does not, which means the percentage height is resolving against something
+// smaller than the box we can see. I could not determine what from a
+// screenshot, so this stops depending on it: measure the box, compute the
+// contain fit, and set explicit pixel geometry. Whatever the percentages were
+// doing, the result is now the same on every device.
+//
+// Styles are set through the CSSOM (el.style.x), never a style attribute, so
+// the strict style-src 'self' CSP still holds.
+function fitPreviewBox(){
+  const view = $("scanView"), v = $("scanVideo");
+  if (!view || !v) return null;
+  const bw = view.clientWidth|0, bh = view.clientHeight|0;
+  const vw = v.videoWidth|0, vh = v.videoHeight|0;
+  if (bw <= 0 || bh <= 0 || vw <= 0 || vh <= 0) return null;
+  // Deliberately the SAME function the green outline is positioned with. The
+  // outline is drawn at containFit(video, canvas) on a canvas that matches the
+  // viewfinder box, so if the video is drawn to any other fit the outline lands
+  // somewhere other than the image — which would look exactly like "the green
+  // box never appears".
+  const f = containFit(vw, vh, bw, bh);
+  const w = Math.round(f.dispW), h = Math.round(f.dispH);
+  v.style.left   = Math.round(f.offX) + "px";
+  v.style.top    = Math.round(f.offY) + "px";
+  v.style.width  = w + "px";
+  v.style.height = h + "px";
+  v.style.right = "auto"; v.style.bottom = "auto";
+  return { bw, bh, vw, vh, w, h };
+}
+// The viewfinder box changes on rotation and when the thumbnail strip appears,
+// so the fit has to be recomputed rather than set once.
+window.addEventListener("resize", ()=>{ fitPreviewBox(); sizeQuadCanvas(); });
+window.addEventListener("orientationchange", ()=>{
+  setTimeout(()=>{ fitPreviewBox(); sizeQuadCanvas(); }, 250);
+});
 function awaitFirstFrame(v){
   let done = false;
   const show = (why)=>{
@@ -5890,6 +5931,8 @@ function awaitFirstFrame(v){
       camDiag.why = why;
       camDiag.sizes.push(v.videoWidth + "x" + v.videoHeight + " @" + camDiag.first + "ms");
     }
+    const fit = fitPreviewBox();
+    if (camDiag && fit) camDiag.fit = fit;
     v.classList.add("ready");
     sizeQuadCanvas();
   };
@@ -5897,6 +5940,8 @@ function awaitFirstFrame(v){
   // is switching capture mode after the first frame.
   const onResize = ()=>{
     if (camDiag) camDiag.sizes.push(v.videoWidth + "x" + v.videoHeight + " @" + (Date.now()-camDiag.t0) + "ms");
+    const f = fitPreviewBox();
+    if (camDiag && f) camDiag.fit = f;
     sizeQuadCanvas();
   };
   v.addEventListener("resize", onResize);
@@ -5973,11 +6018,19 @@ async function startCamera(){
 function camDiagText(){
   if (!camDiag) return "Camera has not been started yet.";
   const s = camDiag.sizes.length ? camDiag.sizes.join(" -> ") : "(no size reported)";
-  return "getUserMedia " + camDiag.gum + "ms · first frame " + (camDiag.first || "-") + "ms"
-       + " (" + (camDiag.why || "-") + ") · sizes: " + s;
+  const f = camDiag.fit
+    ? " · box " + camDiag.fit.bw + "x" + camDiag.fit.bh
+      + " · video " + camDiag.fit.vw + "x" + camDiag.fit.vh
+      + " · drawn " + camDiag.fit.w + "x" + camDiag.fit.h
+    : " · fit not computed";
+  return "gUM " + camDiag.gum + "ms · frame " + (camDiag.first || "-") + "ms"
+       + " (" + (camDiag.why || "-") + ") · " + s + f;
 }
 (function bindCamDiag(){
-  const el = $("scanCount");
+  // v11.71: this was bound to the page counter, which is EMPTY until a page has
+  // been captured — so on the screen where you actually need it there was
+  // nothing to press. The title is always there.
+  const el = $("scanTitle") || $("scanCount");
   if (!el) return;
   let timer = 0;
   const start = ()=>{ clearTimeout(timer); timer = setTimeout(()=> setStatus(camDiagText(), "ok"), 600); };
