@@ -804,16 +804,17 @@ export const AUTO = {
   MAX_ANGLE: 108,    //   a steep angle means an oblique view the warp will smear
   MARGIN:    0.012,  // corners must sit this far inside the frame (fraction of each axis)
   MOTION:    0.012,  // max per-frame corner drift, as a fraction of the frame diagonal
-  MIN_LONG_PX: 2400, // v11.41: the warp's long side must come out at least this
-                     //   many pixels — see below. Raised from 1600: measured on
-                     //   the real pipeline, 1600px is only 137 dpi on an A4
-                     //   page, and even a page filling 85% of a 16:9 4K frame
-                     //   only reaches ~1830px (~156 dpi). In practice the
-                     //   0.75×short-side term below is what binds on today's
-                     //   streams, which is intended — the gate should demand
-                     //   the best the frame can physically give, and this
-                     //   constant is just a ceiling so a future higher-res
-                     //   stream is not asked for more than is useful.
+  // The warp's long side must reach this many pixels before auto capture will
+  // fire — a ceiling on what is worth asking of the frame, not a target.
+  //
+  // v11.55: back to the v11.40 value of 1600. v11.41 raised it to 2400 to
+  // chase dpi, on arithmetic that was correct (1600px is only ~137 dpi on A4)
+  // but on a phone the pair of changes it shipped with — this and a 4:3 camera
+  // request — made auto capture refuse to fire on a normally-framed page while
+  // the new camera mode over-exposed the paper. Both are reverted. The lesson
+  // is recorded rather than the number defended: this constant was tuned
+  // against a simulated frame and never against a lens.
+  MIN_LONG_PX: 1600,
 };
 
 // Largest distance any one corner moved between two quads. Infinity when either

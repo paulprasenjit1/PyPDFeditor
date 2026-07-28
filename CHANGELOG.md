@@ -4,6 +4,66 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.55] — 2026-07-28 — Six fixes from the first real-device use
+
+Twelve releases shipped between v11.42 and v11.54 without once running on a
+phone. The first session on real documents found six faults, two of them
+regressions I introduced. Recorded plainly, because the pattern matters more
+than the individual bugs: **every one of these was invisible to a green test
+suite and obvious within minutes of real use.**
+
+### 1. A grey box appeared around edited text
+On a born-digital invoice the paper sampled at ~244, just under the old
+"treat as white" floor of 245 — so the patch behind the edit was painted
+244-grey on a 255-white page, drawing a visible rectangle around every edited
+word. The floor is now 232, and a sampled colour is used only when it differs
+from white enough to be a real colour (a panel, a coloured cell).
+
+### 2. Straighten pages failed with "a file couldn't be loaded"
+The orientation model runs on tesseract's **legacy** engine, which lives in
+`tesseract-core-simd.wasm` — a file v11.53 never vendored, because only the
+LSTM cores were copied. The browser asked for it and got a 404.
+**My Node test passed for the wrong reason**: Node resolved the installed npm
+package instead of `vendor/ocr`, so it never exercised the shipped bytes. The
+core is now vendored (+7 MB; `vendor/ocr` is 28 MB).
+
+### 3. Find highlighted into the next word on scanned pages
+Searching "money" drew a box reaching into "RECEIPT". The invisible OCR word
+was drawn at the font's *natural* width, which is wider than the ink it stands
+for. Each word is now laid into exactly its own box with a horizontal scale
+(`Tz`), and drawn in **render mode 3** — the way a searchable PDF is supposed
+to be built, rather than an alpha of 0. Measured: a hit is now 32.8pt against
+32.4pt of actual ink (1%), and the layer is still pixel-for-pixel invisible.
+A second fault surfaced while fixing it: the run was being encoded UTF-16 for
+a font that takes single bytes, which extracted as nonsense. Also fixed.
+
+### 4. Editing a scan left a white patch
+On a scan the ring sampled around a word is textured — creases, shadows, JPEG
+noise — so it failed the "uniform" test and fell through to white, leaving a
+white rectangle on pink paper. On a scan the median *is* the paper tone, so
+the uniformity requirement is dropped there and the patch matches the page.
+
+### 5 & 6. Scanning spoilt: over-exposed and boxed in white — REVERTED
+Two v11.41 changes are reverted wholesale to the v11.40 behaviour:
+- **The 4:3 camera request.** The arithmetic was right (a portrait page is
+  bounded by the frame's short side, so 3024 beats 2160) and the result was
+  wrong: on a real iPhone that constraint selects a capture mode whose
+  auto-exposure burnt bright paper to white. Resolution is worth nothing if
+  the paper is over-exposed. Back to the 16:9 4K request.
+- **`MIN_LONG_PX` 2400 → 1600.** With the camera reverted, the higher floor
+  only stopped auto capture firing on a normally-framed page.
+- **Scanned pages default to "As captured" again.** A4 snapping put white bars
+  down both sides of receipts and envelopes and made the page draw smaller.
+  A4 remains one tap away and the choice persists.
+
+Both reverts are now pinned by tests (SC68, SC69, SC69b, SC69c) so they cannot
+be quietly re-applied. The lesson is recorded in `scan-core.js` rather than the
+numbers defended: **these constants were tuned against a simulated frame and
+never against a lens.**
+
+Tests: textedit 59 → 65, ocr 30 → 34, scan 78 → 80. All fifteen suites green,
+corpus 41/41 and 13/13 external.
+
 ## [v11.54] — 2026-07-28 — Editing a scan matches its typeface
 
 v11.50 made scanned words editable but retyped every one in Helvetica, so a

@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.54";
+const APP_BUILD = "11.55";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.54
+const BUILD_DATETIME = "27 Jul 2026";   // v11.55
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "editing a scan now matches its typeface: the word's own ink is compared against each typeface the app has and the closest one is used, so a retyped word on a serif or typewriter document no longer stands out. When the match isn't clear it keeps the plain face rather than guessing.";
+const WHATS_NEW = "six fixes from real use: no grey box around edited text, no white patch when editing a scan, Straighten pages works (a file it needed was missing), Find no longer spills into the next word on scans, and the camera and page-shape changes that spoilt scanning are reverted to the version that worked.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -2283,6 +2283,36 @@ function sampleSpanBg(pageIndex, sp){
   } catch(e){ return null; }
   finally { try{ if(pix) pix.destroy(); }catch(e){} try{ if(page) page.destroy(); }catch(e){} }
 }
+// ---- v11.55: what colour to paint over an erased word ----------------------
+// Two real faults on real documents, both from this one decision:
+//
+//  * On a born-digital invoice the paper sampled a shade under the old
+//    "near white" floor of 245, so the patch was painted in that shade — and
+//    a 244-grey rectangle on a 255-white page is a visible BOX around the
+//    edited words. The floor is now 232: anything that reads as paper is
+//    painted pure white, and a sampled colour is only used when it differs
+//    from white enough to be a real colour (a panel, a coloured cell).
+//  * On a SCAN the ring around a word is textured — creases, shadows, JPEG
+//    noise — so `uniform` came back false and the patch fell through to
+//    white, leaving a white rectangle on pink or grey paper. On a scan the
+//    median IS the paper tone, and matching it matters far more than the
+//    ring being tidy, so the uniformity requirement is dropped there.
+//
+// Pure, so both faults are pinned by tests rather than by eye.
+function editFillColourRGB(bg, isScan){
+  if (!bg) return [1,1,1];
+  const { r, g, b } = bg;
+  if (r >= 232 && g >= 232 && b >= 232) return [1,1,1];   // paper: paint it white
+  if (!bg.uniform && !isScan) return [1,1,1];             // untrustworthy sample
+  // a colour so close to white that a patch would read as a smudge, not a panel
+  if (Math.min(r,g,b) >= 224) return [1,1,1];
+  return [r/255, g/255, b/255];
+}
+function editFillColour(bg){
+  const c = editFillColourRGB(bg, (()=>{ try { return docIsOcr(); } catch(e){ return false; } })());
+  return rgb(c[0], c[1], c[2]);
+}
+
 // ---- v11.30: edit geometry (redaction band, alignment, available width) -----
 // Everything here works off ONE fact about structured-text spans: a span's box
 // is the FONT box of its line (ascender to descender), not the ink. At normal
@@ -2690,9 +2720,7 @@ async function applyBlockEdit(pageIndex, block, newText, opts){
     const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
     const pg  = doc.getPage(pageIndex);
     const H   = pg.getHeight();
-    const nearWhite = bg && bg.r>=245 && bg.g>=245 && bg.b>=245;
-    const fillCol = (bg && bg.uniform && !nearWhite)
-                  ? rgb(bg.r/255, bg.g/255, bg.b/255) : rgb(1,1,1);
+    const fillCol = editFillColour(bg);
     for (const b of bands)
       pg.drawRectangle({ x:b[0], y:H-b[3], width:b[2]-b[0], height:b[3]-b[1], color:fillCol });
 
@@ -2811,9 +2839,7 @@ async function applyTextEdit(pageIndex, sp, newText, opts){
     // v11.30: fill EXACTLY the band that was erased, not the whole span box —
     // painting the full box would cover the descenders of the line above and
     // the ascenders of the line below, which the tighter redaction now spares.
-    const nearWhite = bg && bg.r>=245 && bg.g>=245 && bg.b>=245;
-    const fillCol = (bg && bg.uniform && !nearWhite)
-                  ? rgb(bg.r/255, bg.g/255, bg.b/255) : rgb(1,1,1);
+    const fillCol = editFillColour(bg);
     pg.drawRectangle({ x:band[0], y:H-band[3], width:band[2]-band[0], height:band[3]-band[1], color:fillCol });
     // a text span is a single line; collapse any newlines the user typed so the
     // replacement stays on that line and can't flow downward past where the
@@ -3082,6 +3108,36 @@ function loadScriptOnce(src){
 // invisible twin. Pure, so the maths is testable in Node: bbox is in raster
 // px, scale is raster px per PDF pt, pageH in pt. The word is drawn at the
 // box's baseline (slightly above its bottom edge) at the box's own height.
+// v11.55: draw a run in PDF render mode 3 (invisible) with a horizontal scale,
+// so an OCR word occupies exactly the width of the ink it stands for. Render
+// mode 3 is what a searchable PDF is meant to use; an alpha of 0 relies on the
+// viewer honouring transparency, and it also left the run at its natural width,
+// which is what made Find highlight into the next word.
+function drawInvisibleText(pg, fontKey, text, x, y, size, zoomPct){
+  const O = PDFOperator.of.bind(PDFOperator), N = PDFNumber.of.bind(PDFNumber);
+  const z = Math.max(1, Math.min(1000, zoomPct || 100));
+  // Helvetica here is a SIMPLE font, so its strings are single-byte
+  // (WinAnsi). PDFHexString.fromText would encode UTF-16, which such a font
+  // decodes as nonsense — the layer would exist and extract as garbage. Build
+  // the hex a byte at a time instead.
+  let hex = "";
+  for (let i=0;i<text.length;i++){
+    const c = text.charCodeAt(i) & 0xFF;
+    hex += (c < 16 ? "0" : "") + c.toString(16);
+  }
+  if (!hex) return;
+  pg.pushOperators(
+    O("q",  []),
+    O("BT", []),
+    O("Tr", [N(3)]),                       // invisible: no fill, no stroke
+    O("Tz", [N(+z.toFixed(2))]),           // fit the run to the printed word
+    O("Tf", [fontKey, N(size)]),
+    O("Tm", [N(1), N(0), N(0), N(1), N(x), N(y)]),
+    O("Tj", [PDFHexString.of(hex)]),
+    O("ET", []),
+    O("Q",  [])
+  );
+}
 function ocrWordPlacement(bbox, scale, pageH){
   const hPt = Math.max(2, (bbox.y1 - bbox.y0) / scale);
   return {
@@ -3131,6 +3187,12 @@ async function doOcr(todo){
     });
     const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
     const helv = await doc.embedFont(StandardFonts.Helvetica);
+    // resource name for the raw-operator draws below (one per page, cached)
+    const helvKeyFor = new Map();
+    const keyOf = pg => {
+      if (!helvKeyFor.has(pg)) helvKeyFor.set(pg, pg.node.newFontDictionary(helv.name, helv.ref));
+      return helvKeyFor.get(pg);
+    };
     let words = 0, pagesDone = 0;
     for (let k=0;k<todo.length;k++){
       const i = todo[k];
@@ -3159,8 +3221,18 @@ async function doOcr(todo){
         if (!t || (wd.confidence||0) < 40) continue;   // noise threshold
         const pl = ocrWordPlacement(wd.bbox, scale, pageH);
         try {
-          pg.drawText(sanitizeForFont(t), { x:pl.x, y:pl.y, size:pl.size,
-                                            font:helv, opacity:0 });
+          // v11.55: lay the word into EXACTLY the width the printed word
+          // occupies. Drawing it at its natural width made the invisible run
+          // wider than the ink, so searching "money" highlighted a box that
+          // reached into "RECEIPT" beside it. Horizontal scaling (Tz) fits the
+          // run to its own box, and render mode 3 is the proper way to make
+          // OCR text invisible — it is what a searchable PDF is supposed to
+          // use, and unlike an alpha of 0 it cannot be defeated by a viewer
+          // that ignores transparency.
+          const safe = sanitizeForFont(t);
+          const boxW = Math.max(0.5, (wd.bbox.x1 - wd.bbox.x0) / scale);
+          const natural = helv.widthOfTextAtSize(safe, pl.size) || boxW;
+          drawInvisibleText(pg, keyOf(pg), safe, pl.x, pl.y, pl.size, (boxW/natural)*100);
           words++;
         } catch(e){}
       }
@@ -5074,6 +5146,12 @@ function fitToPaper(imgW, imgH, key){
   // still snap (the user chose Legal), while the nearest common non-paper
   // shapes — a 2:1 till roll (41% off), a square label (41%), an ISO ID card
   // (12% off A4 landscape, but ID has its own mode) — stay well outside it.
+  // v11.55: the tolerance stays at 20%. It was briefly tightened to 10% to
+  // stop an envelope snapping to A4, but that also stopped an A4-shaped
+  // capture snapping when the user had explicitly ASKED for Legal (16.5%
+  // apart), which is worse: an explicit choice must be honoured. The envelope
+  // case is solved properly by the default now being "As captured", so this
+  // gate only ever sees a paper size the user deliberately picked.
   const imgAspect  = imgW / imgH, pageAspect = pageW / pageH;
   const ratio = imgAspect / pageAspect;
   if (Math.max(ratio, 1/ratio) > 1.20){
@@ -5142,7 +5220,13 @@ try { if (localStorage.getItem("scanAuto")==="0") scanAuto=false; } catch(e){}
 // (the pre-v11.33 behaviour) and is deliberately NOT the default: a scan of an
 // A4 sheet should come out A4 so it prints with even margins and merges
 // cleanly with born-digital pages.
-let scanPaper = "a4";
+// v11.55: the DEFAULT is back to "As captured". v11.33 made A4 the default so
+// scans printed with even margins; on a real stack of receipts, envelopes and
+// part-pages that means white bars down both sides of nearly every scan, and
+// the page then draws smaller on screen because the viewer fits the PAGE, not
+// the image. A4 is still one tap away in the crop filter row for anyone who
+// wants it, and the choice persists.
+let scanPaper = "auto";
 try { const p=localStorage.getItem("scanPaper"); if (p && PAPER_SIZES[p]) scanPaper=p; } catch(e){}
 // v11.34 "Both sides": front and back of one card composited onto a single A4
 // page. Declared here with the rest of the scanner state because the toggle is
@@ -5391,19 +5475,16 @@ async function startCamera(){
   // v10.74: request the full sensor resolution the device can give — capture
   // resolution is the single biggest driver of scan sharpness (the warp +
   // filters were never the bottleneck).
-  // v11.41: ask for the 4:3 sensor mode (4032×3024) FIRST, not 16:9 4K. A
-  // document is portrait; on a landscape stream its long side is bounded by
-  // the frame's SHORT side, so the 3024px of a 4:3 mode beats the 2160px of
-  // 16:9 4K by 40% linear — an A4 page that could only ever reach ~180 dpi
-  // from a 2160-tall frame can reach ~250 dpi from a 3024-tall one. iOS
-  // exposes the camera's native 4:3 formats through getUserMedia; `ideal`
-  // constraints never reject, so a device without such a mode simply gets the
-  // closest it has (4K, then on down) — this line cannot lose resolution,
-  // only gain it. ImageCapture.takePhoto() would be better still (12MP), but
-  // Safari on iOS does not ship it (checked caniuse, June 2026 data).
+  // v11.55: REVERTED to the v11.40 request order. v11.41 asked for the 4:3
+  // sensor mode (4032×3024) first on the reasoning that a portrait page is
+  // bounded by the frame's short side, so 3024 beats 2160. The arithmetic was
+  // right and the result was wrong: on a real iPhone that constraint selects a
+  // different capture mode, whose auto-exposure blew out bright paper — scans
+  // came back burnt white. Resolution on paper is worth nothing if the paper
+  // is over-exposed, so the 16:9 4K request that was working is back.
+  // Anything further here must be tested on a phone before it ships.
   // `continuous` focus keeps handheld captures crisp.
   const camTries = [
-    { facingMode:{ideal:"environment"}, width:{ideal:4032}, height:{ideal:3024}, focusMode:"continuous" },
     { facingMode:{ideal:"environment"}, width:{ideal:3840}, height:{ideal:2160}, focusMode:"continuous" },
     { facingMode:{ideal:"environment"}, width:{ideal:2560}, height:{ideal:1440} },
     { facingMode:{ideal:"environment"} }
