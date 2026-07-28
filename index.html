@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.69">
+<html lang="en" data-build="11.70">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -309,23 +309,14 @@
         <button id="idToggle" aria-pressed="false">Photo ID</button>
       </div>
     </div>
-    <div class="fgrp">
-      <span class="flab" id="qualLab">Quality</span>
-      <div class="seg" role="group" aria-labelledby="qualLab">
-        <button id="qStd" class="on">Standard</button>
-        <button id="qSmall">Small file</button>
-      </div>
-    </div>
+    <!-- v11.70: Quality and Colour are gone. MRC stores the text as a 1-bit
+         300dpi stencil over a colour background, which made "Small file"
+         both pointless (37KB vs 38KB) and harmful (it captured at 1400px,
+         below the resolution MRC needs), and made greyscale/B&W a loss of
+         colour for no saving. Scans are always Standard, always colour. -->
     <div class="fvals">
-      <!-- v11.67: how the page is STORED. Cycles Colour → Greyscale → B&W;
-           B&W is what makes a text page a tenth of the size, with sharper
-           letters, because the compress pass then stores it as CCITT G4.
-           v11.69: shows the value it holds, which it never used to. -->
-      <button id="colourBtn" class="vchip" aria-label="Colour mode">
-        <span class="k">Colour</span><span class="v" id="colourVal">Colour</span></button>
-      <!-- v11.33: output paper size. Cycles A4 → Letter → Legal → As captured.
-           Scanned pages are a REAL paper size, letterboxed with white where the
-           captured shape doesn't match, so they print and merge correctly. -->
+      <!-- v11.70: A4 or the captured shape. Letter and Legal moved out — they
+           are still available under Resize pages for documents that need them. -->
       <button id="paperBtn" class="vchip" aria-label="Output paper size">
         <span class="k">Page</span><span class="v" id="paperVal">A4</span></button>
     </div>

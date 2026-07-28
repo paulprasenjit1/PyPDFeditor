@@ -20,14 +20,14 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.69";
+const APP_BUILD = "11.70";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
-    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","idToggle","cropReset","cropRetake","cropUse",
-    "autoBtn","paperBtn","idBothToggle","lookPlain","colourVal","paperVal","camBoot",
-    "whiteBtn","imgPlaceBtn","insImgInput","formBtn","hqBtn","hqIdle","colourBtn",
+    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","enhToggle","idToggle","cropReset","cropRetake","cropUse",
+    "autoBtn","paperBtn","idBothToggle","lookPlain","paperVal","camBoot",
+    "whiteBtn","imgPlaceBtn","insImgInput","formBtn","hqBtn","hqIdle",
     "ge0","ge1","ge2","ge3","he0","he1","he2","he3"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
@@ -97,7 +97,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "28 Jul 2026";   // v11.69
+const BUILD_DATETIME = "28 Jul 2026";   // v11.70
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
 const WHATS_NEW = "two scanner additions: a Colour / Greyscale / Black & white button (black & white makes a text page a fraction of the size, with sharper letters), and in the page review you can now retake a single page in place or move it earlier or later.";
@@ -5513,8 +5513,18 @@ let cropUserAdjusted = false; // v10.76: true once the user moves a corner / the
                               // content near the page edge).
 let cropFit = null;           // image→display fit for the crop screen
 const cropFilter = "colour";  // scanner is colour-only (B&W removed in v10.20)
-let scanQuality = "std";      // "std" | "small" — JPEG quality + output size
-try { if (localStorage.getItem("scanQuality")==="small") scanQuality="small"; } catch(e){}
+// v11.70: "Small file" is gone, and scanQuality is pinned to "std".
+// MRC made it pointless and then harmful. Measured on a 38-line A4 document:
+//
+//   Standard   (maxDim 3200, q0.92)   181 KB scan  ->  MRC  37 KB
+//   Small file (maxDim 1400, q0.62)    71 KB scan  ->  MRC  38 KB
+//
+// Small file was NOT smaller once MRC ran, and it got there by capturing at
+// 1400px — about 120dpi on A4 — which is below the 300dpi MRC renders its text
+// stencil at. So it threw away the resolution MRC needs in exchange for
+// nothing. The constant stays (SCAN_Q, encodeUnderBudget and the HQ path all
+// read it) but there is no longer a way to set it to "small".
+const scanQuality = "std";
 let scanEnhance = true;       // "Whiten": flatten illumination so paper reads white
 try { if (localStorage.getItem("scanEnhance")==="0") scanEnhance=false; } catch(e){}
 let scanIdMode = false;       // v10.79 "Photo ID": light, colour-true card placed on a white A4 page
@@ -5563,17 +5573,28 @@ const HQ_BUDGET  = 1100000;
 // the image. A4 is still one tap away in the crop filter row for anyone who
 // wants it, and the choice persists.
 let scanPaper = "auto";
-// v11.67: colour / grey / bw. See toBlackAndWhite in scan-core for why the
-// threshold is local rather than fixed.
-let scanColour = "colour";
-try { const c=localStorage.getItem("scanColour"); if (c==="grey"||c==="bw") scanColour=c; } catch(e){}
+// v11.70: colour is no longer a choice — scans are always stored in colour.
+// Greyscale and black & white existed to make text pages small, and MRC does
+// that better: it stores the text as a 1-bit 300dpi stencil while KEEPING the
+// colour of everything else, so B&W now costs colour for no saving. toGreyscale
+// and toBlackAndWhite stay in scan-core (still tested, still used by the
+// bilevel compressor) but nothing sets scanColour away from "colour".
+const scanColour = "colour";
+try { localStorage.removeItem("scanColour"); } catch(e){}   // drop any stored B&W
 try { const p=localStorage.getItem("scanPaper"); if (p && PAPER_SIZES[p]) scanPaper=p; } catch(e){}
+// v11.70: Letter and Legal are gone from the scanner's cycle. They stay in
+// PAPER_SIZES because Resize pages still offers them for documents that need
+// them; they were simply never the right answer for a phone scan here.
+if (scanPaper !== "a4" && scanPaper !== "auto") scanPaper = "auto";
 // v11.34 "Both sides": front and back of one card composited onto a single A4
 // page. Declared here with the rest of the scanner state because the toggle is
 // wired up (and refreshed) further down the file, well before the compositing
 // code that uses it — a `let` beside that code would be in its dead zone.
-let idTwoSide = false;
-try { if (localStorage.getItem("scanIdTwoSide")==="1") idTwoSide=true; } catch(e){}
+// v11.70: both sides is now the default. An ID card has two sides worth
+// keeping far more often than not, and the old default meant scanning the back
+// as a separate page and merging it afterwards.
+let idTwoSide = true;
+try { if (localStorage.getItem("scanIdTwoSide")==="0") idTwoSide=false; } catch(e){}
 let idPendingCard = null;     // canvas of side 1, held until side 2 arrives
 // v11.67: index a retake will replace, or -1 for "add to the end"
 let scanRetakeAt = -1;
@@ -6703,20 +6724,12 @@ $("cropReset").onclick = ()=> resetCropQuad();
   poly.addEventListener("pointercancel",end);
 })();
 
-// output size: Standard (sharp) or Small file (lighter PDFs)
-try { if (scanQuality==="small"){ $("qStd").classList.remove("on"); $("qSmall").classList.add("on"); } } catch(e){}
-$("qStd").onclick   = ()=> setScanQuality("std");
-$("qSmall").onclick = ()=> setScanQuality("small");
-function setScanQuality(q){
-  if (scanQuality===q) return;
-  scanQuality=q;
-  try { localStorage.setItem("scanQuality", q); } catch(e){}
-  $("qStd").classList.toggle("on", q==="std");
-  $("qSmall").classList.toggle("on", q==="small");
-}
-// "Whiten": flatten illumination so shadowed/crumpled paper reads as white. An
-// independent on/off toggle (not part of the size choice). Re-renders the crop
-// preview so you can compare before tapping Use page.
+// v11.70: the Quality control is gone (see scanQuality above for the numbers).
+// Any "small" left in storage from an earlier build is cleared, otherwise a
+// phone that had it set would keep capturing at 1400px with no way to change it.
+try { localStorage.removeItem("scanQuality"); } catch(e){}
+// "Whiten": flatten illumination so shadowed/crumpled paper reads as white.
+// Re-renders the crop preview so you can compare before tapping Use page.
 // v11.69: Plain / Whiten / Photo ID are one setting with three values, and the
 // segmented control now says so. They always WERE exclusive — turning Photo ID
 // on quietly switched Whiten off — but as two look-alike toggles the rule was
@@ -6792,9 +6805,11 @@ function setIdTwoSide(on){
 refreshIdTwoSideBtn();
 
 // v11.33: output paper size — cycles through the sizes that actually get used.
+// v11.70: two values, not four. Letter and Legal are still in PAPER_SIZES for
+// Resize pages, but a phone scan is either a real A4 page or the shape it was
+// captured at — the other two were only ever taps to get past.
 $("paperBtn").onclick = ()=>{
-  const order = ["a4","letter","legal","auto"];
-  setScanPaper(order[(order.indexOf(scanPaper)+1) % order.length]);
+  setScanPaper(scanPaper === "a4" ? "auto" : "a4");
 };
 function paperLabel(key){
   const p = PAPER_SIZES[key];
@@ -6821,29 +6836,11 @@ function refreshPaperBtn(){
 }
 refreshPaperBtn();
 
-// v11.67: colour mode cycler, in the same row as the paper size.
+// v11.70: the colour cycler is gone. Greyscale and B&W were there to shrink a
+// text page; MRC now does that while keeping the colour, so the choice only
+// cost fidelity. The labels stay because the compress report still names the
+// mode a stored image is in.
 const COLOUR_LABEL = { colour:"Colour", grey:"Greyscale", bw:"Black & white" };
-$("colourBtn").onclick = ()=>{
-  scanColour = scanColour === "colour" ? "grey" : scanColour === "grey" ? "bw" : "colour";
-  try { localStorage.setItem("scanColour", scanColour); } catch(e){}
-  refreshColourBtn();
-  setStatus(scanColour === "colour"
-    ? "Colour — pages are stored as captured."
-    : scanColour === "grey"
-    ? "Greyscale — colour dropped. Smaller files, and a printed document loses nothing."
-    : "Black & white — two tones, thresholded against the page's own paper. Much smaller, and text comes out sharper than a photograph of it.","ok");
-};
-function refreshColourBtn(){
-  const b = $("colourBtn"); if (!b) return;
-  // v11.69: same as the paper chip — write the value span, keep the "Colour"
-  // label. Before this the button just read "Colour", which looked like an
-  // instruction to make it colour rather than a statement that it already is.
-  const v = $("colourVal");
-  if (v) v.textContent = COLOUR_LABEL[scanColour] || "Colour";
-  else b.textContent = COLOUR_LABEL[scanColour] || "Colour";
-  b.classList.toggle("on", scanColour !== "colour");
-}
-refreshColourBtn();
 
 // v11.32: auto capture toggle.
 $("autoBtn").onclick = ()=> setScanAuto(!scanAuto);
@@ -7177,8 +7174,15 @@ async function pushScanPage(c, w, h){
     bc.getContext("2d",{willReadFrequently:true}).drawImage(c,0,0,bw,bh);
     blank = looksBlank(bc.getContext("2d").getImageData(0,0,bw,bh));
   } catch(e){}
+  // v11.70: remember that this page came from Photo ID mode. MRC would accept
+  // such a page — a card is only about a tenth of an A4 sheet, so the page is
+  // not "mostly picture" — and store the card in the 100dpi background. On a
+  // synthetic card the fine print survived (it is near-neutral, so it goes to
+  // the 300dpi stencil), but a real ID also carries a face photograph and a
+  // hologram, and those are exactly the pictorial parts that would be softened.
+  // Photo ID exists to be colour-true and lightly processed, so it opts out.
   const rec = { bytes:new Uint8Array(await blob.arrayBuffer()), w, h,
-                thumb:tc.toDataURL("image/jpeg",0.7), rot:0, blank };
+                thumb:tc.toDataURL("image/jpeg",0.7), rot:0, blank, id:scanIdMode };
   // v11.67: a retake replaces the page it was started from, keeping its place
   // in the stack; anything else goes on the end.
   if (scanRetakeAt >= 0 && scanRetakeAt < scanPages.length){
@@ -7273,11 +7277,13 @@ async function addScanPageTo(doc, p){
 // dramatically better on a page of text with a few pictures (measured on the
 // user's HQ endoscopy scan: 1983 KB -> 138 KB, against 700 KB for the image
 // pass) but it is not always the winner, so it is a candidate, not a rule.
-async function shrinkScanPdf(bytes){
+async function shrinkScanPdf(bytes, allowMrc){
   let work = null, best = bytes;
   try {
-    const mrc = mrcRebuild(bytes, null);
-    if (mrc && mrc.length < best.length) best = mrc;
+    if (allowMrc !== false){
+      const mrc = mrcRebuild(bytes, null);
+      if (mrc && mrc.length < best.length) best = mrc;
+    }
   } catch(e){ /* keep the image pass */ }
   try {
     work = mupdf.Document.openDocument(bytes.slice(0), "application/pdf").asPDF();
@@ -7300,7 +7306,10 @@ async function createScanPdf(){
   try {
     const doc=await PDFDocument.create();
     for (const p of pages) await addScanPageTo(doc, p);
-    workingBytes = await shrinkScanPdf(new Uint8Array(await doc.save()));
+    // a Photo ID page opts out of MRC (see the rec above) — one ID page in the
+    // batch is enough, since MRC rebuilds the whole document or none of it
+    const anyId = pages.some(p=>p && p.id);
+    workingBytes = await shrinkScanPdf(new Uint8Array(await doc.save()), !anyId);
     // dated default name ("Scan 5 Jul 2026 14.30.pdf") so saved scans are
     // findable in Files instead of a pile of identical "scan.pdf"s
     const d=new Date();

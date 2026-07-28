@@ -4,6 +4,77 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.70] — 2026-07-28 — Four settings become one, because MRC did their job
+
+The scanner's review row is now a single **Look** control (Plain · Whiten ·
+Photo ID) and a **Page** chip. Quality and Colour are gone — not hidden,
+removed — because v11.68's MRC compression made both of them cost quality for
+no saving.
+
+### Quality: measured, then deleted
+The question was whether "Small file" still earns its place. It does not.
+Measured on a 38-line A4 document, straight through the shipped code path:
+
+| capture | scan | after MRC |
+|---|---|---|
+| Standard (maxDim 3200, q0.92) | 181 KB | **37 KB** |
+| Small file (maxDim 1400, q0.62) | 71 KB | **38 KB** |
+
+Small file is not even smaller once MRC has run — and it gets there by
+capturing at 1400px, roughly **120 dpi** on A4, which is *below* the 300 dpi
+MRC renders its text stencil at. It was throwing away the resolution MRC needs
+in exchange for a kilobyte in the wrong direction. `scanQuality` is now a
+constant pinned to `"std"`.
+
+### Colour: removed for the same reason
+Greyscale and black & white existed to make a text page small. MRC does that
+by storing the text as a 1-bit 300 dpi stencil **while keeping the colour of
+everything else**, so choosing B&W now only loses the colour. Scans are always
+colour. `toGreyscale` and `toBlackAndWhite` stay in `scan-core.js` — the
+bilevel compressor still uses them, and they are still tested.
+
+### Page: A4 or as captured
+Letter and Legal left the scanner's cycle. They remain in `PAPER_SIZES` and are
+still offered under Resize pages for documents that need them; on a phone scan
+they were only ever taps to get past.
+
+### Defaults
+- **Whiten** is the default Look (unchanged, now stated).
+- **Photo ID captures both sides by default.** A card has two sides worth
+  keeping far more often than not, and the old default meant scanning the back
+  separately and merging afterwards.
+
+### Photo ID now opts out of MRC
+Found while checking the above, and worth stating plainly because it was nearly
+missed. An ID card is only about a tenth of an A4 sheet, so a Photo ID page is
+**not** "mostly picture" — MRC's existing guard does not fire, and it would
+happily store the card in the 100 dpi background.
+
+On a synthetic card the fine print actually came out *sharper* than the
+original, because it is near-neutral and went into the 300 dpi stencil. But a
+real ID also carries a face photograph and a hologram, and those are exactly
+the pictorial parts that would be softened. Photo ID exists to be colour-true
+and lightly processed, so pages captured in it are tagged, and one such page
+opts the whole document out of MRC. `shrinkScanPdf` gained an `allowMrc`
+parameter that defaults to running it, so no other caller changed.
+
+This is a judgement call made on a synthetic card, not on a real ID. If a Photo
+ID scan looks worse than it should, that safeguard is the first thing to
+revisit.
+
+### Tests
+scan-tests 145 → 160, harness 104 → 108. `T13b` checks the Photo ID tag on the
+real captured record rather than by grepping source — a typo in the property
+name would leave every page silently un-tagged and the opt-out would never
+fire. `SC117`, `SC128`, `CP63` and `T10` were rewritten rather than deleted:
+each pinned a control that no longer exists, so they now pin what replaced it,
+including that a `small` or `bw` setting stored by an older build is cleared
+rather than left stranded with no UI to change it.
+
+Seventeen suites green, corpus green.
+
+**Not yet verified on the phone.** v11.63–v11.70 are all still device-untested.
+
 ## [v11.69] — 2026-07-28 — Opening the camera once, and controls that admit what they are
 
 ### The camera no longer opens twice
