@@ -591,6 +591,19 @@ input[type=file] { display:none; }
 .scanview video, .scanview canvas.cam, .scanview canvas.quad {
           position:absolute; inset:0; width:100%; height:100%; }
 .scanview video { object-fit:contain; }
+/* v11.69: the preview is held back until there is a real frame. iOS starts the
+   camera in a lower-resolution mode and switches up to the one we asked for,
+   and with object-fit:contain each size change resizes the letterboxed image —
+   the "opens small, then becomes normal" flicker. Fading in on the first frame
+   hides the half-started states; JS always adds .ready, on a timeout if
+   nothing else, so the preview can never be left invisible. */
+.scanview video { opacity:0; transition:opacity .18s ease; }
+.scanview video.ready { opacity:1; }
+@media (prefers-reduced-motion: reduce){ .scanview video { transition:none; } }
+/* "Starting camera…" sits underneath the preview and is simply covered by it,
+   so there is no second element to hide at the right moment. */
+.scanview .camboot { position:absolute; inset:0; display:flex; align-items:center;
+          justify-content:center; color:#5b6472; font-size:13px; z-index:0; }
 .scanview canvas.quad { pointer-events:none; }
 /* capture flash: snaps to bright instantly (.go), then fades out */
 .scanflash { position:absolute; inset:0; background:#fff; opacity:0;
@@ -638,9 +651,30 @@ input[type=file] { display:none; }
 .loupe { position:absolute; z-index:5; width:120px; height:120px; border-radius:50%;
          border:2px solid var(--accent); pointer-events:none;
          box-shadow:0 4px 14px rgba(0,0,0,.5); background:#000; }
-.scanfilters { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; padding:10px 16px 0; background:#000; }
-.scanfilters button { background:transparent; border:0.5px solid var(--line); color:#cfd6e4; }
-.scanfilters button.on { background:var(--accent2); border-color:var(--accent2); color:#fff; }
+/* v11.69: the review controls, regrouped so the shape of a control tells you
+   how it behaves. A segmented control = pick one of these. A chip showing a
+   value = this setting currently holds that value, tap to change it. */
+.scanfilters { display:flex; flex-direction:column; gap:8px; padding:10px 16px 0; background:#000; }
+.scanfilters .fgrp { display:flex; align-items:center; gap:10px; }
+.scanfilters .flab { flex:0 0 52px; font-size:11px; color:#7e8896; }
+/* segmented: one recessed track, the chosen segment raised out of it */
+.scanfilters .seg { display:flex; flex:1; background:#16191d; border-radius:9px; padding:3px; gap:2px; }
+.scanfilters .seg button { flex:1; background:transparent; border:0; color:#c9cfd8;
+          font-size:12px; padding:7px 4px; border-radius:7px; min-height:32px; }
+.scanfilters .seg button.on { background:var(--accent2); color:#fff; }
+/* value chips: label on the left, the value it holds on the right */
+.scanfilters .fvals { display:flex; gap:8px; }
+.scanfilters .vchip { flex:1; display:flex; justify-content:space-between; align-items:center;
+          gap:8px; background:transparent; border:0.5px solid var(--line); color:#e6e9ee;
+          font-size:12px; padding:8px 10px; border-radius:9px; min-height:36px; }
+.scanfilters .vchip .k { color:#7e8896; }
+.scanfilters .vchip .v { color:#e6e9ee; }
+.scanfilters .vchip.on { border-color:var(--accent2); }
+.scanfilters .vchip.on .v { color:var(--accent2); }
+.scanfilters .bothbtn { align-self:center; background:transparent;
+          border:0.5px solid var(--line); color:#cfd6e4; }
+.scanfilters .bothbtn.on { background:var(--accent2); border-color:var(--accent2); color:#fff; }
+.scanfilters .bothbtn[hidden] { display:none; }
 
 /* ---------------- More menu: grouped icon grid ---------------- */
 /* Replaces the old flat list of full-width rows with a scannable grid grouped

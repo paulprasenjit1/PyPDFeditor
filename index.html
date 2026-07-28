@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.68">
+<html lang="en" data-build="11.69">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -237,6 +237,9 @@
     </span>
   </div>
   <div class="scanview" id="scanView">
+    <!-- v11.69: shown in the reserved space until the first camera frame covers
+         it, so the opening is one step instead of a resize people can see -->
+    <div class="camboot" id="camBoot" aria-hidden="true">Starting camera…</div>
     <video id="scanVideo" autoplay playsinline muted aria-label="Camera preview"></video>
     <canvas class="quad" id="scanQuad" aria-hidden="true"></canvas>
     <!-- v10.94: brief white flash on capture (iOS-camera-style confirmation) -->
@@ -289,22 +292,46 @@
       <circle id="he2" class="hhit" r="26" role="button" aria-label="Drag the bottom edge"></circle><circle id="he3" class="hhit" r="26" role="button" aria-label="Drag the left edge"></circle>
     </svg>
   </div>
+  <!-- v11.69: this row used to be five identically-styled pills that were in
+       fact four different KINDS of control — a one-of pair (Standard/Small
+       file), two toggles that silently cancelled each other (Whiten/Photo ID),
+       a three-way cycler that showed no value ("Colour"), and a picker. Now the
+       shape carries the rule: a segment means pick one of these, a chip with a
+       value means this setting currently holds that value. -->
   <div class="scanfilters">
-    <button id="qStd" class="on">Standard</button>
-    <button id="qSmall">Small file</button>
-    <button id="enhToggle" class="on" aria-pressed="true">Whiten</button>
-    <button id="idToggle" aria-pressed="false">Photo ID</button>
-    <!-- v11.67: how the page is STORED. Cycles Colour -> Greyscale -> B&W;
-         B&W is what makes a text page a tenth of the size, with sharper
-         letters, because the compress pass then stores it as CCITT G4. -->
-    <button id="colourBtn" aria-label="Colour mode">Colour</button>
+    <div class="fgrp">
+      <span class="flab" id="lookLab">Look</span>
+      <div class="seg" role="group" aria-labelledby="lookLab">
+        <!-- Plain/Whiten/Photo ID are genuinely one-of: Photo ID always turned
+             Whiten off anyway, but nothing on screen said so. -->
+        <button id="lookPlain" aria-pressed="false">Plain</button>
+        <button id="enhToggle" class="on" aria-pressed="true">Whiten</button>
+        <button id="idToggle" aria-pressed="false">Photo ID</button>
+      </div>
+    </div>
+    <div class="fgrp">
+      <span class="flab" id="qualLab">Quality</span>
+      <div class="seg" role="group" aria-labelledby="qualLab">
+        <button id="qStd" class="on">Standard</button>
+        <button id="qSmall">Small file</button>
+      </div>
+    </div>
+    <div class="fvals">
+      <!-- v11.67: how the page is STORED. Cycles Colour → Greyscale → B&W;
+           B&W is what makes a text page a tenth of the size, with sharper
+           letters, because the compress pass then stores it as CCITT G4.
+           v11.69: shows the value it holds, which it never used to. -->
+      <button id="colourBtn" class="vchip" aria-label="Colour mode">
+        <span class="k">Colour</span><span class="v" id="colourVal">Colour</span></button>
+      <!-- v11.33: output paper size. Cycles A4 → Letter → Legal → As captured.
+           Scanned pages are a REAL paper size, letterboxed with white where the
+           captured shape doesn't match, so they print and merge correctly. -->
+      <button id="paperBtn" class="vchip" aria-label="Output paper size">
+        <span class="k">Page</span><span class="v" id="paperVal">A4</span></button>
+    </div>
     <!-- v11.34: both sides of one card on a single A4 page. Only shown while
          Photo ID mode is on, since it means nothing otherwise. -->
-    <button id="idBothToggle" aria-pressed="false" hidden>Both sides</button>
-    <!-- v11.33: output paper size. Cycles A4 → Letter → Legal → As captured.
-         Scanned pages are now a REAL paper size, letterboxed with white where
-         the captured shape doesn't match, so they print and merge correctly. -->
-    <button id="paperBtn" aria-label="Output paper size">Page: A4</button>
+    <button id="idBothToggle" class="bothbtn" aria-pressed="false" hidden>Both sides</button>
   </div>
   <div class="scanctl">
     <button class="ghost" id="cropRetake">Retake</button>

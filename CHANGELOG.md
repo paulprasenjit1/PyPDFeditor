@@ -4,6 +4,78 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.69] — 2026-07-28 — Opening the camera once, and controls that admit what they are
+
+### The camera no longer opens twice
+Reported: the viewfinder appears as a small window, then becomes a normal one.
+
+The preview is `object-fit:contain`, so it is letterboxed to the stream's
+aspect ratio — and iOS starts the camera in a lower-resolution mode before
+switching up to the 3840×2160 we ask for. Every `videoWidth`/`videoHeight`
+change resizes the letterboxed image, which is the resize you can see.
+
+The preview is now held at `opacity:0` until the first real frame arrives
+(`requestVideoFrameCallback`, falling back to `loadeddata`), with "Starting
+camera…" in the reserved space underneath, then fades in over 180 ms. Nothing
+here makes the camera start faster — it stops the half-started states being
+visible, which is the actual complaint.
+
+Two supporting changes:
+
+- The three-rung `getUserMedia` ladder is now two. Every constraint in it is
+  `ideal`, and an ideal constraint *degrades* rather than rejects, so the
+  middle rung could never run — it was startup cost for nothing. The 16:9 4K
+  request is still first, and `SC69` still pins that, since the 4:3 mode
+  over-exposed paper back in v11.41.
+- The reveal is a CSS class, and JS adds it on a 1200 ms timeout regardless of
+  events, so a device quirk cannot leave the scanner permanently black.
+
+**This is a blind fix.** The behaviour only happens on the phone, so rather
+than guess twice, v11.69 also records what the camera actually did — how long
+`getUserMedia` took, when the first frame landed, and every resolution the
+stream reported. **Press and hold the page counter in the scanner** to read it
+back. If the sizes list shows one resolution and no changes, my diagnosis is
+wrong and the numbers will say so.
+
+### The review controls say what they are
+The row under the preview was five identically-styled pills that were in fact
+**four different kinds of control**:
+
+| Looked like | Actually was |
+|---|---|
+| Standard · Small file | a one-of pair |
+| Whiten · Photo ID | two toggles that silently cancelled each other |
+| Colour | a three-way cycler showing no value |
+| Page: A4 | a picker |
+
+Now the shape carries the rule. **Look** (Plain · Whiten · Photo ID) and
+**Quality** (Standard · Small file) are labelled segmented controls, and
+**Colour** and **Page** are chips that show the value they hold.
+
+The substantive fix is Look. Whiten and Photo ID were separate booleans, and
+turning Photo ID on quietly switched Whiten off — correct behaviour, but
+nothing on screen said so, and the pair could be read as "both on", a state
+that never existed. Three segments make the exclusivity visible, and choosing
+Plain now leaves Photo ID *properly* (releasing a held front side) rather than
+just unlighting a button. `setScanEnhance` and `setScanIdMode` keep their
+signatures and storage keys, so nothing downstream changed.
+
+"Colour" also used to read as an instruction — *make it colour* — rather than
+a statement that colour is what it currently is. It now shows `Colour · Black
+& white`.
+
+### Tests
+scan-tests 132 → 145. `harness.mjs` caught the real behaviour change on its
+own: `T9e` tapped Whiten twice and expected it to switch off. That is exactly
+what stopped being true, so the test now asserts the new invariant — exactly
+one of the three lit, Whiten stays on when re-tapped, and Plain clears it.
+`SC69` was rewritten rather than deleted: the ladder changed shape, but what
+it guards (16:9 first, 4:3 never) is pinned again.
+
+Seventeen suites green, corpus green.
+
+**Not yet verified on the phone.** v11.63–v11.69 are all still device-untested.
+
 ## [v11.68] — 2026-07-28 — MRC: the compression the paid scanners use
 
 ### The problem

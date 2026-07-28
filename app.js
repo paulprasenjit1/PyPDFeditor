@@ -20,13 +20,13 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.68";
+const APP_BUILD = "11.69";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","idToggle","cropReset","cropRetake","cropUse",
-    "autoBtn","paperBtn","idBothToggle",
+    "autoBtn","paperBtn","idBothToggle","lookPlain","colourVal","paperVal","camBoot",
     "whiteBtn","imgPlaceBtn","insImgInput","formBtn","hqBtn","hqIdle","colourBtn",
     "ge0","ge1","ge2","ge3","he0","he1","he2","he3"];
   const missing = need.filter(id=>!document.getElementById(id));
@@ -97,7 +97,7 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "28 Jul 2026";   // v11.68
+const BUILD_DATETIME = "28 Jul 2026";   // v11.69
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
 const WHATS_NEW = "two scanner additions: a Colour / Greyscale / Black & white button (black & white makes a text page a fraction of the size, with sharper letters), and in the page review you can now retake a single page in place or move it earlier or later.";
@@ -5852,6 +5852,42 @@ function openScanPageSheet(i){
 }
 
 // ---- camera ----
+// v11.69: what actually happened when the camera opened. Filled in by
+// startCamera/awaitFirstFrame and read back by the hidden diagnostic (long-press
+// the page counter). This exists because the "opens small, then normal" report
+// cannot be reproduced anywhere except on the phone: rather than guess a second
+// time, the numbers come off the device.
+let camDiag = null;
+const CAM_FIRST_FRAME_MS = 1200;   // never hide the preview longer than this
+function awaitFirstFrame(v){
+  let done = false;
+  const show = (why)=>{
+    if (done) return;
+    done = true;
+    if (camDiag){
+      camDiag.first = Date.now() - camDiag.t0;
+      camDiag.why = why;
+      camDiag.sizes.push(v.videoWidth + "x" + v.videoHeight + " @" + camDiag.first + "ms");
+    }
+    v.classList.add("ready");
+    sizeQuadCanvas();
+  };
+  // Track later resolution changes so the diagnostic can show whether iOS really
+  // is switching capture mode after the first frame.
+  const onResize = ()=>{
+    if (camDiag) camDiag.sizes.push(v.videoWidth + "x" + v.videoHeight + " @" + (Date.now()-camDiag.t0) + "ms");
+    sizeQuadCanvas();
+  };
+  v.addEventListener("resize", onResize);
+  if (typeof v.requestVideoFrameCallback === "function"){
+    try { v.requestVideoFrameCallback(()=> show("frame")); }
+    catch(e){ /* fall through to the listeners below */ }
+  }
+  v.addEventListener("loadeddata", ()=> show("loadeddata"), { once:true });
+  // Belt and braces: a preview that never fires either event must still appear,
+  // otherwise a device quirk turns into a permanently black scanner.
+  setTimeout(()=> show("timeout"), CAM_FIRST_FRAME_MS);
+}
 async function startCamera(){
   stopCamera();
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ enterFallback(); return; }
@@ -5867,20 +5903,34 @@ async function startCamera(){
   // is over-exposed, so the 16:9 4K request that was working is back.
   // Anything further here must be tested on a phone before it ships.
   // `continuous` focus keeps handheld captures crisp.
+  // v11.69: ONE request, not a ladder. Every constraint here is `ideal`, and an
+  // ideal constraint degrades rather than rejects — so the first call already
+  // succeeds on essentially every device and the two fallbacks below it were
+  // dead weight paid for at startup. They are kept only for the case where the
+  // first call genuinely throws (a device with no environment-facing camera).
   const camTries = [
     { facingMode:{ideal:"environment"}, width:{ideal:3840}, height:{ideal:2160}, focusMode:"continuous" },
-    { facingMode:{ideal:"environment"}, width:{ideal:2560}, height:{ideal:1440} },
     { facingMode:{ideal:"environment"} }
   ];
   scanStream = null;
+  camDiag = { t0: Date.now(), gum: 0, first: 0, sizes: [] };
   for (const v of camTries){
     try { scanStream = await navigator.mediaDevices.getUserMedia({ audio:false, video:v }); break; }
     catch(e){ /* try the next, less-demanding constraint set */ }
   }
   if (!scanStream){ enterFallback(); return; }
+  camDiag.gum = Date.now() - camDiag.t0;
   const v = $("scanVideo");
+  // Hold the preview back until there is a real frame to show. iOS starts the
+  // camera in a lower-resolution mode and switches up to the requested one, and
+  // because the preview is object-fit:contain, every videoWidth/videoHeight
+  // change resizes the letterboxed image — which is the "opens small, then
+  // becomes normal" the scanner has always done. Nothing here makes the camera
+  // start faster; it stops the half-started states being visible.
+  v.classList.remove("ready");
   v.srcObject = scanStream;
   try { await v.play(); } catch(e){ /* autoplay is allowed: muted+playsinline */ }
+  awaitFirstFrame(v);
   sizeQuadCanvas();
   refreshScanIdle();
   // torch: only offer the button when the camera actually supports it
@@ -5893,6 +5943,31 @@ async function startCamera(){
   } catch(e){ $("torchBtn").hidden = true; }
   startLiveDetect();
 }
+// v11.69 diagnostic: press and hold the page counter in the scanner to read back
+// what the camera actually did on THIS device — how long getUserMedia took, when
+// the first frame arrived, and every resolution the stream reported after that.
+// If the preview really is switching capture mode mid-open, the sizes list shows
+// it; if it is not, the cause is something else and this says so rather than
+// letting me guess a second time.
+function camDiagText(){
+  if (!camDiag) return "Camera has not been started yet.";
+  const s = camDiag.sizes.length ? camDiag.sizes.join(" -> ") : "(no size reported)";
+  return "getUserMedia " + camDiag.gum + "ms · first frame " + (camDiag.first || "-") + "ms"
+       + " (" + (camDiag.why || "-") + ") · sizes: " + s;
+}
+(function bindCamDiag(){
+  const el = $("scanCount");
+  if (!el) return;
+  let timer = 0;
+  const start = ()=>{ clearTimeout(timer); timer = setTimeout(()=> setStatus(camDiagText(), "ok"), 600); };
+  const stop  = ()=>{ clearTimeout(timer); timer = 0; };
+  el.addEventListener("touchstart", start, { passive:true });
+  el.addEventListener("touchend", stop);
+  el.addEventListener("touchcancel", stop);
+  el.addEventListener("mousedown", start);
+  el.addEventListener("mouseup", stop);
+  el.addEventListener("mouseleave", stop);
+})();
 async function toggleTorch(){
   if (!scanStream) return;
   try {
@@ -5907,7 +5982,7 @@ $("torchBtn").onclick = toggleTorch;
 function stopCamera(){
   if (scanLive){ clearInterval(scanLive); scanLive = 0; }
   if (scanStream){ for (const t of scanStream.getTracks()){ try{ t.stop(); }catch(e){} } scanStream = null; }
-  const v = $("scanVideo"); v.srcObject = null;
+  const v = $("scanVideo"); v.srcObject = null; v.classList.remove("ready");
   const q = $("scanQuad");
   if (q.width) q.getContext("2d").clearRect(0,0,q.width,q.height);
   refreshScanIdle();
@@ -5930,6 +6005,10 @@ async function resumeCamera(){
     const v = $("scanVideo");
     if (v.srcObject !== scanStream) v.srcObject = scanStream;
     try { await v.play(); } catch(e){}
+    // the stream is already running at its settled resolution, so there is no
+    // half-started state to hide — show it immediately rather than fading in
+    // again between every page
+    v.classList.add("ready");
     sizeQuadCanvas();
     startLiveDetect();
     return;
@@ -6638,36 +6717,56 @@ function setScanQuality(q){
 // "Whiten": flatten illumination so shadowed/crumpled paper reads as white. An
 // independent on/off toggle (not part of the size choice). Re-renders the crop
 // preview so you can compare before tapping Use page.
-try { $("enhToggle").classList.toggle("on", scanEnhance); $("enhToggle").setAttribute("aria-pressed", String(scanEnhance)); } catch(e){}
-$("enhToggle").onclick = ()=> setScanEnhance(!scanEnhance);
+// v11.69: Plain / Whiten / Photo ID are one setting with three values, and the
+// segmented control now says so. They always WERE exclusive — turning Photo ID
+// on quietly switched Whiten off — but as two look-alike toggles the rule was
+// invisible, so the pair could be read as "both on" when that state never
+// existed. setScanEnhance and setScanIdMode keep their old signatures and
+// storage keys so everything downstream (and the tests) is unaffected.
+function scanLook(){ return scanIdMode ? "id" : scanEnhance ? "whiten" : "plain"; }
+function refreshLookSeg(){
+  const l = scanLook();
+  const set = (id, on)=>{
+    const b = $(id); if (!b) return;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", String(on));
+  };
+  set("lookPlain", l === "plain");
+  set("enhToggle", l === "whiten");
+  set("idToggle",  l === "id");
+}
+$("lookPlain").onclick = ()=>{
+  if (scanIdMode) setScanIdMode(false);      // leaving ID mode also clears a held front side
+  setScanEnhance(false);
+};
+try { refreshLookSeg(); } catch(e){}
+$("enhToggle").onclick = ()=>{
+  if (scanIdMode) setScanIdMode(false);
+  setScanEnhance(true);
+};
 function setScanEnhance(on){
   scanEnhance = !!on;
   try { localStorage.setItem("scanEnhance", scanEnhance ? "1" : "0"); } catch(e){}
-  $("enhToggle").classList.toggle("on", scanEnhance);
-  $("enhToggle").setAttribute("aria-pressed", String(scanEnhance));
+  refreshLookSeg();
   renderCropPreview();
 }
 // "Photo ID": treat the selected region as an ID/photo card — process it light and
 // colour-true (no ink-deepen/whiten) and drop it onto a clean white A4 page, like
 // a flatbed ID scan. Mutually exclusive with Whiten (the document polish).
-try { $("idToggle").classList.toggle("on", scanIdMode); $("idToggle").setAttribute("aria-pressed", String(scanIdMode)); } catch(e){}
-$("idToggle").onclick = ()=> setScanIdMode(!scanIdMode);
+$("idToggle").onclick = ()=> setScanIdMode(true);
 function setScanIdMode(on){
   scanIdMode = !!on;
   try { localStorage.setItem("scanIdMode", scanIdMode ? "1" : "0"); } catch(e){}
-  $("idToggle").classList.toggle("on", scanIdMode);
-  $("idToggle").setAttribute("aria-pressed", String(scanIdMode));
   if (scanIdMode){            // Whiten/document polish would fight the ID look
     scanEnhance = false;
     try { localStorage.setItem("scanEnhance","0"); } catch(e){}
-    $("enhToggle").classList.toggle("on", false);
-    $("enhToggle").setAttribute("aria-pressed","false");
     setStatus(idTwoSide
       ? "Photo ID, both sides: scan the front, then the back — they go on one A4 page."
       : "Photo ID mode: the card will be placed on a white A4 page. Frame just the card.","ok");
   } else {
     clearIdPending(true);     // leaving ID mode abandons any held front side
   }
+  refreshLookSeg();
   refreshIdTwoSideBtn();
   renderCropPreview();
 }
@@ -6712,7 +6811,12 @@ function setScanPaper(key){
 }
 function refreshPaperBtn(){
   const b = $("paperBtn"); if (!b) return;
-  b.textContent = paperLabel(scanPaper);
+  // v11.69: the chip carries a fixed "Page" label and a separate value span, so
+  // only the value is rewritten. Writing textContent here would wipe out both
+  // spans and leave a chip that no longer says what it is.
+  const v = $("paperVal"), p = PAPER_SIZES[scanPaper];
+  if (v) v.textContent = p ? p.label : "As captured";
+  else b.textContent = paperLabel(scanPaper);
   b.classList.toggle("on", scanPaper !== "auto");
 }
 refreshPaperBtn();
@@ -6731,7 +6835,12 @@ $("colourBtn").onclick = ()=>{
 };
 function refreshColourBtn(){
   const b = $("colourBtn"); if (!b) return;
-  b.textContent = COLOUR_LABEL[scanColour] || "Colour";
+  // v11.69: same as the paper chip — write the value span, keep the "Colour"
+  // label. Before this the button just read "Colour", which looked like an
+  // instruction to make it colour rather than a statement that it already is.
+  const v = $("colourVal");
+  if (v) v.textContent = COLOUR_LABEL[scanColour] || "Colour";
+  else b.textContent = COLOUR_LABEL[scanColour] || "Colour";
   b.classList.toggle("on", scanColour !== "colour");
 }
 refreshColourBtn();
