@@ -4,6 +4,39 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.56] — 2026-07-28 — The box was never ours; reverting the wrong fix
+
+The user supplied the actual file. Reproducing on it settles the question that
+v11.55 guessed at:
+
+**The box around the name is printed in the document.** It is the invoice's own
+field border, present in the untouched original. Measured on the supplied file:
+
+| | faint-grey border pixels |
+|---|---|
+| untouched original | 1683 |
+| after a full edit | 1736 (anti-aliasing of the new text) |
+
+Every pixel the edit changes lies inside the text band — bounding box
+(75,87)–(386,126) of the crop — and none on the border. Rendering the page with
+the redaction applied and *nothing else* still shows the border intact.
+Sampling the background around that name returns **pure white with 0.88
+agreement**, so the patch the app paints was white all along. At 300% zoom a
+hairline cell border simply becomes visible.
+
+**So v11.55's fix for this was wrong and is reverted.** Lowering the
+"treat as white" floor from 245 to 232 fixed nothing and risked something real:
+a genuinely light-grey shaded cell (say 235) would have been painted white,
+creating exactly the visible patch the rule exists to prevent. The floor is
+back at 245, and a test now pins that a 235-grey cell keeps its own shade.
+
+The scan half of v11.55 **stays** — it was independently reported and is real:
+on a scan the sampled ring is textured, fails the uniformity test, and used to
+fall through to white, leaving a white rectangle on pink paper.
+
+`corpus/USER-invoice-fieldbox.pdf` is the supplied file, now part of the
+corpus, so this document is checked on every run.
+
 ## [v11.55] — 2026-07-28 — Six fixes from the first real-device use
 
 Twelve releases shipped between v11.42 and v11.54 without once running on a

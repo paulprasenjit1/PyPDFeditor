@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.55";
+const APP_BUILD = "11.56";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.55
+const BUILD_DATETIME = "27 Jul 2026";   // v11.56
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "six fixes from real use: no grey box around edited text, no white patch when editing a scan, Straighten pages works (a file it needed was missing), Find no longer spills into the next word on scans, and the camera and page-shape changes that spoilt scanning are reverted to the version that worked.";
+const WHATS_NEW = "the faint box around an edited name turned out to be printed in the document itself, not added by editing — measured on your own file. The change made for it is reverted, so light-grey shaded cells keep their shade. Everything else from the last update stands.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -2283,29 +2283,30 @@ function sampleSpanBg(pageIndex, sp){
   } catch(e){ return null; }
   finally { try{ if(pix) pix.destroy(); }catch(e){} try{ if(page) page.destroy(); }catch(e){} }
 }
-// ---- v11.55: what colour to paint over an erased word ----------------------
-// Two real faults on real documents, both from this one decision:
+// ---- what colour to paint over an erased word ------------------------------
+// v11.56: the born-digital half of this was reverted. v11.55 lowered the
+// "treat as white" floor from 245 to 232 to explain a box the user saw around
+// an edited name — and that explanation was WRONG. Reproducing it on the
+// user's own file settled it: the box is the invoice's own field border, it is
+// in the untouched original (1683 faint-grey pixels before the edit, 1736
+// after, the difference being anti-aliasing of the new text), and every pixel
+// the edit changes lies inside the text band. Sampling on that file returns
+// pure white with 0.88 agreement, so the patch was always white.
 //
-//  * On a born-digital invoice the paper sampled a shade under the old
-//    "near white" floor of 245, so the patch was painted in that shade — and
-//    a 244-grey rectangle on a 255-white page is a visible BOX around the
-//    edited words. The floor is now 232: anything that reads as paper is
-//    painted pure white, and a sampled colour is only used when it differs
-//    from white enough to be a real colour (a panel, a coloured cell).
-//  * On a SCAN the ring around a word is textured — creases, shadows, JPEG
-//    noise — so `uniform` came back false and the patch fell through to
-//    white, leaving a white rectangle on pink or grey paper. On a scan the
-//    median IS the paper tone, and matching it matters far more than the
-//    ring being tidy, so the uniformity requirement is dropped there.
+// Lowering the floor therefore fixed nothing and risked something real: a
+// genuinely light-grey shaded cell (say 235) would have been painted white,
+// creating exactly the visible patch the floor exists to prevent. Back to 245.
 //
-// Pure, so both faults are pinned by tests rather than by eye.
+// What DOES stay is the scan half, which was independently reported and is
+// real: on a scan the ring around a word is textured — creases, shadows, JPEG
+// noise — so `uniform` comes back false and the patch fell through to white,
+// leaving a white rectangle on pink paper. There the median IS the paper tone,
+// and matching it matters more than the ring being tidy.
 function editFillColourRGB(bg, isScan){
   if (!bg) return [1,1,1];
   const { r, g, b } = bg;
-  if (r >= 232 && g >= 232 && b >= 232) return [1,1,1];   // paper: paint it white
+  if (r >= 245 && g >= 245 && b >= 245) return [1,1,1];   // paper: paint it white
   if (!bg.uniform && !isScan) return [1,1,1];             // untrustworthy sample
-  // a colour so close to white that a patch would read as a smudge, not a panel
-  if (Math.min(r,g,b) >= 224) return [1,1,1];
   return [r/255, g/255, b/255];
 }
 function editFillColour(bg){
