@@ -4,6 +4,25 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.66] — 2026-07-28 — HQ: the empty screen now explains itself
+
+The consequence of v11.65 that I flagged but did not solve. HQ takes each page
+with the iPhone's own camera, so between shots there is nothing to put in the
+preview area — and a full-screen black rectangle with a shutter under it reads
+as a broken camera, not as a mode that works differently.
+
+That space now carries a camera mark, "High quality", and a line saying to tap
+there or the shutter to photograph the next page. **It is a button as well as a
+sign**: tapping the empty area is the first thing anyone tries, so it opens the
+camera rather than doing nothing.
+
+It appears only where it belongs — HQ on, the scan screen up, no live stream,
+and no page waiting on the Adjust screen — and every path that starts or stops
+a camera now refreshes it, so it cannot be left showing over a working preview
+or missing over a dead one.
+
+scan-tests 115 → 120.
+
 ## [v11.65] — 2026-07-28 — HQ: one camera, from wherever you turn it on
 
 The two-camera problem again, and the screenshots showed exactly why my v11.62

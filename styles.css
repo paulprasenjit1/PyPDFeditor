@@ -700,3 +700,21 @@ input[type=file] { display:none; }
 }
 #viewer.formmode .fbox{ display:block; }
 .fbox:focus-visible{ outline:2px solid #4d9fff; outline-offset:1px; }
+
+/* ---- v11.66: the "no preview" screen in HQ mode -------------------------- */
+/* HQ takes each page with the iPhone's own camera, so there is nothing to show
+   in the preview area between shots. Before this it was simply black, which
+   reads as a broken camera rather than as a mode that works differently. */
+.scanview .hqidle{
+  position:absolute; inset:0; z-index:2; border:0; margin:0; padding:24px;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:10px; background:#000; color:#9aa4b2; font:inherit; cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+}
+.scanview .hqidle[hidden]{ display:none; }
+.scanview .hqidle .ic{ width:46px; height:46px; stroke:#5b6472; fill:none;
+  stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+.scanview .hqidle .ttl{ font-size:16px; font-weight:600; color:#e6e9ee; }
+.scanview .hqidle .sub{ font-size:13px; line-height:1.35; max-width:280px;
+  text-align:center; color:#8b95a3; }
+.scanview .hqidle:active{ background:#0a0a0a; }

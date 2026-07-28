@@ -20,14 +20,14 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.65";
+const APP_BUILD = "11.66";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","idToggle","cropReset","cropRetake","cropUse",
     "autoBtn","paperBtn","idBothToggle",
-    "whiteBtn","imgPlaceBtn","insImgInput","formBtn","hqBtn",
+    "whiteBtn","imgPlaceBtn","insImgInput","formBtn","hqBtn","hqIdle",
     "ge0","ge1","ge2","ge3","he0","he1","he2","he3"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.65
+const BUILD_DATETIME = "27 Jul 2026";   // v11.66
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "HQ no longer leaves two cameras open. Turning it on while the scanner is already running now stops the preview and goes straight to the iPhone camera, and asking for Auto turns HQ back off — the preview and the phone camera are alternatives, never both.";
+const WHATS_NEW = "the blank black screen in HQ mode now explains itself — it shows a camera mark and a line telling you to tap there or the shutter for the next page, and tapping the empty area opens the camera.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -5729,7 +5729,7 @@ async function startScan(append){
   // the user met two camera screens for one photo — "confusing", and rightly
   // so. There is only ever one camera in HQ, and it opens straight away: the
   // page is one tap from the Scan button, not two.
-  if (scanHiQ){ $("camInput").click(); return; }
+  if (scanHiQ){ refreshScanIdle(); $("camInput").click(); return; }
   await startCamera();
 }
 function endScan(){
@@ -5842,6 +5842,7 @@ async function startCamera(){
   v.srcObject = scanStream;
   try { await v.play(); } catch(e){ /* autoplay is allowed: muted+playsinline */ }
   sizeQuadCanvas();
+  refreshScanIdle();
   // torch: only offer the button when the camera actually supports it
   torchOn = false;
   try {
@@ -5869,6 +5870,7 @@ function stopCamera(){
   const v = $("scanVideo"); v.srcObject = null;
   const q = $("scanQuad");
   if (q.width) q.getContext("2d").clearRect(0,0,q.width,q.height);
+  refreshScanIdle();
 }
 // Pause WITHOUT releasing the camera: stop the live edge-detect loop but keep
 // the MediaStream (and its permission grant) alive. iOS shows the camera
@@ -6359,6 +6361,7 @@ function enterCrop(frame){
   const found = autoDetectCropQuad();
   $("scanCam").classList.remove("show");
   $("scanCrop").classList.add("show");
+  refreshScanIdle();
   layoutCrop();
   setStatus(found ? "Edges detected — drag the corners to fine-tune." : "Drag the corners onto the document edges.","ok");
 }
@@ -6714,6 +6717,9 @@ refreshAutoBtn();
 // and nothing to fire by itself. Turning HQ on therefore turns Auto off, and
 // says so rather than leaving a toggle that silently does nothing.
 $("hqBtn").onclick = ()=> setScanHiQ(!scanHiQ);
+// v11.66: the empty preview area IS the shutter in HQ — tapping it is the
+// first thing anyone tries, so it opens the camera rather than doing nothing.
+$("hqIdle").onclick = ()=>{ if (scanHiQ && !capFrame) $("camInput").click(); };
 function setScanHiQ(on){
   scanHiQ = !!on;
   try { localStorage.setItem("scanHiQ", scanHiQ ? "1" : "0"); } catch(e){}
@@ -6721,7 +6727,7 @@ function setScanHiQ(on){
     try { localStorage.setItem("scanAuto","0"); } catch(e){}
     disarmAuto(); refreshAutoBtn();
   }
-  refreshHqBtn(); refreshAutoBtn();
+  refreshHqBtn(); refreshAutoBtn(); refreshScanIdle();
   // v11.65: switch camera NOW if the scanner is already open. v11.62 only
   // handled the case where HQ was already on when Scan was tapped — turn it on
   // from inside the scanner and the live preview kept running, so the shutter
@@ -6732,6 +6738,7 @@ function setScanHiQ(on){
   if (inScanner && !onCropScreen){
     if (scanHiQ){
       stopCamera();                  // also clears the green outline
+      refreshScanIdle();
       setStatus("High quality on — the iPhone's camera takes each page.","ok");
       $("camInput").click();         // one tap, one camera
       return;
@@ -6745,6 +6752,16 @@ function setScanHiQ(on){
   setStatus(scanHiQ
     ? "High quality on — the shutter opens the iPhone's camera for a full-resolution photo. Sharper, but no green outline and no hands-free capture."
     : "High quality off — back to the live preview, with the outline and hands-free capture.","ok");
+}
+// v11.66: HQ has no live preview, so the preview area would otherwise be a
+// black rectangle with no explanation — which reads as a broken camera rather
+// than as a mode that works differently. Show a sign there instead, and make
+// it a button: tapping the empty space is what most people try first.
+function refreshScanIdle(){
+  const el = $("hqIdle");
+  if (!el) return;
+  const onScanScreen = $("scanCam").classList.contains("show");
+  el.hidden = !(scanHiQ && onScanScreen && !scanStream && !capFrame);
 }
 function refreshHqBtn(){
   const b = $("hqBtn"); if (!b) return;
@@ -6938,6 +6955,7 @@ async function commitScanPage(frame, q, opts){
     // v11.62: in HQ there is no preview to resume — the next page comes from
     // the iPhone's camera, opened again by the shutter (one tap per page).
     if (!scanFallback && !scanHiQ) await resumeCamera();
+    refreshScanIdle();
   }
   // v11.61: say what the page actually came out at. 300dpi is the mark the
   // paid scanners aim for; below about 200 small print starts to break up, and

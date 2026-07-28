@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.65">
+<html lang="en" data-build="11.66">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -241,6 +241,17 @@
     <canvas class="quad" id="scanQuad" aria-hidden="true"></canvas>
     <!-- v10.94: brief white flash on capture (iOS-camera-style confirmation) -->
     <div class="scanflash" id="scanFlash" aria-hidden="true"></div>
+    <!-- v11.66: in HQ there is no live preview, so without this the whole area
+         is a black rectangle with no explanation. It is a button as well as a
+         sign: tapping the empty space is what most people try first. -->
+    <button class="hqidle" id="hqIdle" hidden>
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 8a2 2 0 0 1 2 -2h2l1.5 -2h5L16 6h2a2 2 0 0 1 2 2v9a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"/>
+        <circle cx="12" cy="12.5" r="3.2"/>
+      </svg>
+      <span class="ttl">High quality</span>
+      <span class="sub">Tap here, or the shutter below, to photograph the next page</span>
+    </button>
   </div>
   <!-- scanned pages so far — tap one to review or delete it -->
   <div class="scanthumbs" id="scanThumbs"></div>
