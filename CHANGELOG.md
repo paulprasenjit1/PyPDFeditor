@@ -4,6 +4,119 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.64] — 2026-07-28 — Blank pages, and files that name themselves
+
+### Blank pages
+Feeding a stack through by hand means scanning the backs of sheets. A page is
+now judged blank as it is taken, and called out at once — catching it there
+costs one tap, catching it after the PDF is built costs a reprint. At Create
+PDF the count is offered as a single choice: leave them out, or keep every
+page.
+
+Blankness is judged against the page's **own paper**, not a fixed grey: the
+paper level is read off the luminance histogram at the 85th percentile, so a
+scan on cream stock, or one the whitening has not fully lifted, is not called
+blank merely for being dark. The bar is deliberately conservative —
+
+| page | ink measured | verdict |
+|---|---|---|
+| clean sheet | 0.00000 | blank |
+| cream stock | 0.00000 | blank |
+| one speck of dust | 0.00002 | blank |
+| **one line of writing** | **0.01689** | **not blank** |
+| full page of text | 0.2679 | not blank |
+
+— because a page with a single handwritten line on it must never be thrown
+away. The offer is also skipped when *every* page looks blank, since that is
+far more likely to be a scanning fault than an empty stack.
+
+### Files that name themselves
+"Scan 28 Jul 2026 13.29.pdf" records when you scanned it and nothing about what
+it is, which is what makes a folder of scans unsearchable. On Save, a document
+whose name still says nothing is offered a name taken from its own first
+heading — chosen the way a reader would: among the lines in the top third,
+prefer the ones set largest, and among those the first that reads like a title
+rather than a reference number or a date.
+
+Run against the two real documents in the corpus, it produces
+**"Tax Invoice_Bill of Supply_Cash Memo.pdf"** and **"Tax Invoice.pdf"**. The
+name is editable before it is used, is offered once per document rather than on
+every save, and a name you typed yourself is never second-guessed. A scan that
+has not been recognised has no text to read, and is left alone.
+
+scan-tests 99 → 109, mixed-tests 12 → 20. All sixteen suites green.
+
+## [v11.63] — 2026-07-28 — Waiting for a good moment, and saying why
+
+Capture resolution set the ceiling (v11.61–62). This is about not wasting it.
+Three faults spoil a scan that geometry cannot see, and all three are now
+measured on the preview frame the detector already holds — so it costs a
+fraction of a frame and needs no second capture.
+
+**Sharpness.** A hand at rest still drifts, and the difference between the
+sharpest and blurriest frame of a "steady" hold is plainly visible in the
+result. When the countdown finishes, the shutter now waits for a frame as good
+as this scene has recently managed, up to 700ms, then takes what there is —
+refusing forever would be worse than a soft scan. Sharpness is judged
+*relative* to the scene, because a page of dense print scores several times
+higher than a mostly-blank one and neither is wrong; the benchmark decays after
+2.5s so moving from a dense page to a sparse one cannot leave an unreachable
+bar behind.
+
+**Glare.** More than 6% of the frame at full brightness is a window or a lamp
+reflected off the paper, not paper itself. Auto capture refuses, because glare
+does not merely look bad — it erases the letters underneath and nothing
+downstream brings them back. This is what spoilt the envelope scans.
+
+**Darkness.** A dim scan can be lifted; a black one cannot. Below a mean of 55
+the shot is refused with a suggestion to add light or use the torch.
+
+Each refusal names itself in plain language through the existing hint
+mechanism, which already waits ~1.8s and speaks at most once every 6s, so this
+cannot become a running commentary on every wobble.
+
+Measured on frames built to contain each fault: a crisp frame scores **51.3
+against 6.8** for the same page out of focus; a glared frame reads 22% blown
+against a 6% bar. scan-tests 89 → 99. All sixteen suites green.
+
+## [v11.62] — 2026-07-28 — HQ: one camera, and a third of the size
+
+Both faults reported from a real HQ scan, and the supplied file measured:
+page 1 (HQ) came out **2633×3598 at 308 dpi — 2.73 MB**; page 2 (normal)
+1901×2669 at 228 dpi, 1.14 MB. The resolution claim held. The rest did not.
+
+### Two camera screens for one photo
+v11.61 opened the live preview and *then* handed over to the iPhone's camera
+when the shutter was tapped, so scanning a page in HQ meant meeting two camera
+screens. In HQ the preview no longer starts at all: the camera opens straight
+from the Scan button, and after each page the shutter opens it again. One tap
+per page, one camera.
+
+### 2.73 MB for a single page
+Two causes, both mine:
+
+- **The HQ byte budget was 3.2 MB.** I set it in v11.61 to "match the extra
+  detail" and it simply let a page balloon. It is now 1.1 MB — the encoder
+  steps quality down only as far as the budget requires, so a sparse page is
+  unaffected and a dense one stops running away.
+- **A freshly built scan was never re-encoded.** The image pass skips an
+  existing JPEG on principle: re-encoding someone else's work costs a
+  generation of quality for nothing. But a scan's JPEG is *ours*, written at
+  q92 — so for that one case the rule is now lifted, and the page is
+  re-encoded at the same **size**. Resolution is not touched.
+
+Measured on the supplied file, end to end: **3.87 MB → 1.70 MB, 56% smaller,
+with 308 dpi and 228 dpi both preserved exactly.** On a generated 300 dpi A4
+page the pass gives 1271 KB → 427 KB with the pixel dimensions identical.
+
+Where the page is genuinely near black-and-white the pass stores it as CCITT
+G4 instead, which is the same route the paid scanners take to small files —
+that is the reachable half of Adobe's trick. The other half is MRC proper
+(text as a bilevel layer over a low-resolution colour background), which is
+not built and would be the next real step if size still matters.
+
+compress-tests 76 → 83, scan-tests 89. All sixteen suites green.
+
 ## [v11.61] — 2026-07-28 — HQ: scanning at the resolution the phone can afford
 
 The scanner's quality ceiling was never the processing — it was that a page is

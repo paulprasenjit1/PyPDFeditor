@@ -5,7 +5,7 @@ import * as mupdf from "./vendor/mupdf/mupdf.js";
 // NOTE: keep this on ONE line. tests/harness.mjs and tests/scenario-tests.mjs
 // evaluate app.js by stripping `^import .*$` line by line, so a wrapped import
 // statement leaves a dangling `... } from "./scan-core.js";` behind.
-import { warpCore, colourBalanceCore, detectQuad, detectQuadRobust, flattenIllumination, documentEnhance, idCardEnhance, autoCaptureReady, quadMaxCornerShift, AUTO } from "./scan-core.js";
+import { warpCore, colourBalanceCore, detectQuad, detectQuadRobust, frameStats, sharpEnough, inkFraction, looksBlank, flattenIllumination, documentEnhance, idCardEnhance, autoCaptureReady, quadMaxCornerShift, AUTO } from "./scan-core.js";
 
 const $ = id => document.getElementById(id);
 // v11.18: belt-and-braces dark keyboard — set color-scheme on the root via the
@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.61";
+const APP_BUILD = "11.64";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.61
+const BUILD_DATETIME = "27 Jul 2026";   // v11.64
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "new HQ button in the scanner: the shutter opens the iPhone camera for a full 12-megapixel photo instead of a frame off the preview, taking an A4 page from about 166-274 dpi up to 233-310. No green outline or hands-free capture in HQ, so Auto stays the fast mode. Every scan now tells you the dpi it reached.";
+const WHATS_NEW = "blank pages are spotted as they are scanned and can be left out of the PDF in one tap, and when you save a file still called “Scan 28 Jul…” the app offers a name taken from the heading printed on the page.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -1096,6 +1096,7 @@ async function openBytes(bytes, name){
   } else { probe.destroy(); }
 
   undoStack = [];
+  nameSuggestShown = false;      // v11.64: one naming offer per document
   workingBytes = bytes;
   if (name) fileName = name;
   docSensitive = wasEncrypted;     // decrypted copies are never persisted
@@ -5543,7 +5544,14 @@ try { if (localStorage.getItem("scanAuto")==="0") scanAuto=false; } catch(e){}
 let scanHiQ = false;
 try { if (localStorage.getItem("scanHiQ")==="1") scanHiQ=true; } catch(e){}
 const HQ_MAX_DIM = 4600;     // warp ceiling in HQ (memory-safe on a phone)
-const HQ_BUDGET  = 3200000;  // JPEG byte budget to match the extra detail
+// v11.62: 1.1MB, not the 3.2MB v11.61 allowed. That budget was set to "match
+// the extra detail" and simply let a page balloon: a real HQ scan came back at
+// 308 dpi and 2.73 MB for ONE page. The encoder steps quality down only as far
+// as the budget requires, so a tighter figure costs nothing on a sparse page
+// and stops a dense one running away. Text at 300 dpi survives q70 easily;
+// what it cannot survive is being stored at 96 dpi, which is the trade the old
+// "Small file" setting made.
+const HQ_BUDGET  = 1100000;
 // v11.33 output paper size for scanned pages. "auto" keeps the captured shape
 // (the pre-v11.33 behaviour) and is deliberately NOT the default: a scan of an
 // A4 sheet should come out A4 so it prints with even margins and merges
@@ -5713,8 +5721,15 @@ async function startScan(append){
   } catch(e){}
   if (!camHint) setStatus(
     scanAppendTo ? "Scanning into “"+scanAppendTo.name+"” — the pages will be added to the end."
+    : scanHiQ    ? "High quality — the camera opens for each page."
     : scanAuto   ? "Hold the camera over a page — it is taken automatically once framed and steady."
                  : "Point the camera at a document and tap the shutter.", "ok");
+  // v11.62: in HQ do NOT open the live preview at all. v11.61 started it and
+  // then handed over to the iPhone's camera when the shutter was tapped, so
+  // the user met two camera screens for one photo — "confusing", and rightly
+  // so. There is only ever one camera in HQ, and it opens straight away: the
+  // page is one tap from the Scan button, not two.
+  if (scanHiQ){ $("camInput").click(); return; }
   await startCamera();
 }
 function endScan(){
@@ -5919,6 +5934,7 @@ function sizeQuadCanvas(){
 let liveQuad=null, livePend=null, liveHits=0, liveMiss=0;
 function resetLiveQuad(){
   liveQuad=null; livePend=null; liveHits=0; liveMiss=0; liveStable=0;
+  resetFrameStats();
   liveMotionPx=Infinity;
   // losing the document IS the "release" auto capture waits for after taking a
   // page, so clear the latch here as well as on a jump (see autoNeedsRelease).
@@ -5981,7 +5997,11 @@ function smoothQuadCore(q){
 // entirely. Tapping the shutter by hand still goes through Adjust, so a
 // deliberate shot can always be reviewed. That split is the whole design: Auto
 // is for working through a stack, the shutter is for the one awkward page.
-const AUTO_HOLD_MS = 900;      // steady-hold before firing (on top of the ~0.9s lock)
+const AUTO_HOLD_MS = 900;
+// v11.63: how long the countdown will keep waiting for a sharp frame before
+// taking the shot regardless. Long enough for a hand to settle, short enough
+// that it never feels stuck.
+const AUTO_SHARP_WAIT_MS = 700;      // steady-hold before firing (on top of the ~0.9s lock)
 let autoArmedAt = 0;           // Date.now() when the hold started; 0 = not armed
 let autoProgress = -1;         // 0..1 ring progress; -1 = draw no ring
 let autoNeedsRelease = false;  // set after a capture: the document must be lost
@@ -6001,6 +6021,10 @@ const AUTO_HINTS = {
   "not-convex":  "The detected shape isn't a page — try moving the phone.",
   "moving":      "Hold still for a moment.",
   "too-far":     "Move closer — fill the screen with the page for a sharper scan.",
+  // v11.63
+  "glare":       "There's a bright reflection on the page — tilt the phone or move away from the light. Glare erases the words underneath.",
+  "dark":        "Too dark to read — more light, or switch the torch on.",
+  "blurry":      "Waiting for a steady moment — rest your elbows, or brace the phone.",
 };
 function autoHint(why){
   // Only after the same reason has held for ~1.8s, and at most once every 6s,
@@ -6044,10 +6068,27 @@ function evalAutoCapture(v){
   const diag = Math.hypot(v.videoWidth, v.videoHeight) || 1;
   const r = autoCaptureReady(liveQuad, v.videoWidth, v.videoHeight, liveMotionPx/diag);
   if (!r.ok){ disarmAuto(); autoHint(r.why); return; }
+  // v11.63: geometry is right — but glare wipes out the letters underneath and
+  // no processing brings them back, and a dark frame is not worth committing
+  // to either. Both refuse rather than take the shot.
+  if (liveBlown > AUTO.MAX_BLOWN){ disarmAuto(); autoHint("glare"); return; }
+  if (liveMean < AUTO.MIN_MEAN){ disarmAuto(); autoHint("dark"); return; }
   autoWhy = ""; autoWhyRun = 0;
   if (!autoArmedAt){ autoArmedAt = Date.now(); startAutoRing(); }
   autoProgress = Math.min(1, (Date.now()-autoArmedAt)/AUTO_HOLD_MS);
   if (autoProgress >= 1){
+    // v11.63: the countdown has finished, but take the shot on a SHARP frame
+    // rather than on this particular millisecond. A hand at rest still drifts,
+    // and the difference between the sharpest and blurriest frame of a steady
+    // hold is plainly visible in the result. Wait up to AUTO_SHARP_WAIT_MS for
+    // a frame as good as this scene has recently managed; past that, take what
+    // there is, because refusing forever would be worse than a soft scan.
+    const waited = Date.now() - (autoArmedAt + AUTO_HOLD_MS);
+    if (!sharpEnough(liveSharp, liveSharpBest, AUTO.SHARP_RATIO)
+        && waited < AUTO_SHARP_WAIT_MS){
+      autoHint("blurry");
+      return;                              // stay armed; the ring stays full
+    }
     disarmAuto();
     autoNeedsRelease = true;               // do not re-fire on the same page
     autoFire();
@@ -6147,9 +6188,28 @@ function detectOnVideoFrame(v){
   const sw=Math.max(2,Math.round(vw*s)), sh=Math.max(2,Math.round(vh*s));
   const ctx = scratch(sw,sh).getContext("2d",{willReadFrequently:true});
   ctx.drawImage(v,0,0,sw,sh);
-  const q = detectQuadRobust(ctx.getImageData(0,0,sw,sh));
+  const im = ctx.getImageData(0,0,sw,sh);
+  // v11.63: the frame is already in hand and already downscaled, so measuring
+  // its quality here costs almost nothing and saves grabbing it twice.
+  try { noteFrameStats(frameStats(im)); } catch(e){}
+  const q = detectQuadRobust(im);
   return q ? q.map(p=>({x:p.x/s, y:p.y/s})) : null;   // → video px
 }
+// v11.63: a short rolling memory of how sharp this scene can get. Sharpness is
+// only meaningful against itself — a page of dense print scores several times
+// higher than a mostly-blank one — so the bar is "as good as this scene has
+// recently managed", not a fixed number.
+let liveSharp = 0, liveBlown = 0, liveMean = 255, liveSharpBest = 0, liveSharpAt = 0;
+function noteFrameStats(st){
+  if (!st) return;
+  liveSharp = st.sharp; liveBlown = st.blown; liveMean = st.meanL;
+  const now = Date.now();
+  // let the benchmark decay, or moving from a dense page to a sparse one would
+  // leave an unreachable bar behind and auto capture would never fire again
+  if (now - liveSharpAt > 2500) liveSharpBest = st.sharp;
+  if (st.sharp > liveSharpBest){ liveSharpBest = st.sharp; liveSharpAt = now; }
+}
+function resetFrameStats(){ liveSharp = 0; liveBlown = 0; liveMean = 255; liveSharpBest = 0; liveSharpAt = 0; }
 // Draw the detected document outline on the live preview, plus (v11.32) the
 // auto-capture countdown ring at the centre of the document once the hold has
 // started. Capture is manual OR automatic depending on the Auto toggle.
@@ -6840,16 +6900,25 @@ async function commitScanPage(frame, q, opts){
   if (returnToCamera){
     $("scanCrop").classList.remove("show");
     $("scanCam").classList.add("show");
-    if (!scanFallback) await resumeCamera();
+    // v11.62: in HQ there is no preview to resume — the next page comes from
+    // the iPhone's camera, opened again by the shutter (one tap per page).
+    if (!scanFallback && !scanHiQ) await resumeCamera();
   }
   // v11.61: say what the page actually came out at. 300dpi is the mark the
   // paid scanners aim for; below about 200 small print starts to break up, and
   // that is worth knowing BEFORE the paper goes back in the drawer.
   const dpi = scanPageDpi(out.width, out.height);
   const dpiNote = dpi ? " at " + dpi + " dpi" + (dpi < 200 ? " — a bit soft; fill the screen with the page, or turn HQ on" : "") : "";
-  setStatus("Page "+scanPages.length+" added"+dpiNote+" — "
-    + (scanAuto && !returnToCamera ? "hold the camera over the next one."
-                                   : "scan the next page or tap Create PDF."), "ok");
+  // v11.64: say so at once when a page comes out blank. Catching it here costs
+  // one tap to remove; catching it after the PDF is made costs a reprint.
+  const last = scanPages[scanPages.length-1];
+  if (last && last.blank){
+    setStatus("Page "+scanPages.length+" looks blank — tap it in the strip below to remove it, or carry on if that is the back of a sheet.","warn");
+  } else {
+    setStatus("Page "+scanPages.length+" added"+dpiNote+" — "
+      + (scanAuto && !returnToCamera ? "hold the camera over the next one."
+                                     : "scan the next page or tap Create PDF."), "ok");
+  }
 }
 // The resolution a finished page actually reached, as dots per inch across its
 // long side once it is laid out on paper. v11.61 shows this after every scan:
@@ -6874,8 +6943,17 @@ async function pushScanPage(c, w, h){
   const tc=document.createElement("canvas");
   tc.height=112; tc.width=Math.max(8,Math.round(w*112/h));
   tc.getContext("2d").drawImage(c,0,0,tc.width,tc.height);
+  // v11.64: judge blankness from the finished page, on a small copy — a full
+  // 4600px page would cost more to inspect than it did to make.
+  let blank = false;
+  try {
+    const bw = 160, bh = Math.max(8, Math.round(h*160/w));
+    const bc = document.createElement("canvas"); bc.width=bw; bc.height=bh;
+    bc.getContext("2d",{willReadFrequently:true}).drawImage(c,0,0,bw,bh);
+    blank = looksBlank(bc.getContext("2d").getImageData(0,0,bw,bh));
+  } catch(e){}
   scanPages.push({ bytes:new Uint8Array(await blob.arrayBuffer()), w, h,
-                   thumb:tc.toDataURL("image/jpeg",0.7), rot:0 });
+                   thumb:tc.toDataURL("image/jpeg",0.7), rot:0, blank });
 }
 
 $("cropUse").onclick = async ()=>{
@@ -6900,6 +6978,33 @@ $("cropUse").onclick = async ()=>{
 // when the session was started with "Scan more pages", append to what's open.
 $("scanDone").onclick = ()=>{
   if (!scanPages.length) return;
+  // v11.64: a stack fed through by hand often carries blank backs. Offer to
+  // leave them out ONCE, here, rather than letting them into the document and
+  // making the user delete them page by page afterwards.
+  const blanks = scanPages.filter(p=>p.blank).length;
+  if (blanks && blanks < scanPages.length){
+    $("sheet").innerHTML = h`
+      <h3>${blanks} page${blanks>1?"s look":" looks"} blank</h3>
+      <p class="hint">Of the ${scanPages.length} pages scanned, ${blanks} ${blanks>1?"have":"has"} nothing on ${blanks>1?"them":"it"} — usually the back of a sheet. They can be left out of the PDF.</p>
+      <div class="row"><button class="full" id="sbDrop">Leave ${blanks===1?"it":"them"} out</button></div>
+      <div class="row"><button class="full" id="sbKeep">Keep every page</button></div>
+      <div class="row"><button class="ghost full" id="sbCancel">Cancel</button></div>`;
+    $("sbDrop").onclick = ()=>{
+      closeSheet();
+      scanPages = scanPages.filter(p=>!p.blank);
+      updateScanCount();
+      if (scanAppendTo){ appendScanToDoc(); return; }
+      confirmDiscard("create the scanned PDF", createScanPdf);
+    };
+    $("sbKeep").onclick = ()=>{
+      closeSheet();
+      if (scanAppendTo){ appendScanToDoc(); return; }
+      confirmDiscard("create the scanned PDF", createScanPdf);
+    };
+    $("sbCancel").onclick = closeSheet;
+    openSheet();
+    return;
+  }
   if (scanAppendTo){ appendScanToDoc(); return; }   // v11.35: nothing to discard
   confirmDiscard("create the scanned PDF", createScanPdf);
 };
@@ -6921,6 +7026,26 @@ async function addScanPageTo(doc, p){
   if (r) pg.setRotation(degrees(r));
   return pg;
 }
+// v11.62: put a freshly built scan through the image pass before it is opened.
+// A 308dpi HQ page came out at 2.73 MB because it was stored as a full-colour
+// JPEG at the quality the camera gave. This keeps the resolution and re-encodes
+// — and where the page is near black-and-white, stores it as CCITT G4 instead,
+// which is the same route the paid scanners take to small files.
+//
+// Never allowed to make things worse: if the pass fails, or the result is not
+// actually smaller, the original bytes are returned untouched.
+async function shrinkScanPdf(bytes){
+  let work = null;
+  try {
+    work = mupdf.Document.openDocument(bytes.slice(0), "application/pdf").asPDF();
+    if (!work) return bytes;
+    const rep = await recompressImages(work, "scan", null);
+    if (!rep || !rep.changed) return bytes;
+    const out = u8(work.saveToBuffer("compress,compress-fonts,garbage").asUint8Array());
+    return (out.length && out.length < bytes.length) ? out : bytes;
+  } catch(e){ return bytes; }
+  finally { try{ if(work) work.destroy(); }catch(e){} }
+}
 async function createScanPdf(){
   if (!scanPages.length) return;
   const pages=scanPages.slice();
@@ -6929,7 +7054,7 @@ async function createScanPdf(){
   try {
     const doc=await PDFDocument.create();
     for (const p of pages) await addScanPageTo(doc, p);
-    workingBytes=new Uint8Array(await doc.save());
+    workingBytes = await shrinkScanPdf(new Uint8Array(await doc.save()));
     // dated default name ("Scan 5 Jul 2026 14.30.pdf") so saved scans are
     // findable in Files instead of a pile of identical "scan.pdf"s
     const d=new Date();
@@ -7094,7 +7219,87 @@ function openSaveSheet(after){
   openSheet();
   setTimeout(()=>{ try{ $("svName").select(); }catch(e){} }, 100);
 }
-$("saveBtn").onclick = ()=> openSaveSheet();
+// ---- v11.64: name the file from what is written on it ----------------------
+// "Scan 28 Jul 2026 13.29.pdf" tells you when you scanned it and nothing about
+// what it is, which is why a folder of scans is unsearchable. The document
+// usually names itself in its first few lines — an invoice says so, a report
+// carries its title — so offer that instead.
+//
+// The heading is chosen the way a reader would: among the lines near the top,
+// prefer the ones set LARGEST, and among those the first that reads like a
+// title rather than a reference number or a date.
+function looksLikeTitleLine(t){
+  const s = String(t||"").trim();
+  if (s.length < 4 || s.length > 70) return false;
+  if (!/[A-Za-z]/.test(s)) return false;                  // pure numerals
+  if (/^\d[\d\s\/.\-:]*$/.test(s)) return false;          // a date or a number
+  if (/^(page|copy|original)\b/i.test(s)) return false;   // furniture
+  const letters = (s.match(/[A-Za-z]/g)||[]).length;
+  return letters >= s.length*0.45;                        // mostly words
+}
+function suggestNameFromText(){
+  try {
+    if (!MDOC || !MDOC.countPages()) return null;
+    const page = MDOC.loadPage(0);
+    const [x0,y0,x1,y1] = page.getBounds();
+    const st = page.toStructuredText("preserve-spans");
+    const lines = [];
+    let cur = null;
+    st.walk({
+      beginLine(){ cur = { text:"", size:0, y:0 }; lines.push(cur); },
+      onChar(c, origin, font, size){ if (!cur) return;
+        cur.text += c;
+        if (!cur.size){ cur.size = size||0; cur.y = origin ? origin[1] : 0; } },
+    });
+    st.destroy(); page.destroy();
+    // only the top third of the page: a title lives there, a footer does not
+    const cutY = y0 + (y1-y0)*0.34;
+    const cands = lines
+      .map(l=>({ t:l.text.replace(/\s+/g," ").trim(), size:l.size, y:l.y }))
+      .filter(l=> l.y > 0 && l.y <= cutY && looksLikeTitleLine(l.t));
+    if (!cands.length) return null;
+    const biggest = Math.max(...cands.map(l=>l.size));
+    const pick = cands.find(l=> l.size >= biggest*0.92) || cands[0];
+    const name = safeFileName(pick.t).replace(/\.pdf$/i,"").slice(0, 60).trim();
+    return name ? name + ".pdf" : null;
+  } catch(e){ return null; }
+}
+// Does the current name carry no information? Only those get replaced without
+// asking twice — a name the user typed is never second-guessed.
+function nameIsAutomatic(n){
+  return /^scan \d/i.test(n||"") || /^document\.pdf$/i.test(n||"")
+      || /^(photos|images)\b/i.test(n||"");
+}
+$("saveBtn").onclick = ()=>{
+  // v11.64: offer a name taken from the document itself, once, before the save
+  // sheet. Only when the current name says nothing and the document has text
+  // to read — a scan that has not been recognised has none, and is left alone.
+  if (workingBytes && MDOC && nameIsAutomatic(fileName) && !nameSuggestShown){
+    const s = suggestNameFromText();
+    if (s && s.toLowerCase() !== String(fileName||"").toLowerCase()){
+      nameSuggestShown = true;
+      $("sheet").innerHTML = h`
+        <h3>Name this file?</h3>
+        <p class="hint">It is called “${fileName}”, which says when it was made but not what it is. The first heading on the page reads:</p>
+        <div class="row"><input type="text" id="anIn" value="${s.replace(/\.pdf$/i,"")}"></div>
+        <div class="row"><button class="full" id="anUse">Use this name</button></div>
+        <div class="row"><button class="ghost full" id="anSkip">Keep “${fileName}”</button></div>`;
+      $("anUse").onclick = ()=>{
+        const v = safeFileName(String($("anIn").value||"").trim());
+        closeSheet();
+        if (v) fileName = v.replace(/\.pdf$/i,"") + ".pdf";
+        setMeta(fileName, fmtKB(workingBytes.length));
+        openSaveSheet();
+      };
+      $("anSkip").onclick = ()=>{ closeSheet(); openSaveSheet(); };
+      openSheet();
+      setTimeout(()=>{ try{ $("anIn").focus(); }catch(e){} }, 100);
+      return;
+    }
+  }
+  openSaveSheet();
+};
+let nameSuggestShown = false;   // asked once per document, not once per save
 
 // ---------------- compress ----------------
 // v11.36 changed what "compress" means here.
@@ -7126,6 +7331,14 @@ const IMG_LEVELS = {
   high:   { dpi:200, q:82 },
   medium: { dpi:150, q:72 },
   low:    { dpi:110, q:56 },
+  // v11.62: the level a freshly built scan is put through. It deliberately
+  // keeps the RESOLUTION (300dpi, so nothing is thrown away) and spends the
+  // saving on encoding instead. This is the half of Adobe's trick that is
+  // reachable here: their scans are small because text is stored as a bilevel
+  // layer, and this pass takes that route automatically whenever the page is
+  // near black-and-white — the CCITT G4 encoder written for Compress does the
+  // work, and a whitened document page usually qualifies.
+  scan:   { dpi:300, q:68 },
 };
 // Re-encoding a JPEG is lossy, so doing it for a 3% gain spends real image
 // quality on nothing. An object has to give back a tenth of itself to be worth
@@ -7530,7 +7743,14 @@ async function recompressImages(pdf, level, onProgress){
       // nothing to gain and a generation of quality to lose, so leave it. If it
       // is stored uncompressed or Flate, re-encoding at FULL size is still a
       // large, one-generation win.
-      if (!t && filtName === "DCTDecode") continue;
+      //
+      // v11.62 exception, for a scan the app has just built: there the JPEG is
+      // OURS and was written at q92 to a generous budget, so re-encoding at the
+      // same SIZE is a real saving rather than a pointless generation — a 308dpi
+      // page came out at 2.73 MB. The 10% floor below still applies, so an image
+      // that would barely shrink is left alone anyway.
+      const recode = (level === "scan");
+      if (!t && filtName === "DCTDecode" && !recode) continue;
       const tw = t ? t.w : pxW, th = t ? t.h : pxH;
 
       pm = im.toPixmap();

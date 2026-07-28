@@ -828,6 +828,88 @@ export function detectQuadRobust(im){
   try { return detectQuad(localContrastImage(im)); } catch(e){ return null; }
 }
 
+// ---- v11.63: how good is this frame, apart from where the page is? --------
+// Three things spoil a scan that geometry cannot see, and all three are cheap
+// to measure on the preview frame the detector already has in hand:
+//
+//   sharp  mean absolute gradient. A blurred frame has soft edges, so the
+//          number collapses. It is only meaningful RELATIVE to the same scene,
+//          which is why it is compared against the best seen recently rather
+//          than against a fixed figure — a page of dense print scores far
+//          higher than a mostly-blank one, and neither is wrong.
+//   blown  fraction of pixels at the top of the range. Glare from a window or
+//          a ceiling light does not just look bad, it destroys the letters
+//          underneath, and no amount of processing brings them back.
+//   meanL  overall brightness, for the opposite failure.
+//
+// Pure, and measured on a downscaled copy, so it costs a fraction of a frame.
+export function frameStats(im){
+  const w = im.width, h = im.height, d = im.data;
+  if (!(w > 2) || !(h > 2)) return { sharp:0, blown:0, meanL:0 };
+  let sum = 0, blown = 0, grad = 0, n = 0;
+  for (let y=1; y<h; y++){
+    for (let x=1; x<w; x++){
+      const i = (y*w+x)*4;
+      const L = (d[i]*77 + d[i+1]*151 + d[i+2]*28) >> 8;
+      sum += L;
+      if (L >= 250) blown++;
+      const Lx = (d[i-4]*77 + d[i-3]*151 + d[i-2]*28) >> 8;
+      const Ly = (d[i-w*4]*77 + d[i-w*4+1]*151 + d[i-w*4+2]*28) >> 8;
+      grad += Math.abs(L-Lx) + Math.abs(L-Ly);
+      n++;
+    }
+  }
+  if (!n) return { sharp:0, blown:0, meanL:0 };
+  return { sharp: grad/n, blown: blown/n, meanL: sum/n };
+}
+// Is this frame worth committing to, given the best sharpness seen recently?
+// A frame within `ratio` of the best is treated as sharp enough — demanding
+// the actual peak would mean waiting for a moment that may not come again.
+export function sharpEnough(sharp, best, ratio){
+  if (!(best > 0)) return true;             // nothing to compare against yet
+  return sharp >= best * (ratio == null ? 0.82 : ratio);
+}
+
+// ---- v11.64: is this page blank? ------------------------------------------
+// A blank page is one where almost nothing is darker than the paper it is
+// printed on. That has to be judged against the page's OWN paper, not a fixed
+// grey: a scan on cream stock, or one the whitening has not fully lifted, is
+// not blank just because its background sits at 230 rather than 255.
+//
+// The paper level is taken as a high percentile of the luminance histogram —
+// the tone most of the page is — and anything meaningfully darker than that
+// counts as ink. Deliberately conservative: a page with a single line of
+// handwriting on it must NOT be called blank, so the bar is set at a fraction
+// of a percent of the page, which a stray speck cannot reach but one short
+// sentence comfortably does.
+export function inkFraction(im){
+  const w = im.width, h = im.height, d = im.data, n = w*h;
+  if (!(n > 16)) return 0;
+  const hist = new Int32Array(256);
+  const step = n > 400000 ? 4 : 1;          // sample big frames, count small ones
+  let counted = 0;
+  for (let i=0; i<n; i+=step){
+    const j = i*4;
+    hist[(d[j]*77 + d[j+1]*151 + d[j+2]*28) >> 8]++;
+    counted++;
+  }
+  if (!counted) return 0;
+  // paper = the 85th percentile tone
+  let acc = 0, paper = 255;
+  for (let v=0; v<256; v++){
+    acc += hist[v];
+    if (acc >= counted*0.85){ paper = v; break; }
+  }
+  // ink = anything a clear step below the paper, with a floor so a very dark
+  // scan cannot declare its own shadows to be "paper" and its text invisible
+  const cut = Math.max(40, paper - 45);
+  let ink = 0;
+  for (let v=0; v<cut; v++) ink += hist[v];
+  return ink/counted;
+}
+export const BLANK_INK_MAX = 0.0025;   // below a quarter of one percent: blank
+export function looksBlank(im){ return inkFraction(im) < BLANK_INK_MAX; }
+
 // ---- v11.32: auto-capture readiness ---------------------------------------
 // Pure decision helpers for the live preview: may the shutter fire by itself?
 //
@@ -861,6 +943,14 @@ export const AUTO = {
   // is recorded rather than the number defended: this constant was tuned
   // against a simulated frame and never against a lens.
   MIN_LONG_PX: 1600,
+  // v11.63: quality gates. Glare is the one that cannot be undone later, so it
+  // is the strictest — 6% of the frame at full brightness is a window or a
+  // lamp reflected off the paper, not white paper itself (paper sits well
+  // below 250 once the exposure is sane). MIN_MEAN is deliberately low: a dim
+  // scan can be lifted, a black one cannot.
+  MAX_BLOWN: 0.06,
+  MIN_MEAN:  55,
+  SHARP_RATIO: 0.82,
 };
 
 // Largest distance any one corner moved between two quads. Infinity when either
