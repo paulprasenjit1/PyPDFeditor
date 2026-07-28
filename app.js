@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.49";
+const APP_BUILD = "11.54";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.49
+const BUILD_DATETIME = "27 Jul 2026";   // v11.54
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "Clear recents now keeps your starred documents — a star means keep. To take a starred one off the list, long-press its card and choose Remove from Recents (or unstar it first).";
+const WHATS_NEW = "editing a scan now matches its typeface: the word's own ink is compared against each typeface the app has and the closest one is used, so a retyped word on a serif or typewriter document no longer stands out. When the match isn't clear it keeps the plain face rather than guessing.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -1432,7 +1432,11 @@ async function renderStage(stage, i){
     // glyph edges). On scanned/image-only documents PNG is 3–5× larger and
     // slower to encode/decode than JPEG q94 with no visible gain, so those
     // take the JPEG path. Text presence is sampled once per document version.
-    const usePng = !bigDoc && rasterMax <= 2800 && docHasText();
+    // v11.50: ...and NOT when the only text is our own OCR layer. Those pages
+    // are photographs with invisible words over them: PNG would triple the
+    // size and the encode time for a bitmap that has no crisp glyph edges to
+    // preserve.
+    const usePng = !bigDoc && rasterMax <= 2800 && docHasText() && !docIsOcr();
     const bin = usePng ? u8(pix.asPNG()) : u8(pix.asJPEG(94));
     pix.destroy(); page.destroy();
     const url = URL.createObjectURL(new Blob([bin], {type: usePng ? "image/png" : "image/jpeg"}));
@@ -2597,6 +2601,10 @@ function pickFontKeyed(name, key){
   if (key === "sans")  return StandardFonts.Helvetica;
   if (key === "serif") return StandardFonts.TimesRoman;
   if (key === "mono")  return StandardFonts.Courier;
+  // v11.54: the bold variants exist only as results of the scanned-face match,
+  // so they are resolved here rather than offered in the typeface picker.
+  if (key === "sansb")  return StandardFonts.HelveticaBold;
+  if (key === "serifb") return StandardFonts.TimesRomanBold;
   return pickFont(name);
 }
 // ---- v11.37: edit a whole paragraph, re-wrapping it -----------------------
@@ -2759,7 +2767,19 @@ async function applyTextEdit(pageIndex, sp, newText, opts){
     // redaction the cache is stale, so both have to be read now)
     // v11.37: an explicit typeface choice means the document's own embedded
     // font is deliberately NOT reused — that is the whole point of the choice.
-    const fres = (opts.font && opts.font !== "keep") ? null : capturePdfFont(pageIndex, sp.font);
+    let fres = (opts.font && opts.font !== "keep") ? null : capturePdfFont(pageIndex, sp.font);
+    // v11.54: on an OCRed SCAN the span's "font" is the invisible Helvetica we
+    // laid down in v11.48, which tells us nothing about the printed word. Look
+    // at the ink instead and retype in the closest face we have. Only when the
+    // user has not chosen a typeface themselves, and only when the match is
+    // clear — matchScanFace returns null rather than guess.
+    let scanFace = null;
+    if ((!opts.font || opts.font === "keep") && docIsOcr()){
+      try {
+        scanFace = await matchScanFace(sp.text, spanInkMask(pageIndex, sp), { PDFDocument, mupdf });
+      } catch(e){ scanFace = null; }
+      if (scanFace){ opts = Object.assign({}, opts, { font: scanFace.key }); fres = null; }
+    }
     let pageW = 0;
     try { const mp = MDOC.loadPage(pageIndex); const b = mp.getBounds(); pageW = b[2]-b[0]; mp.destroy(); } catch(e){}
     // v11.30: which edge the block lines up on, how much room the text has in
@@ -3151,11 +3171,256 @@ async function doOcr(todo){
       return;
     }
     pushUndo();
+    // v11.50: mark the document as OCRed, in its own metadata so the mark
+    // survives save/reopen. Two things depend on knowing this:
+    //   * the renderer must keep using JPEG. usePng is gated on docHasText(),
+    //     which OCR flips to true — and PNG on a full-page scan is 3–5x larger
+    //     and slower to encode for no visible gain (the v10.94 finding).
+    //   * Edit text can explain that a tapped word came from recognition and
+    //     will be retyped in a standard face.
+    try {
+      const kw = (doc.getKeywords ? (doc.getKeywords()||"") : "");
+      if (!/PyPDF-OCR/.test(kw))
+        doc.setKeywords([kw, "PyPDF-OCR"].filter(Boolean).join(" "));
+    } catch(e){}
     workingBytes = new Uint8Array(await doc.save());
     reopen(); await render();
     setStatus("Recognised "+words+" word"+(words>1?"s":"")+" across "+pagesDone+" page"
-      +(pagesDone>1?"s":"")+" — the text is invisible but real: Find, Select and copy now work, here and in any PDF app. Undo removes it.","ok");
+      +(pagesDone>1?"s":"")+" — Find, Select and copy now work here and in any PDF app, and Edit text can now change the words on the scan. Undo removes it.","ok");
   } catch(e){ setStatus("Could not recognise text: "+friendly(e),"err"); }
+  finally {
+    try { if (worker) await worker.terminate(); } catch(e){}
+    ocrBusy = false;
+    showSpin(false);
+  }
+}
+
+// ---- v11.54: match the scanned typeface when editing a scan ---------------
+// v11.50 made scanned words editable but retyped every one in Helvetica, so a
+// changed word on a serif document stood out. Adobe solves this with
+// proprietary font synthesis, which cannot be licensed or rebuilt. What CAN
+// be done honestly is to pick the closest of the faces we do have, and to
+// pick it by MEASUREMENT rather than by guessing: the word's own ink is
+// compared against the same word rendered in each candidate, and the best fit
+// wins. Everything below is pure or engine-injected, so the matcher is driven
+// directly by tests.
+const SCAN_FACES = [
+  { key:"sans",   font:"Helvetica" },
+  { key:"sansb",  font:"Helvetica-Bold" },
+  { key:"serif",  font:"Times-Roman" },
+  { key:"serifb", font:"Times-Bold" },
+  { key:"mono",   font:"Courier" },
+];
+function scanFaceFont(key){
+  const F = StandardFonts;
+  return key === "sansb"  ? F.HelveticaBold
+       : key === "serif"  ? F.TimesRoman
+       : key === "serifb" ? F.TimesRomanBold
+       : key === "mono"   ? F.Courier
+                          : F.Helvetica;
+}
+// Ink mask from raw RGB(A) bytes: 1 where there is ink. The cut is relative to
+// the brightest tone present, because scanned paper is never pure white.
+function inkMaskFrom(bytes, w, h, stride, n){
+  let peak = 0;
+  for (let y=0;y<h;y++) for (let x=0;x<w;x++){
+    const i=y*stride+x*n, g=(bytes[i]*77+bytes[i+1]*151+bytes[i+2]*28)>>8;
+    if (g > peak) peak = g;
+  }
+  const cut = Math.max(24, peak - 60);
+  const m = new Uint8Array(w*h);
+  for (let y=0;y<h;y++) for (let x=0;x<w;x++){
+    const i=y*stride+x*n, g=(bytes[i]*77+bytes[i+1]*151+bytes[i+2]*28)>>8;
+    m[y*w+x] = g < cut ? 1 : 0;
+  }
+  return { m, w, h };
+}
+// Crop to the ink, then scale to a fixed HEIGHT while keeping the aspect —
+// keeping width is the point: Courier's wide advance is a real signal, and
+// normalising it away would throw the monospace case out with the noise.
+function normaliseInk(mask, H){
+  const { m, w, h } = mask;
+  let x0=w, y0=h, x1=-1, y1=-1;
+  for (let y=0;y<h;y++) for (let x=0;x<w;x++) if (m[y*w+x]){
+    if (x<x0) x0=x; if (x>x1) x1=x; if (y<y0) y0=y; if (y>y1) y1=y;
+  }
+  if (x1 < 0) return null;
+  const cw = x1-x0+1, ch = y1-y0+1;
+  const TH = H, TW = Math.max(1, Math.round(cw * H / ch));
+  const out = new Uint8Array(TW*TH);
+  for (let y=0;y<TH;y++){
+    const sy = y0 + Math.min(ch-1, Math.floor(y*ch/TH));
+    for (let x=0;x<TW;x++){
+      const sx = x0 + Math.min(cw-1, Math.floor(x*cw/TW));
+      out[y*TW+x] = m[sy*w+sx];
+    }
+  }
+  return { m:out, w:TW, h:TH };
+}
+// Intersection over union of two normalised masks, compared on a shared
+// canvas so a width difference counts against the match rather than being
+// silently cropped away.
+function inkAgreement(a, b){
+  if (!a || !b) return 0;
+  const W = Math.max(a.w, b.w), H = Math.max(a.h, b.h);
+  let inter = 0, uni = 0;
+  for (let y=0;y<H;y++) for (let x=0;x<W;x++){
+    const av = (x<a.w && y<a.h) ? a.m[y*a.w+x] : 0;
+    const bv = (x<b.w && y<b.h) ? b.m[y*b.w+x] : 0;
+    if (av && bv) inter++;
+    if (av || bv) uni++;
+  }
+  return uni ? inter/uni : 0;
+}
+// Render `text` in one candidate face and return its normalised ink mask.
+async function faceInkMask(text, key, eng, H){
+  const doc = await eng.PDFDocument.create();
+  const size = 48;
+  const font = await doc.embedFont(scanFaceFont(key));
+  const tw = Math.max(4, font.widthOfTextAtSize(text, size));
+  const pg = doc.addPage([tw + 20, size*1.8]);
+  pg.drawText(text, { x:10, y:size*0.5, size, font });
+  const bytes = new Uint8Array(await doc.save());
+  const d = eng.mupdf.Document.openDocument(bytes.slice(0), "application/pdf").asPDF();
+  const p = d.loadPage(0);
+  const pix = p.toPixmap(eng.mupdf.Matrix.scale(2,2), eng.mupdf.ColorSpace.DeviceRGB, false);
+  const mask = inkMaskFrom(pix.getPixels(), pix.getWidth(), pix.getHeight(),
+                           pix.getStride(), pix.getNumberOfComponents());
+  pix.destroy(); p.destroy(); d.destroy();
+  return normaliseInk(mask, H);
+}
+// Which of our faces does this scanned word look most like? Returns null when
+// the answer is not clear enough to act on — declining is free, and guessing
+// wrong is exactly the complaint this feature exists to reduce.
+async function matchScanFace(text, targetMask, eng){
+  const t = String(text||"").trim();
+  if (t.length < 3 || !targetMask) return null;      // too little shape to judge
+  const H = 40;
+  const target = normaliseInk(targetMask, H);
+  if (!target) return null;
+  const scored = [];
+  for (const c of SCAN_FACES){
+    try { scored.push({ key:c.key, score: inkAgreement(target, await faceInkMask(t, c.key, eng, H)) }); }
+    catch(e){}
+  }
+  if (scored.length < 2) return null;
+  scored.sort((a,b)=>b.score-a.score);
+  const best = scored[0], next = scored[1];
+  if (best.score < 0.45) return null;                 // nothing fits well
+  if (best.score - next.score < 0.02) return null;    // a coin toss between two
+  return best;
+}
+// The ink of one span, straight off the page, ready for matchScanFace.
+function spanInkMask(pageIndex, sp){
+  let page = null, pix = null;
+  try {
+    page = MDOC.loadPage(pageIndex);
+    const s = Math.max(2, Math.min(8, 40/Math.max(1, sp.y1-sp.y0)));
+    const pad = 1;
+    const rect = [sp.x0-pad, sp.y0-pad, sp.x1+pad, sp.y1+pad];
+    pix = page.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false, false,
+                        undefined, undefined);
+    const W = pix.getWidth(), H = pix.getHeight(), St = pix.getStride(), n = pix.getNumberOfComponents();
+    const src = pix.getPixels();
+    // crop the span's rectangle out of the page raster
+    const cx0 = Math.max(0, Math.round(rect[0]*s)), cy0 = Math.max(0, Math.round(rect[1]*s));
+    const cx1 = Math.min(W, Math.round(rect[2]*s)), cy1 = Math.min(H, Math.round(rect[3]*s));
+    const cw = cx1-cx0, ch = cy1-cy0;
+    if (cw < 4 || ch < 4) return null;
+    const buf = new Uint8Array(cw*ch*3);
+    for (let y=0;y<ch;y++) for (let x=0;x<cw;x++){
+      const si = (cy0+y)*St + (cx0+x)*n, di = (y*cw+x)*3;
+      buf[di]=src[si]; buf[di+1]=src[si+1]; buf[di+2]=src[si+2];
+    }
+    return inkMaskFrom(buf, cw, ch, cw*3, 3);
+  } catch(e){ return null; }
+  finally { try{ if(pix) pix.destroy(); }catch(e){} try{ if(page) page.destroy(); }catch(e){} }
+}
+
+// ---- v11.53: straighten sideways pages ------------------------------------
+// v11.33 wrote down why this could not be done then: "a landscape certificate
+// and a sideways capture of a portrait sheet produce identical geometry;
+// distinguishing them needs to read text direction, which is an OCR job." The
+// OCR arrived in v11.48, so the job is now doable — and it is done with
+// Tesseract's orientation model (osd), not with the page's shape.
+//
+// The correction is applied as /Rotate, which is lossless: no pixel is
+// re-encoded, the scan keeps every bit of its quality, and Undo reverses it.
+//
+// Measured on a page turned each way: the model's orientation_degrees IS the
+// /Rotate value to apply, and all four cases come back upright afterwards.
+const AUTOROT_MIN_CONF = 2;    // below this the model is guessing; leave the page alone
+async function runAutoRotate(){
+  if (!workingBytes || !MDOC || ocrBusy) return;
+  const n = MDOC.countPages();
+  $("sheet").innerHTML = h`
+    <h3>Straighten pages</h3>
+    <p class="hint">Reads the direction of the text on each of the ${n} page${n>1?"s":""} and turns any that are sideways or upside down. It decides from the words, not the page shape, so a genuinely landscape page is left alone.</p>
+    <p class="hint">The turn is recorded, not re-drawn, so a scan loses no quality. Undo reverses it. Runs on this device; the first use downloads the orientation model (~4 MB, kept for next time).</p>
+    <div class="row"><button class="full" id="arGo">Straighten</button></div>
+    <div class="row"><button class="ghost full" id="arNo">Cancel</button></div>`;
+  $("arGo").onclick = ()=>{ closeSheet(); doAutoRotate(); };
+  $("arNo").onclick = closeSheet;
+  openSheet();
+}
+async function doAutoRotate(){
+  ocrBusy = true;
+  let worker = null;
+  showSpin(true,"Loading the orientation model…");
+  try {
+    await loadScriptOnce("./vendor/ocr/tesseract.min.js");
+    worker = await Tesseract.createWorker("osd", 0, {
+      workerPath: "./vendor/ocr/worker.min.js",
+      corePath:   "./vendor/ocr",
+      langPath:   "./vendor/ocr",
+      gzip: true,
+    });
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    const pages = doc.getPages();
+    const n = MDOC.countPages();
+    let fixed = 0, unsure = 0;
+    for (let i=0;i<n;i++){
+      showSpin(true,"Straightening… page "+(i+1)+" of "+n);
+      await new Promise(r=>setTimeout(r,0));
+      let deg = 0, conf = 0;
+      try {
+        const page = MDOC.loadPage(i);
+        const [x0,y0,x1,y1] = page.getBounds();
+        // ~150dpi: enough for the model to read letter shapes, cheap enough
+        // to run over a long document
+        const s = Math.min(150/72, 2000/Math.max(x1-x0, y1-y0));
+        const pix = page.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false);
+        const bin = u8(pix.asPNG());
+        pix.destroy(); page.destroy();
+        const url = URL.createObjectURL(new Blob([bin], { type:"image/png" }));
+        try {
+          const det = await worker.detect(url);
+          deg  = (det && det.data && det.data.orientation_degrees) | 0;
+          conf = (det && det.data && det.data.orientation_confidence) || 0;
+        } finally { URL.revokeObjectURL(url); }
+      } catch(e){ continue; }          // a page the model refuses is left alone
+      if (!deg) continue;              // already upright
+      if (conf < AUTOROT_MIN_CONF){ unsure++; continue; }
+      // the render already had the page's existing /Rotate applied, so what
+      // the model reports is the turn still NEEDED on top of it
+      const pg = pages[i];
+      const cur = (pg.getRotation && pg.getRotation().angle) || 0;
+      pg.setRotation(degrees((((cur + deg) % 360) + 360) % 360));
+      fixed++;
+    }
+    if (!fixed){
+      setStatus(unsure
+        ? "Left as they are — the text on "+unsure+" page"+(unsure>1?"s":"")+" was too faint to judge the direction."
+        : "Every page is already the right way up.","ok");
+      return;
+    }
+    pushUndo();
+    workingBytes = new Uint8Array(await doc.save());
+    reopen(); await render();
+    setStatus("Straightened "+fixed+" page"+(fixed>1?"s":"")
+      + (unsure ? " ("+unsure+" too faint to judge, left alone)" : "")
+      + " — the turn is recorded, so no quality was lost. Undo reverses it.","ok");
+  } catch(e){ setStatus("Could not straighten the pages: "+friendly(e),"err"); }
   finally {
     try { if (worker) await worker.terminate(); } catch(e){}
     ocrBusy = false;
@@ -3190,7 +3455,9 @@ function setMode(m){
     document.querySelectorAll(".stage").forEach(s=>{
       if (s.dataset.rendered) buildSpanBoxes(s, +s.dataset.page).catch(()=>{});
     });
-    setStatus("Tap any highlighted text to change it.","ok");
+    setStatus(docIsOcr()
+      ? "Tap any recognised word to change it — it is erased from the scan and retyped. The new text uses a standard typeface, so it may not match the scanned print exactly."
+      : "Tap any highlighted text to change it.","ok");
   } else if (m==="select"){
     // build the invisible selectable text layer over every already-rendered
     // page; pages scrolled into view later get theirs in renderStage
@@ -3218,7 +3485,31 @@ function setMode(m){
   }
 }
 
-$("textBtn").onclick = ()=> setMode(mode==="text" ? null : "text");
+$("textBtn").onclick = ()=>{
+  if (mode === "text"){ setMode(null); return; }
+  setMode("text");
+  maybeOfferOcrForEditing();          // v11.50
+};
+// v11.50: entering Edit text on a SCAN. Before this, edit mode on a scanned
+// page simply highlighted nothing and said "tap any highlighted text" — with
+// nothing to tap and no explanation. A scan has no text to edit until it is
+// recognised, which the app can now do (v11.48), so say that and offer it.
+function maybeOfferOcrForEditing(){
+  if (!workingBytes || !MDOC || ocrBusy) return;
+  if (docHasText()) return;                     // there IS text to tap
+  $("sheet").innerHTML = h`
+    <h3>This document is a picture</h3>
+    <p class="hint">Its pages are scans, so there is no text to tap yet. Recognise text first and every word becomes editable: tapping one erases it from the scan and lets you retype it.</p>
+    <p class="hint">One caveat, and it is the same in every app that is not Adobe: the replacement is typed in a standard typeface, so a retyped word may not match the scanned print exactly. Everything around it is untouched.</p>
+    <div class="row"><button class="full" id="eoGo">Recognise text, then edit</button></div>
+    <div class="row"><button class="ghost full" id="eoNo">Not now</button></div>`;
+  $("eoGo").onclick = async ()=>{
+    closeSheet();
+    await runOcr();                              // its own confirm sheet follows
+  };
+  $("eoNo").onclick = ()=>{ closeSheet(); setStatus("Left as a picture. You can still add text, cover areas or sign it.","ok"); };
+  openSheet();
+}
 $("selectBtn").onclick = ()=> setMode(mode==="select" ? null : "select");
 // v11.43: whiteout mode + insert image (image reuses the sign placement flow)
 $("whiteBtn").onclick = ()=> setMode(mode==="white" ? null : "white");
@@ -3650,6 +3941,10 @@ $("moreBtn").onclick = ()=>{
     <div class="mgrid">
       <button class="mtile" id="mOrg" ${d}>${ic("grid")}<span>Organize</span></button>
       <button class="mtile" id="mMerge" ${d}>${ic("combine")}<span>Combine</span></button>
+      <button class="mtile" id="mNum" ${d}>${ic("grid")}<span>Page numbers</span></button>
+      <button class="mtile" id="mWater" ${d}>${ic("info")}<span>Watermark</span></button>
+      <button class="mtile" id="mCrop" ${d}>${ic("grid")}<span>Crop &amp; resize</span></button>
+      <button class="mtile" id="mStraight" ${d}>${ic("grid")}<span>Straighten pages</span></button>
     </div>
     <div class="mgrp-l">Document</div>
     <div class="mgrid">
@@ -3666,6 +3961,10 @@ $("moreBtn").onclick = ()=>{
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(false); };
   $("mScanAdd").onclick = ()=>{ closeSheet(); if (workingBytes) startScan(true); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
+  $("mNum").onclick   = ()=>{ closeSheet(); openPageNumberSheet(); };     // v11.51
+  $("mWater").onclick = ()=>{ closeSheet(); openWatermarkSheet(); };      // v11.51
+  $("mCrop").onclick  = ()=>{ closeSheet(); openPageSizeSheet(); };       // v11.52
+  $("mStraight").onclick = ()=>{ closeSheet(); runAutoRotate(); };        // v11.53
   $("mMerge").onclick = ()=>{ closeSheet(); $("mergeInput").click(); };
   $("mImg").onclick   = ()=>{ closeSheet(); confirmDiscard("turn photos into a new PDF", ()=>$("imgInput").click()); };
   // v11.11: Compress and Unlock left the toolbar; their original (now hidden)
@@ -4220,6 +4519,379 @@ async function insertBlankAfter(i){
     setStatus("Blank page added after page "+(i+1)+" — Undo removes it.","ok");
   } catch(e){ setStatus("Could not add a blank page: "+friendly(e),"err"); }
   showSpin(false);
+}
+
+// ---- v11.51: stamping (watermark, page numbers) ---------------------------
+// Both stamps have to land where the reader SEES them, which is not where the
+// page's own coordinates put them: a page carrying /Rotate 90 (every sideways
+// scan this app produces) is displayed turned, so PDF bottom-left appears at
+// the visual TOP-left. The mapping below was measured, not assumed — a mark
+// drawn at PDF (5,5) was rendered through MuPDF at each rotation and located:
+//
+//   /Rotate   PDF origin (bottom-left) appears at
+//     0       visual bottom-left
+//    90       visual top-left
+//   180       visual top-right
+//   270       visual bottom-right
+//
+// which inverts to the four cases in visualToPdf. Pure functions, so the
+// geometry is checked directly by tests rather than by eye.
+function pageVisualSize(w, h, rot){
+  const r = ((Math.round((rot||0)/90)*90)%360+360)%360;
+  return (r === 90 || r === 270) ? { VW:h, VH:w, r } : { VW:w, VH:h, r };
+}
+// visual (vx from left, vy from TOP) -> PDF (x, y-up)
+function visualToPdf(w, h, rot, vx, vy){
+  const r = ((Math.round((rot||0)/90)*90)%360+360)%360;
+  if (r === 90)  return { x: vy,     y: vx };
+  if (r === 180) return { x: w - vx, y: vy };
+  if (r === 270) return { x: w - vy, y: h - vx };
+  return { x: vx, y: h - vy };
+}
+// pdf-lib rotates text about its draw origin, so to CENTRE a run at (cx,cy)
+// we walk back half its width along the baseline and half its height across it
+function textOriginFor(cx, cy, textW, textH, deg){
+  const a = (deg||0) * Math.PI/180, c = Math.cos(a), s = Math.sin(a);
+  return {
+    x: cx - (textW/2)*c + (textH/2)*s,
+    y: cy - (textW/2)*s - (textH/2)*c,
+  };
+}
+async function applyWatermark(text, opts){
+  const t = String(text||"").trim();
+  if (!t) return;
+  const o = opts || {};
+  showSpin(true,"Adding the watermark…");
+  try {
+    pushUndo();
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    const font = await doc.embedFont(pickFontKeyed("", o.font || "sans"));
+    const col = o.colour || [0.5,0.5,0.5];
+    const pages = doc.getPages();
+    for (const pg of pages){
+      const w = pg.getWidth(), h = pg.getHeight();
+      const rot = (pg.getRotation && pg.getRotation().angle) || 0;
+      const V = pageVisualSize(w, h, rot);
+      // size so the run spans ~72% of the visual diagonal
+      const unit = Math.max(0.01, font.widthOfTextAtSize(sanitizeForFont(t), 1));
+      const diag = Math.hypot(V.VW, V.VH);
+      const size = Math.max(8, Math.min(240, (diag*0.72)/unit));
+      const tw = font.widthOfTextAtSize(sanitizeForFont(t), size), th = size*0.7;
+      // the visual centre of the page, in PDF coordinates
+      const c = visualToPdf(w, h, rot, V.VW/2, V.VH/2);
+      // 45° up the visual diagonal, plus whatever the page rotation adds
+      const deg = (o.diagonal === false ? 0 : 45) + (((Math.round(rot/90)*90)%360)+360)%360;
+      const org = textOriginFor(c.x, c.y, tw, th, deg);
+      pg.drawText(sanitizeForFont(t), {
+        x:org.x, y:org.y, size, font, rotate: degrees(deg),
+        color: rgb(col[0], col[1], col[2]),
+        opacity: o.opacity == null ? 0.18 : o.opacity,
+      });
+    }
+    workingBytes = new Uint8Array(await doc.save());
+    reopen(); await render();
+    setStatus("Watermark added to all "+pages.length+" page"+(pages.length>1?"s":"")+". Undo removes it.","ok");
+  } catch(e){ setStatus("Could not add the watermark: "+friendly(e),"err"); }
+  showSpin(false);
+}
+function pageNumberText(fmt, n, total){
+  if (fmt === "of")   return n + " of " + total;
+  if (fmt === "page") return "Page " + n + " of " + total;
+  return String(n);
+}
+async function applyPageNumbers(o){
+  o = o || {};
+  showSpin(true,"Numbering the pages…");
+  try {
+    pushUndo();
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const pages = doc.getPages();
+    const from = Math.max(1, Math.min(pages.length, o.from || 1));   // first page to STAMP
+    const startAt = o.startAt == null ? 1 : o.startAt;               // number shown on it
+    const size = o.size || 10;
+    const total = pages.length - from + startAt;
+    let stamped = 0;
+    for (let i = from-1; i < pages.length; i++){
+      const pg = pages[i];
+      const w = pg.getWidth(), h = pg.getHeight();
+      const rot = (pg.getRotation && pg.getRotation().angle) || 0;
+      const V = pageVisualSize(w, h, rot);
+      const label = pageNumberText(o.format || "plain", startAt + (i - (from-1)), total);
+      const tw = font.widthOfTextAtSize(label, size), th = size*0.7;
+      const margin = 28;
+      // visual position: bottom of the page as the READER sees it
+      const vx = o.align === "right" ? V.VW - margin - tw/2
+               : o.align === "left"  ? margin + tw/2
+                                     : V.VW/2;
+      const vy = (o.edge === "top" ? margin : V.VH - margin);
+      const c = visualToPdf(w, h, rot, vx, vy);
+      const deg = (((Math.round(rot/90)*90)%360)+360)%360;
+      const org = textOriginFor(c.x, c.y, tw, th, deg);
+      pg.drawText(label, { x:org.x, y:org.y, size, font, rotate: degrees(deg), color: rgb(0.25,0.25,0.28) });
+      stamped++;
+    }
+    workingBytes = new Uint8Array(await doc.save());
+    reopen(); await render();
+    setStatus("Numbered "+stamped+" page"+(stamped>1?"s":"")
+      + (from > 1 ? " (starting on page "+from+", so a cover stays clean)" : "")+". Undo removes it.","ok");
+  } catch(e){ setStatus("Could not number the pages: "+friendly(e),"err"); }
+  showSpin(false);
+}
+function openWatermarkSheet(){
+  let colour = "grey", strength = "light", diagonal = true;
+  const draw = ()=>{
+    $("sheet").innerHTML = h`
+      <h3>Watermark</h3>
+      <p class="hint">Stamped across every page, under nothing — it sits on top, so it prints. Undo removes it.</p>
+      <div class="row"><input type="text" id="wmIn" placeholder="DRAFT, CONFIDENTIAL, COPY…" value="DRAFT"></div>
+      <div class="row telbl">Shade</div>
+      <div class="row teseg" id="wmStr">
+        ${raw(["light","medium","strong"].map(k=>`<button class="segb${strength===k?" on":""}" data-k="${k}">${k[0].toUpperCase()+k.slice(1)}</button>`).join(""))}
+      </div>
+      <div class="row telbl">Colour</div>
+      <div class="row teseg tewrap" id="wmCol">
+        ${raw(TE_COLOURS.filter(c=>c.k!=="keep"&&c.k!=="white").map(c=>`<button class="segb${colour===c.k?" on":""}" data-k="${c.k}">${c.label}</button>`).join(""))}
+      </div>
+      <div class="row telbl">Angle</div>
+      <div class="row teseg" id="wmAng">
+        <button class="segb${diagonal?" on":""}" data-d="1">Diagonal</button>
+        <button class="segb${diagonal?"":" on"}" data-d="0">Straight across</button>
+      </div>
+      <div class="row"><button class="full" id="wmOk">Add watermark</button></div>
+      <div class="row"><button class="ghost full" id="wmCancel">Cancel</button></div>`;
+    $("wmStr").querySelectorAll("[data-k]").forEach(b=> b.onclick = ()=>{ strength=b.dataset.k; draw(); });
+    $("wmCol").querySelectorAll("[data-k]").forEach(b=> b.onclick = ()=>{ colour=b.dataset.k; draw(); });
+    $("wmAng").querySelectorAll("[data-d]").forEach(b=> b.onclick = ()=>{ diagonal=b.dataset.d==="1"; draw(); });
+    $("wmOk").onclick = async ()=>{
+      const t = $("wmIn").value;
+      closeSheet();
+      await applyWatermark(t, {
+        colour: (TE_COLOURS.find(c=>c.k===colour)||{}).rgb || [0.5,0.5,0.5],
+        opacity: strength==="light" ? 0.12 : strength==="medium" ? 0.22 : 0.38,
+        diagonal,
+      });
+    };
+    $("wmCancel").onclick = closeSheet;
+  };
+  draw(); openSheet();
+  setTimeout(()=>{ try{ $("wmIn").focus(); }catch(e){} }, 100);
+}
+function openPageNumberSheet(){
+  const n = MDOC.countPages();
+  let format = "plain", align = "center", edge = "bottom", skipCover = false;
+  const draw = ()=>{
+    $("sheet").innerHTML = h`
+      <h3>Page numbers</h3>
+      <p class="hint">Added to all ${n} pages, at the bottom as the reader sees it — sideways pages are numbered the right way up.</p>
+      <div class="row telbl">Style</div>
+      <div class="row teseg" id="pnFmt">
+        <button class="segb${format==="plain"?" on":""}" data-k="plain">1</button>
+        <button class="segb${format==="of"?" on":""}" data-k="of">1 of ${n}</button>
+        <button class="segb${format==="page"?" on":""}" data-k="page">Page 1 of ${n}</button>
+      </div>
+      <div class="row telbl">Position</div>
+      <div class="row teseg" id="pnAlign">
+        ${raw(["left","center","right"].map(k=>`<button class="segb${align===k?" on":""}" data-k="${k}">${k==="center"?"Centre":k[0].toUpperCase()+k.slice(1)}</button>`).join(""))}
+      </div>
+      <div class="row teseg" id="pnEdge">
+        <button class="segb${edge==="bottom"?" on":""}" data-k="bottom">Bottom</button>
+        <button class="segb${edge==="top"?" on":""}" data-k="top">Top</button>
+      </div>
+      ${raw(n > 1 ? `<div class="row teseg" id="pnSkip">
+        <button class="segb${skipCover?" on":""}" data-k="1">Skip the first page</button>
+      </div>` : "")}
+      <div class="row"><button class="full" id="pnOk">Add numbers</button></div>
+      <div class="row"><button class="ghost full" id="pnCancel">Cancel</button></div>`;
+    $("pnFmt").querySelectorAll("[data-k]").forEach(b=> b.onclick = ()=>{ format=b.dataset.k; draw(); });
+    $("pnAlign").querySelectorAll("[data-k]").forEach(b=> b.onclick = ()=>{ align=b.dataset.k; draw(); });
+    $("pnEdge").querySelectorAll("[data-k]").forEach(b=> b.onclick = ()=>{ edge=b.dataset.k; draw(); });
+    if ($("pnSkip")) $("pnSkip").querySelectorAll("[data-k]").forEach(b=> b.onclick = ()=>{ skipCover=!skipCover; draw(); });
+    $("pnOk").onclick = async ()=>{
+      closeSheet();
+      await applyPageNumbers({ format, align, edge, from: skipCover ? 2 : 1, startAt: skipCover ? 2 : 1 });
+    };
+    $("pnCancel").onclick = closeSheet;
+  };
+  draw(); openSheet();
+}
+
+// ---- v11.52: crop and resize pages ----------------------------------------
+// Two everyday jobs Acrobat charges for. Crop is offered as "trim the white
+// margins", which is what people actually want on a scan or a printout — the
+// margin is found by RENDERING the page and looking for ink, not guessed.
+// Resize rescales the content into a real paper size, so a mixed pile of A4,
+// Letter and captured shapes prints as one consistent document.
+
+// Ink bounds of a page, in VISUAL coordinates (as the reader sees it, with
+// /Rotate applied by the renderer), returned as fractions of the visual page.
+// null when the page is blank — cropping a blank page to nothing is a trap.
+function inkBoundsFrac(pageIndex, working){
+  let page = null, pix = null;
+  try {
+    page = MDOC.loadPage(pageIndex);
+    const [x0,y0,x1,y1] = page.getBounds();
+    const s = Math.min(1.4, 900/Math.max(x1-x0, y1-y0));   // ~100dpi is plenty
+    pix = page.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false);
+    const W = pix.getWidth(), H = pix.getHeight(), St = pix.getStride(), n = pix.getNumberOfComponents();
+    const px = pix.getPixels();
+    // Paper is rarely pure white on a scan, so the threshold is relative to
+    // the page's own brightest tone rather than to 255.
+    let peak = 0;
+    for (let y=0;y<H;y+=3) for (let x=0;x<W;x+=3){
+      const g = (px[y*St+x*n]*77 + px[y*St+x*n+1]*151 + px[y*St+x*n+2]*28) >> 8;
+      if (g > peak) peak = g;
+    }
+    const cut = Math.max(24, peak - 42);
+    let minX=W, minY=H, maxX=-1, maxY=-1;
+    for (let y=0;y<H;y++) for (let x=0;x<W;x++){
+      const i = y*St + x*n;
+      const g = (px[i]*77 + px[i+1]*151 + px[i+2]*28) >> 8;
+      if (g < cut){
+        if (x<minX) minX=x; if (x>maxX) maxX=x;
+        if (y<minY) minY=y; if (y>maxY) maxY=y;
+      }
+    }
+    if (maxX < 0) return null;                       // nothing on the page
+    return { x0:minX/W, y0:minY/H, x1:(maxX+1)/W, y1:(maxY+1)/H };
+  } catch(e){ return null; }
+  finally { try{ if(pix) pix.destroy(); }catch(e){} try{ if(page) page.destroy(); }catch(e){} }
+}
+// A visual rectangle (fractions) -> a PDF-space crop box, honouring /Rotate.
+// Reuses the measured mapping from v11.51 rather than a second guess at it.
+function cropBoxFromVisual(w, h, rot, f){
+  const V = pageVisualSize(w, h, rot);
+  const a = visualToPdf(w, h, rot, f.x0*V.VW, f.y0*V.VH);
+  const b = visualToPdf(w, h, rot, f.x1*V.VW, f.y1*V.VH);
+  return {
+    x: Math.min(a.x,b.x), y: Math.min(a.y,b.y),
+    w: Math.abs(b.x-a.x), h: Math.abs(b.y-a.y),
+  };
+}
+async function applyCropMargins(o){
+  o = o || {};
+  showSpin(true,"Trimming the margins…");
+  try {
+    const n = MDOC.countPages();
+    const targets = o.allPages ? Array.from({length:n},(_,i)=>i) : [Math.max(0, Math.min(n-1, o.page||0))];
+    // measure BEFORE the undo snapshot: a page with nothing to trim must not
+    // leave an undo step (or a "done" message) behind
+    const found = [];
+    for (const i of targets){
+      const f = inkBoundsFrac(i);
+      if (!f) continue;
+      // keep a small breathing margin so the trim never shaves the ink itself
+      const pad = (o.pad == null ? 0.012 : o.pad);
+      const g = {
+        x0: Math.max(0, f.x0 - pad), y0: Math.max(0, f.y0 - pad),
+        x1: Math.min(1, f.x1 + pad), y1: Math.min(1, f.y1 + pad),
+      };
+      // refuse a crop that would remove almost nothing, or almost everything
+      const area = (g.x1-g.x0)*(g.y1-g.y0);
+      if (area > 0.965 || area < 0.02) continue;
+      found.push({ i, g });
+    }
+    if (!found.length){
+      showSpin(false);
+      setStatus(targets.length > 1
+        ? "Nothing to trim — these pages have no wide blank margins."
+        : "Nothing to trim — this page has no wide blank margins.","warn");
+      return;
+    }
+    pushUndo();
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    for (const { i, g } of found){
+      const pg = doc.getPage(i);
+      const mb = pg.getMediaBox();
+      const rot = (pg.getRotation && pg.getRotation().angle) || 0;
+      const box = cropBoxFromVisual(mb.width, mb.height, rot, g);
+      pg.setCropBox(mb.x + box.x, mb.y + box.y, box.w, box.h);
+    }
+    workingBytes = new Uint8Array(await doc.save());
+    reopen(); await render();
+    setStatus("Trimmed the margins on "+found.length+" page"+(found.length>1?"s":"")
+      +". Nothing was deleted — the crop can be undone.","ok");
+  } catch(e){ setStatus("Could not trim the margins: "+friendly(e),"err"); }
+  showSpin(false);
+}
+async function applyResizePages(paperKey, allPages){
+  const paper = PAPER_SIZES[paperKey];
+  if (!paper) return;
+  showSpin(true,"Resizing…");
+  try {
+    pushUndo();
+    const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
+    const pages = doc.getPages();
+    const list = allPages ? pages : [pages[0]];
+    let changed = 0;
+    for (const pg of list){
+      const mb = pg.getMediaBox();
+      const w = mb.width, h = mb.height;
+      // turn the PAPER to match the page, so a landscape page stays landscape
+      const tw = (w > h) ? paper.h : paper.w;
+      const th = (w > h) ? paper.w : paper.h;
+      if (Math.abs(w-tw) < 0.5 && Math.abs(h-th) < 0.5) continue;
+      // uniform scale keeps the content's proportions; the remainder becomes
+      // an even margin rather than a stretch
+      const s = Math.min(tw/w, th/h);
+      pg.scaleContent(s, s);
+      pg.translateContent((tw - w*s)/2, (th - h*s)/2);
+      pg.setSize(tw, th);
+      changed++;
+    }
+    if (!changed){
+      showSpin(false);
+      setStatus("Already "+paper.label+" — nothing to resize.","ok");
+      return;
+    }
+    workingBytes = new Uint8Array(await doc.save());
+    reopen(); await render();
+    setStatus("Resized "+changed+" page"+(changed>1?"s":"")+" to "+paper.label
+      +" — the content keeps its proportions and is centred. Undo reverses it.","ok");
+  } catch(e){ setStatus("Could not resize: "+friendly(e),"err"); }
+  showSpin(false);
+}
+function openPageSizeSheet(){
+  const n = MDOC.countPages();
+  let allPages = true;
+  const draw = ()=>{
+    $("sheet").innerHTML = h`
+      <h3>Crop &amp; resize</h3>
+      <p class="hint">Trimming finds the ink on the page and cuts the blank border to it — nothing is deleted, so it undoes cleanly. Resizing rescales the content into a real paper size and centres it.</p>
+      ${raw(n > 1 ? `<div class="row teseg" id="csScope">
+        <button class="segb${allPages?" on":""}" data-a="1">All ${n} pages</button>
+        <button class="segb${allPages?"":" on"}" data-a="0">This page only</button>
+      </div>` : "")}
+      <div class="row telbl">Trim</div>
+      <div class="row"><button class="full" id="csTrim">Trim the blank margins</button></div>
+      <div class="row telbl">Resize to</div>
+      <div class="row"><button class="full" id="csA4">A4</button></div>
+      <div class="row"><button class="full" id="csLetter">Letter</button></div>
+      <div class="row"><button class="full" id="csLegal">Legal</button></div>
+      <div class="row"><button class="ghost full" id="csCancel">Cancel</button></div>`;
+    if ($("csScope")) $("csScope").querySelectorAll("[data-a]").forEach(b=>
+      b.onclick = ()=>{ allPages = b.dataset.a === "1"; draw(); });
+    $("csTrim").onclick = ()=>{ closeSheet(); applyCropMargins({ allPages, page: currentPageIndex() }); };
+    $("csA4").onclick     = ()=>{ closeSheet(); applyResizePages("a4", allPages); };
+    $("csLetter").onclick = ()=>{ closeSheet(); applyResizePages("letter", allPages); };
+    $("csLegal").onclick  = ()=>{ closeSheet(); applyResizePages("legal", allPages); };
+    $("csCancel").onclick = closeSheet;
+  };
+  draw(); openSheet();
+}
+// Which page is the reader looking at? Used so "this page only" means the one
+// on screen. Falls back to the first page when nothing is measurable.
+function currentPageIndex(){
+  try {
+    const v = $("viewer"), vr = v.getBoundingClientRect();
+    let best = 0, bestArea = -1;
+    v.querySelectorAll(".stage").forEach(s=>{
+      const r = s.getBoundingClientRect();
+      const overlap = Math.max(0, Math.min(r.bottom, vr.bottom) - Math.max(r.top, vr.top));
+      if (overlap > bestArea){ bestArea = overlap; best = +s.dataset.page || 0; }
+    });
+    return best;
+  } catch(e){ return 0; }
 }
 
 // ---------------- merge (mupdf graftPage, with chosen order) ----------------
@@ -6479,6 +7151,18 @@ async function recompressImages(pdf, level, onProgress){
 // rasterised by Compress. Cheap: stops as soon as the threshold is reached.
 // cached "does this document have real text?" — sampled once per epoch and
 // reused by the render path (PNG vs JPEG choice) and compress
+// v11.50: was this document's text put there by our own OCR? Cached per epoch
+// like docHasText, and read from the document's own metadata so it survives a
+// save and reopen. See the note in doOcr for why the render path needs it.
+let docOcrEpoch = -1, docOcrVal = false;
+function docIsOcr(){
+  if (docOcrEpoch !== epoch){
+    docOcrVal = false;
+    try { docOcrVal = /PyPDF-OCR/.test(MDOC.getMetaData("info:Keywords") || ""); } catch(e){}
+    docOcrEpoch = epoch;
+  }
+  return docOcrVal;
+}
 let docTextEpoch = -1, docTextVal = true;
 function docHasText(){
   if (docTextEpoch !== epoch){

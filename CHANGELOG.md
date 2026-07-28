@@ -4,6 +4,143 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.54] — 2026-07-28 — Editing a scan matches its typeface
+
+v11.50 made scanned words editable but retyped every one in Helvetica, so a
+change on a serif or typewriter document stood out — the one visible weakness
+in that release, and it was disclosed rather than hidden.
+
+Adobe closes this with proprietary font synthesis, which cannot be licensed or
+rebuilt. What *can* be done honestly is to pick the closest face the app
+already has, **by measurement rather than by guessing**: the scanned word's own
+ink is compared against the same word rendered in each candidate (Helvetica,
+Helvetica Bold, Times, Times Bold, Courier), and the best fit wins.
+
+- The comparison crops to the ink and normalises by **height only**, keeping
+  the aspect — Courier's wide advance is a real signal, and normalising width
+  away would have thrown the monospace case out with the noise.
+- **Declining is a feature.** A word under three characters, ink that fits
+  nothing well (< 0.45), or a coin toss between two faces (< 0.02 apart) all
+  return *no match* and keep the plain face. Guessing wrong is exactly the
+  complaint this reduces.
+- It runs only on an OCRed scan, and never overrides a typeface the user chose
+  themselves. On a scan the span's own "font" is the invisible Helvetica laid
+  down by v11.48, which says nothing about the printed word — so that is
+  deliberately not reused.
+
+Measured: **10 of 10** correct across all five faces on clean print, and serif
+and monospace are still identified through a deliberately degraded low-quality
+JPEG scan (0.77 and 0.81 agreement). editor-tests 65 → 78. All fifteen suites
+green.
+
+## [v11.53] — 2026-07-28 — Straighten sideways pages
+
+**A promise from v11.33, finally kept.** That release deliberately did *not*
+auto-rotate, and wrote down why: "a landscape certificate and a sideways
+capture of a portrait sheet produce identical geometry; distinguishing them
+needs to read text direction, which is an OCR job." The OCR arrived in v11.48,
+so **More → Straighten pages** now does it — from the words, not the shape, so
+a genuinely landscape page is left alone.
+
+- Tesseract's orientation model (`osd`, 4 MB, vendored beside the recogniser
+  and cached the same way) reads each page at ~150 dpi.
+- The correction is applied as `/Rotate` — **recorded, not re-drawn** — so a
+  scan loses not one pixel of quality, and Undo reverses it.
+- The detected turn is *added* to the page's existing rotation, because the
+  render the model saw already had that rotation applied.
+- Pages whose text is too faint to judge (confidence < 2) are left alone and
+  counted in the message rather than guessed at, and straightening nothing
+  leaves no undo step behind.
+
+Measured, not assumed: a real scan turned 90°, 180° and 270° is detected at
+confidence 11–13 and **every one comes back upright**; the model's reported
+value is exactly the `/Rotate` to apply. ocr-tests 22 → 30. All fourteen
+suites green.
+
+## [v11.52] — 2026-07-28 — Crop and resize pages
+
+**More → Crop & resize**, on this page or all of them.
+
+- **Trim the blank margins.** The margin is *found*, not guessed: the page is
+  rendered and the ink located, with the white threshold taken relative to the
+  page's own brightest tone (scanned paper is never pure white). A small
+  breathing margin is kept so the trim never shaves the ink. Cropping sets the
+  crop box, so nothing is deleted and Undo restores the full page.
+  A crop that would remove almost nothing (>96.5% of the page kept) or almost
+  everything (<2%) is refused, and a page with no margin to trim leaves **no
+  undo step behind**.
+- **Resize to A4 / Letter / Legal.** The content is scaled *uniformly* — never
+  stretched — and centred, with the paper turning to match a landscape page.
+  Pages already at the target size are skipped.
+
+Rotation is handled by reusing v11.51's measured mapping rather than guessing
+at it a second time: `cropBoxFromVisual` turns a visual rectangle into a PDF
+crop box, and on a quarter-turned page the box's sides swap with it.
+
+stamp-tests 17 → 28, including end-to-end proof that a cropped page really is
+smaller *and* still holds its text (crop hides, it does not delete), and that
+a resized page comes out true A4 with its content intact. All fourteen suites
+green.
+
+## [v11.51] — 2026-07-28 — Watermarks and page numbers
+
+Two iLovePDF/Acrobat staples, both in **More**.
+
+- **Watermark** — text across every page (DRAFT, CONFIDENTIAL, COPY…),
+  diagonal or straight, three shades, six colours. Sized to each page's own
+  diagonal rather than a fixed guess, and translucent by default so it never
+  hides the text underneath.
+- **Page numbers** — `1`, `1 of 12` or `Page 1 of 12`; left/centre/right, top
+  or bottom; optionally skipping the first page so a cover stays clean (and
+  numbering then starts at 2, matching what the reader expects).
+
+**Both stamps land where the reader sees them, not where the page's own
+coordinates put them.** A page carrying `/Rotate 90` — every sideways scan
+this app makes — is displayed turned, so PDF bottom-left appears at the visual
+*top*-left. The four-way mapping was **measured**, not assumed: a mark drawn
+at PDF (5,5) was rendered through MuPDF at each rotation and located, giving
+`visualToPdf`, and the text is counter-rotated so it reads upright.
+
+New suite: stamp-tests (17). The geometry helpers are pure and sliced from the
+shipped app.js; the decisive tests render a numbered *rotated* page and find
+the ink — it sits at 50% across, 92% down, i.e. the reader's bottom edge.
+All fourteen suites green.
+
+## [v11.50] — 2026-07-28 — Scanned pages are editable
+
+Acrobat's "make a scan editable". v11.48 gave scans a recognised text layer;
+this makes that layer *editable*, so tapping a word on a photograph of a page
+erases it from the image and lets you retype it.
+
+**It was verified before it was built**, on the real engines: redact the word's
+band on an OCRed scan and the printed pixels measure 47.6 ink → 0.0 (gone, not
+covered); retype and the replacement is visible and extractable. The existing
+edit path already did the right thing — the work was making it reachable and
+honest.
+
+- **Edit text on a scan** now explains itself instead of highlighting nothing:
+  "This document is a picture… recognise text first and every word becomes
+  editable", with a one-tap route into OCR. The typeface caveat is stated
+  *before* the user commits, not after.
+- **After OCR**, edit mode says what a tap will do: the word is erased from
+  the scan and retyped.
+- **OCRed documents are marked** in their own metadata (`PyPDF-OCR` in
+  Keywords), which survives save and reopen. Two things depend on it: the
+  renderer must keep the **fast JPEG path** for these pages — `usePng` is
+  gated on `docHasText()`, which OCR flips to true, and PNG on a full-page
+  scan is 3–5× larger and slower for no visible gain (the v10.94 finding) —
+  and the edit messages need to know the text came from recognition.
+
+**The honest limit, unchanged:** Adobe matches the scanned typeface with
+proprietary font synthesis. This retypes in a standard face, so a changed word
+may not match the print around it. Everything else on the page is untouched.
+
+Tests: scenario-tests 34 → 39 — builds a page with printed ink plus an
+invisible recognised layer (what OCR really leaves), then drives the app's own
+`applyTextEdit` and measures the page: old word gone from the text, new word
+real (not invisible), and the printed ink measurably replaced (83.1 → 19.7).
+ocr-tests 15 → 22. All thirteen suites green.
+
 ## [v11.49] — 2026-07-28 — Clear recents keeps starred documents
 
 A star means "keep this around", and one tap on Clear must not silently break
