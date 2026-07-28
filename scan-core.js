@@ -82,8 +82,18 @@ export function applyAutoContrast(d,w,h){
   acc=0;
   for (let t=255;t>=0;t--){ acc+=hist[t]; if(acc>=n*0.02){ hi=t; break; } }
   if (hi-lo<30) return;
-  const lut=new Uint8Array(256);
-  for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round((t-lo)*255/(hi-lo))));
+  // v11.73: map into 6..248, not 0..255, and take the percentiles from the
+  // extreme half-percent rather than 2%.
+  //
+  // Measured against the phone photo of the page this was tuned on: the paper
+  // sat at 214 and the 98th percentile at 219, so the old curve mapped 219 to
+  // 255 and blew out 12.6% of the page to pure white, while everything under
+  // the 2nd percentile (47) crushed to pure black. That is the "harsh lighting"
+  // — and the crushed ink then fattened every stroke in the 1-bit stencil,
+  // which is what merged the letters. Same curve, headroom at both ends:
+  // blown pixels 12.6% -> 0.0%, paper 254 -> 247, against 214 in the photo.
+  const LO=6, HI=248, lut=new Uint8Array(256);
+  for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round(LO+(t-lo)*(HI-LO)/(hi-lo))));
   for (let i=0;i<n;i++){ const j=i*4; d[j]=lut[d[j]]; d[j+1]=lut[d[j+1]]; d[j+2]=lut[d[j+2]]; }
 }
 // Colour "clean scan" pipeline (v10.17). Two safe, GLOBAL steps — deliberately

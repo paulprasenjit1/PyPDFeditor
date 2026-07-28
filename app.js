@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.72";
+const APP_BUILD = "11.73";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -8225,7 +8225,13 @@ function confirmRasterise(before, losslessLen){
 // stays in the background, because the stencil can only paint a single colour
 // and a navy logo rendered black is a visible loss.
 const MRC = {
-  DPI: 300,          // stencil resolution
+  // v11.73: 300 -> 400. At 300dpi the 6pt print on a lab report is only a
+  // couple of pixels per stroke, so binarising it merged letters — "Total"
+  // came out as "Totaf". Compared against a 24MP phone photo of the same page
+  // (414dpi of real detail), 400dpi is where the letters separate again; 500
+  // cost another 100KB for no visible gain, since the capture is downsampled to
+  // 3200px (~387dpi) anyway.
+  DPI: 400,          // stencil resolution
   BG_DIV: 3,         // background is a third of that => 100dpi
   // v11.72: 58 -> 68. Grey fills now stay in the background instead of being
   // binarised into the stencil, so this layer carries more of what the page
@@ -8235,21 +8241,29 @@ const MRC = {
   // text-dominant page, so it stopped here.
   BG_Q: 68,          // background JPEG quality
   BLK: 16,           // classification block, pixels at DPI
-  DARK: 18,          // soft threshold: darker than local paper by this
+  // v11.73: 18 -> 26, and the reach 2 -> 1. Together these were fattening every
+  // stroke by up to two pixels a side, which on 6pt print is more than the
+  // stroke itself — the cause of the blobbed, merged letters.
+  DARK: 26,          // soft threshold: darker than local paper by this
   CORE_FRAC: 0.60,   // hard threshold: below this SHARE of local paper => real ink
-  CORE_NEAR: 2,      // a soft pixel joins the stencil only this close to core ink
+  CORE_NEAR: 1,      // a soft pixel joins the stencil only this close to core ink
   CHROMA_PICT: 40,   // block mean chroma above this => pictorial
   MID_PICT: 0.30,    // block solid mid-tone fraction above this => pictorial
   INK_CHROMA: 60,    // ink more colourful than this is left to the background
   MIN_GAIN: 0.15,    // must save at least this share to be worth using
-  MAX_PX: 14e6,      // refuse pages larger than this (memory guard, ~A3@300)
+  MAX_PX: 26e6,      // memory guard. A4@400 is 15.5MP; A3@400 would refuse.
   MAX_PICT: 0.70,    // mostly picture => MRC is the wrong tool, refuse
 };
 // Separable box blur. Uint8 in, Uint8 out, one Float32 scratch buffer — the
 // full-page Float32 arrays this replaced cost ~150MB on an A4 page at 300dpi,
 // which is not survivable on a phone.
+// v11.73: the scratch buffer is Uint8, not Float32. At 400dpi an A4 page is
+// 15.5M pixels, so a Float32 intermediate is 62MB on its own — on top of the
+// eight byte-per-pixel masks this pass already holds. Rounding the horizontal
+// means to whole levels costs about half a grey level, which is nothing against
+// thresholds of 26 and 0.6x, and takes the scratch to 15MB.
 function mrcBoxBlur(a, w, h, r){
-  const t = new Float32Array(w*h), o = new Uint8Array(w*h), d = 2*r+1;
+  const t = new Uint8Array(w*h), o = new Uint8Array(w*h), d = 2*r+1;
   for (let y=0; y<h; y++){
     let s = 0;
     for (let x=-r; x<=r; x++) s += a[y*w + Math.min(w-1, Math.max(0, x))];
@@ -8303,7 +8317,8 @@ function mrcSegment(px, w, h, stride, n, cfg){
   // Soft pixels join the stencil only within CORE_NEAR of a core pixel, so a
   // glyph keeps its anti-aliased edge while a grey fill — which contains no
   // core ink at all — stays in the background and keeps its actual tone.
-  const core = new Uint8Array(N), soft = new Uint8Array(N), midF = new Uint8Array(N);
+  let core = new Uint8Array(N);
+  const soft = new Uint8Array(N), midF = new Uint8Array(N);
   for (let i=0; i<N; i++){
     const p = Math.max(1, paper[i]);
     soft[i] = gray[i] < p - cfg.DARK ? 1 : 0;
@@ -8311,9 +8326,13 @@ function mrcSegment(px, w, h, stride, n, cfg){
     const v = gray[i]/p;
     midF[i] = (v > 0.35 && v < 0.80) ? 255 : 0;
   }
-  const coreNear = mrcBoxBlur(core, w, h, cfg.CORE_NEAR);
-  const dark = new Uint8Array(N);
-  for (let i=0; i<N; i++) dark[i] = (soft[i] && coreNear[i] > 0) ? 1 : 0;
+  // v11.73: `dark` is written back over `soft` and the temporaries are dropped
+  // as soon as they are spent. At 400dpi each of these masks is 15.5MB, so
+  // holding all of them to the end of the function is ~120MB on a phone.
+  let coreNear = mrcBoxBlur(core, w, h, cfg.CORE_NEAR);
+  const dark = soft;                       // same buffer, refined in place
+  for (let i=0; i<N; i++) dark[i] = (dark[i] && coreNear[i] > 0) ? 1 : 0;
+  coreNear = null; core = null;
   // A bold glyph is ringed by anti-aliased mid-tones, so counting mid-tone
   // pixels alone reads headings as pictures. Keep only mid-tones sitting
   // INSIDE a mid-tone neighbourhood: photo interiors survive, glyph rims do not.

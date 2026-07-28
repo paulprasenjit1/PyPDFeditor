@@ -4,6 +4,67 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.73] — 2026-07-28 — Measured against the camera, not against itself
+
+The original 24MP photo of the page made this diagnosable for the first time.
+Every previous round compared a scan against my idea of what it should look
+like; this one compares it against the same page as the camera actually saw it
+(414 dpi of real detail).
+
+| | camera photo | v11.72 scan | v11.73 |
+|---|---|---|---|
+| paper | 214 | 254 | 247 |
+| ink | 36 | 8 | 14 |
+| blown to pure white | 0.0% | **12.6%** | **0.0%** |
+| text resolution | 414 dpi, greyscale | 300 dpi, 1-bit | 400 dpi, 1-bit |
+
+### It was not MRC — it was two filters that run in every mode
+`applyAutoContrast` stretched the **2nd–98th** luminance percentiles onto the
+full 0–255. That is fine on a wide-range image, but the photo's whole page
+spans 47–219: the curve mapped 219 to 255 and clipped **12.6% of the page to
+pure white**, while everything below 47 crushed to pure black. That is the
+harshness, and it happens in *plain* mode too, which is why "plain" looked no
+gentler than "whiten".
+
+It now maps the 0.5th–99.5th percentiles into **6–248**, so neither end clips.
+Same curve, headroom at both ends.
+
+### Why the letters were merging
+Crushed ink also broke the text. Once the halo around each glyph is pushed
+toward black, more of it passes the ink threshold — and the stencil then
+fattened every stroke by up to two pixels a side. On 6pt lab-report print that
+is wider than the stroke itself, so letters ran together: **"Total" came out as
+"Totaf"**. Three changes, tested against the photo:
+
+- stencil **300 → 400 dpi** (500 cost another 100 KB for no visible gain — the
+  capture is downsampled to 3200px, about 387 dpi, anyway)
+- soft ink threshold **18 → 26**, so less of the halo qualifies
+- core reach **2 → 1 pixel**, so a stroke stops growing
+
+### Memory, because 400 dpi on A4 is 15.5 megapixels
+Naively this pass would hold about 230 MB on the phone. The blur scratch is now
+Uint8 rather than Float32 (62 MB → 15 MB), the soft mask is refined in place
+instead of allocating another, and spent temporaries are released. The guard
+rose to 26 MP so A4@400 passes and A3@400 is still refused.
+
+Cost: the endoscopy scan goes 293 KB → 455 KB, still **89% below** the 3,965 KB
+original.
+
+### What is still different from the photo, deliberately
+Paper is lifted to 247 and ink deepened to 14, against 214 and 36 in the photo —
+a scan is meant to look like the document, not like a photo of it under room
+light. The grey-world white balance also neutralises the paper's warm cast
+(chroma 10.5 → 8.0). If you would rather keep the paper's real tone, that is one
+constant and I can relax it.
+
+### Tests
+mrc-tests 29 → 40. `MR29`–`MR31` drive the real `applyAutoContrast` with the
+same narrow tonal range as the photo and assert nothing clips at either end;
+`MR32`–`MR35` pin the resolution, the two threshold changes, and that A4@400
+fits the memory guard while A3@400 does not.
+
+Seventeen suites green, corpus green.
+
 ## [v11.72] — 2026-07-28 — Grey is not ink
 
 Three scans from the phone (plain, whiten, HQ) came back harsh, with a
