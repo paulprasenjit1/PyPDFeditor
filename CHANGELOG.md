@@ -4,6 +4,68 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.78] — 2026-07-29 — Photo ID gets its pixels back, and a correction
+
+### Correcting v11.77
+I said raising `maxDim` to 3500 would give 300 dpi. It gave **278**. The real
+v11.77 page came out **3255px — below the cap**, so the sensor was the limit
+after all, not the constant. The cap is harmless where it is (it no longer
+binds; it is now 3508, exactly 300 dpi on A4, for when a future capture can
+reach it) but it is not what improved the picture.
+
+What improved was quality, and not the way I described either. v11.76's 714 KB
+was against a **700 KB** budget, so it had already been stepped down to the
+q0.70 floor — my earlier claim that it "settled at q0.80 and never stepped
+down" was wrong, based on comparing Safari's encoder output against Pillow's.
+v11.77's 900 KB budget let it hold q0.80. That is the whole 714 → 869 KB
+difference.
+
+### Size: 869 KB → about 760 KB, invisibly
+The same v11.77 page re-encoded at q0.72 is **indistinguishable from q0.80** at
+100% on this text. The budget is now **780 KB**, which lets a sparse page hold
+q0.80 and eases a dense one down a notch nobody can see.
+
+### Photo ID: the card was being drawn small
+The two-sided output had the card at **46%** of the sheet — roughly life size
+for an ID-1 card — and the fine print on a driving licence read as mush, with
+**37% of the page blank underneath**. The pixels were already captured; they
+were being thrown away at the drawing step.
+
+| | before | after |
+|---|---|---|
+| card width on the sheet | 1141 px | **1934 px** |
+| height cap | 30% of page | 38% |
+| blank at the bottom | 37% | **13%** |
+
+A single card is now centred on the sheet too, instead of sitting 17% down with
+half the page empty below it. An ID scan exists to be read, not to be a
+facsimile at life size.
+
+### The held front side now shows a thumbnail
+Reported: in both-sides mode nothing appeared in the strip after capturing the
+front — it filled in only when the back was done. The strip only ever mapped
+`scanPages`, and a held side is not a page yet, so the one capture that most
+needs confirming gave no confirmation at all.
+
+The front now appears immediately, marked with a dashed edge and the word
+"front" rather than a number, because it is not a page: tapping it discards the
+side rather than opening a review sheet for a page that does not exist.
+
+### A test caught a gap in my own fix
+`SC155` checks that every place clearing the held card also clears its
+thumbnail — otherwise a ghost front survives into the next card. It failed at
+first (4 of 5), which sent me looking; the fifth match turned out to be the
+`let` declaration, so the *test* was wrong, not the code. Fixed to exclude the
+declaration and it now genuinely covers all four clear-sites.
+
+`CP64e` was also rewritten rather than repaired: it asserted the budget was
+large enough to *never* step quality down, and that premise is now deliberately
+false. It checks the thing that still matters — that the floor stays at the
+q0.70 that was measured as invisible, and that the budget is not so tight every
+page hits it.
+
+Seventeen suites green (scan 177 → 185, compress 90 → 91), corpus green.
+
 ## [v11.77] — 2026-07-28 — 300 dpi, because v11.76 proved the ceiling had moved
 
 ### v11.76 worked, and that is measurable

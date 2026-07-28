@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.77";
+const APP_BUILD = "11.78";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -5602,6 +5602,10 @@ if (scanPaper !== "a4" && scanPaper !== "auto") scanPaper = "auto";
 let idTwoSide = true;
 try { if (localStorage.getItem("scanIdTwoSide")==="0") idTwoSide=false; } catch(e){}
 let idPendingCard = null;     // canvas of side 1, held until side 2 arrives
+// v11.78: a thumbnail for that held side. Without it the strip stayed empty
+// after capturing the front of a card and only filled in once the back was
+// done — so the one capture that most needs confirming showed nothing.
+let idPendingThumb = null;
 // v11.67: index a retake will replace, or -1 for "add to the end"
 let scanRetakeAt = -1;
 // v10.74: std now warps to a larger long side (was 2560) so the higher-res 4K
@@ -5638,7 +5642,20 @@ let scanRetakeAt = -1;
 // 900KB leaves the encoder at its starting quality instead of stepping down.
 // v11.76's page was 714KB against a 700KB budget and had NOT been stepped down
 // (q0.80 re-encodes to 697KB), so the budget was already at its useful edge.
-const SCAN_Q = { std:{ jpeg:0.80, maxDim:3500, budget:900000, qFloor:0.70 },
+// v11.78: budget 900KB -> 780KB. Two corrections from real v11.77 output.
+//
+// First, my 3500 figure did not buy 300 dpi. The v11.77 page came out 3255px,
+// BELOW the cap — so the sensor, not the constant, is the limit after all, and
+// raising it moved the resolution only 274 -> 278 dpi. The cap is harmless
+// where it is (it no longer binds) but it is not what improved the picture.
+//
+// What actually improved was quality: v11.76's 714KB was against a 700KB
+// budget, so it HAD been stepped down to the q0.70 floor. v11.77 at a 900KB
+// budget stays at q0.80. That is the whole 714 -> 869KB difference, and it was
+// worth having — but not all of it. The same page re-encoded at q0.72 is
+// indistinguishable from q0.80 at 100% on this text, so 780KB lets a sparse
+// page hold q0.80 and eases a dense one down a notch nobody can see.
+const SCAN_Q = { std:{ jpeg:0.80, maxDim:3508, budget:780000, qFloor:0.70 },
                  small:{ jpeg:0.62, maxDim:1400 } };
 // Encode a canvas to JPEG, stepping quality down only if the blob exceeds the
 // byte budget (document scans are mostly white and compress well, so a sparse
@@ -5764,7 +5781,7 @@ async function startScan(append){
   // fresh look at whether the high-resolution mode is behaving.
   capFrame = null; scanFallback = false; scanRetakeAt = -1; exposureChecked = false;
   scanAppendTo = (append && workingBytes) ? { name: fileName } : null;
-  idPendingCard = null;
+  idPendingCard = null; idPendingThumb = null;
   disarmAuto(); autoBusy = false; autoNeedsRelease = false;
   refreshAutoBtn(); refreshPaperBtn(); refreshIdTwoSideBtn();
   updateScanCount();
@@ -5801,7 +5818,7 @@ function endScan(){
   stopCamera();
   scanPages = []; capFrame = null; scanRetakeAt = -1;
   scanAppendTo = null;           // v11.35: forget any append target
-  idPendingCard = null;          // v11.34: drop a half-finished card pair
+  idPendingCard = null; idPendingThumb = null;   // v11.34: drop a half-finished card pair
   disarmAuto(); autoBusy = false; autoNeedsRelease = false;
   updateScanCount();
   $("scanCam").classList.remove("show");
@@ -5825,9 +5842,18 @@ function updateScanCount(){
 // thumbnail strip above the shutter: tap a page to review or delete it
 function renderScanThumbs(){
   const strip=$("scanThumbs");
-  strip.classList.toggle("has", scanPages.length>0);
+  // v11.78: the held front of a two-sided card counts as something to show.
+  strip.classList.toggle("has", scanPages.length>0 || !!idPendingThumb);
   strip.innerHTML = scanPages.map((p,i)=>
-    h`<button class="sthumb" data-pg="${i}" aria-label="Review scanned page ${i+1}"><img src="${p.thumb}" alt="Page ${i+1}"><span class="num">${i+1}</span></button>`).join("");
+    h`<button class="sthumb" data-pg="${i}" aria-label="Review scanned page ${i+1}"><img src="${p.thumb}" alt="Page ${i+1}"><span class="num">${i+1}</span></button>`).join("")
+    // It is deliberately marked as waiting rather than numbered: it is not a
+    // page yet, and tapping it discards the side rather than opening a review
+    // sheet for a page that does not exist.
+    + (idPendingThumb
+        ? h`<button class="sthumb pending" id="idPendingThumb" aria-label="Front of the card, waiting for the back — tap to discard it"><img src="${idPendingThumb}" alt="Front of the card"><span class="num">front</span></button>`
+        : "");
+  const pend = $("idPendingThumb");
+  if (pend) pend.onclick = ()=> clearIdPending(false);
   strip.querySelectorAll("[data-pg]").forEach(b=>{
     const i = +b.dataset.pg;
     b.onclick = ()=> openScanPageSheet(i);
@@ -7124,7 +7150,16 @@ function compositeCardsOnA4(cards){
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
   if (!list.length) return c;
 
-  const TARGET_W = Math.round(ID_PAGE_W*0.46);          // card width ≈ 46% of the page
+  // v11.78: 46% -> 78% of the page width.
+  //
+  // At 46% a card was placed at roughly life size (an ID-1 card is 85.6mm on a
+  // 210mm sheet, so 41%), which sounds right and reads badly: the fine print on
+  // a driving licence came out mushy, and 37% of the sheet was left blank
+  // underneath. A scan of an ID exists to be READ, not to be a facsimile at
+  // life size, and the pixels are already captured — they were being thrown
+  // away by drawing small. 78% is about 1.7x the linear size, so the same
+  // captured detail lands on 1.7x the paper.
+  const TARGET_W = Math.round(ID_PAGE_W*0.78);
   // Each side is fitted independently: the two captures are rarely framed
   // identically, and forcing a shared scale would shrink whichever side
   // happened to be photographed from further away.
@@ -7136,18 +7171,25 @@ function compositeCardsOnA4(cards){
   };
   if (list.length === 1){
     const { dw, dh } = fit(list[0], Math.round(ID_PAGE_H*0.42));
-    ctx.drawImage(list[0], Math.round((ID_PAGE_W-dw)/2), Math.round(ID_PAGE_H*0.17), dw, dh);
+    // v11.78: centre it on the sheet. The old 17% offset put a single card high
+    // on the page with roughly half of it blank underneath — the same bias the
+    // two-sided layout had, and just as odd on a printed page.
+    ctx.drawImage(list[0], Math.round((ID_PAGE_W-dw)/2), Math.round((ID_PAGE_H-dh)/2), dw, dh);
     return c;
   }
   // Two sides: stack them in the upper two-thirds with a clear gap, both
   // horizontally centred. Height cap is per card so a tall card (a passport
   // page rather than an ID-1 card) still cannot overrun the sheet.
-  const maxH = Math.round(ID_PAGE_H*0.30);
+  // v11.78: the height cap rises with the width, or it would simply undo it —
+  // an ID-1 card at 78% width is 1234px tall, over the old 30% (1052) ceiling,
+  // so the card would have been re-shrunk to fit and nothing would change.
+  const maxH = Math.round(ID_PAGE_H*0.38);
   const a = fit(list[0], maxH), b = fit(list[1], maxH);
-  const gap = Math.round(ID_PAGE_H*0.055);
+  const gap = Math.round(ID_PAGE_H*0.045);
   const total = a.dh + gap + b.dh;
-  // centre the pair in the upper 78% of the page, never higher than a 9% margin
-  let y = Math.max(Math.round(ID_PAGE_H*0.09), Math.round((ID_PAGE_H*0.78-total)/2));
+  // v11.78: centre the pair on the WHOLE sheet rather than the upper 78%. The
+  // old bias left 37% of the page empty at the bottom on a real two-sided scan.
+  let y = Math.max(Math.round(ID_PAGE_H*0.06), Math.round((ID_PAGE_H-total)/2));
   ctx.drawImage(list[0], Math.round((ID_PAGE_W-a.dw)/2), y, a.dw, a.dh);
   y += a.dh + gap;
   ctx.drawImage(list[1], Math.round((ID_PAGE_W-b.dw)/2), y, b.dw, b.dh);
@@ -7160,6 +7202,17 @@ function compositeCardOnA4(cardCanvas){ return compositeCardsOnA4([cardCanvas]);
 function takeIdSide(card, returnToCamera){
   if (!idPendingCard){
     idPendingCard = card;
+    // v11.78: make a thumbnail for the held side straight away, so the strip
+    // shows the front the moment it is taken instead of staying empty until the
+    // back is done.
+    try {
+      const t = document.createElement("canvas");
+      const s = Math.min(1, 220/Math.max(card.width, card.height));
+      t.width = Math.max(1, Math.round(card.width*s));
+      t.height = Math.max(1, Math.round(card.height*s));
+      t.getContext("2d").drawImage(card, 0, 0, t.width, t.height);
+      idPendingThumb = t.toDataURL("image/jpeg", 0.7);
+    } catch(e){ idPendingThumb = null; }
     capFrame = null;
     if (returnToCamera){
       $("scanCrop").classList.remove("show");
@@ -7167,11 +7220,12 @@ function takeIdSide(card, returnToCamera){
       if (!scanFallback) resumeCamera();
     }
     updateScanCount();          // refreshes the "side 1 held" hint
+    renderScanThumbs();         // ...and shows the front that is being held
     setStatus("Front captured. Turn the card over and scan the back.","ok");
     return null;
   }
   const page = compositeCardsOnA4([idPendingCard, card]);
-  idPendingCard = null;
+  idPendingCard = null; idPendingThumb = null;
   return page;
 }
 // Drop a half-finished card pair. Called when ID mode or the two-side toggle is
@@ -7179,8 +7233,8 @@ function takeIdSide(card, returnToCamera){
 // silently welded onto an unrelated card later.
 function clearIdPending(quiet){
   if (!idPendingCard) return;
-  idPendingCard = null;
-  updateScanCount();
+  idPendingCard = null; idPendingThumb = null;
+  updateScanCount(); renderScanThumbs();
   if (!quiet) setStatus("The held front side was discarded.","warn");
 }
 // draw the captured photo onto the crop canvas with the active filter applied,

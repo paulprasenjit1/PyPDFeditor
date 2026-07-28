@@ -623,6 +623,10 @@ input[type=file] { display:none; }
 .scanthumbs.has { display:flex; }
 .scanthumbs .sthumb { position:relative; flex:0 0 auto; border:0; padding:0;
           background:transparent; border-radius:6px; }
+/* v11.78: the held front of a two-sided card. Dashed edge and a word instead of
+   a number, because it is not a page yet — tapping it discards the side. */
+.scanthumbs .sthumb.pending img { outline:1.5px dashed var(--accent2); outline-offset:1px; opacity:.85; }
+.scanthumbs .sthumb.pending .num { background:var(--accent2); font-size:9px; padding:0 4px; }
 .scanthumbs .sthumb img { display:block; height:56px; width:auto; border-radius:6px;
           border:1px solid #3a4150; background:#fff; }
 .scanthumbs .sthumb .num { position:absolute; right:-4px; top:-6px; min-width:18px;
