@@ -4,6 +4,55 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.58] — 2026-07-28 — The green outline finds pale pages; sizing steadied
+
+### The outline never appeared on a white page on a pale surface
+
+Not a regression — a limit that had always been there and only showed up now.
+`detectQuad` separates page from background by brightness, so it needs the desk
+to be darker than the paper. Measured at the live preview's working size:
+
+| scene | before | after |
+|---|---|---|
+| white page, dark desk | found | found |
+| white page, mid-grey desk | found | found |
+| white page, **light** desk | **missed** | found |
+| white page, **white** desk | **missed** | found |
+| page filling the frame | found | found |
+| **blown-out** page, light desk | **missed** | found |
+
+A white medical report on a pale table hits three of those rows at once, which
+is why no green box ever appeared, in either document or Photo ID mode.
+
+The fix leaves `detectQuad` untouched and adds a fallback used only when it
+finds nothing: subtract a heavily blurred copy of the frame from itself. That
+removes the overall lightness the page and the desk have in common and leaves
+the step at the paper's edge, amplified ×8 — a gain chosen by sweeping gain
+against blur radius over all six scenes, the lowest that finds every one.
+Applied to both the live preview and the still frame.
+
+### Retyped words on a scan were sometimes too big
+
+v11.57 measured a word's height between its outermost ink pixels, so one stray
+row — the descender of the line above, a table rule, a speck of scanner noise —
+stretched the measurement and the replacement came out oversized. The height is
+now taken from the row profile: start at the densest row (always part of the
+word) and grow outwards, stopping at a genuinely blank row. Ascenders and
+descenders join that band with no gap so they are kept in full; a speck beyond a
+blank row is left out. A first attempt at this thresholded rows by density
+instead and trimmed the sparse cap rows — 9.3pt for 11pt print — so it was
+replaced rather than shipped.
+
+### The harness caught a mistake mid-fix
+
+Adding `detectQuadRobust` broke five harness tests — the ones that check the
+green outline is actually drawn — because the test rig injects scan-core
+functions by name and the new one was not in the list. A test-rig gap rather
+than a product fault, but worth recording: **the outline is covered by tests,
+and they did their job.**
+
+editor-tests 85 → 87. All fifteen suites green.
+
 ## [v11.57] — 2026-07-28 — Editing a scan: right face, right size, right baseline
 
 Reported from a real endoscopy report: a retyped word came out in the wrong

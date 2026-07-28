@@ -782,6 +782,52 @@ function quadArea(q){
   return Math.abs(a)/2;
 }
 
+// ---- v11.58: finding a pale page on a pale surface -------------------------
+// detectQuad separates page from background by brightness (Otsu + largest
+// connected component). That works when the desk is darker than the paper and
+// fails outright when it is not — measured on synthetic frames at the live
+// working size:
+//
+//   white page on a dark desk .......... found
+//   white page on a mid-grey desk ...... found
+//   white page on a LIGHT desk ......... NOT FOUND
+//   white page on a WHITE desk ......... NOT FOUND
+//   bright page, light desk ............ NOT FOUND
+//
+// which is why the green outline never appeared on a white medical report laid
+// on a pale table. The page edge is still there, it is just a small step in
+// brightness that a global threshold cannot see.
+//
+// The fallback subtracts a heavily blurred copy of the frame from itself. That
+// removes the overall lightness — the thing the two surfaces have in common —
+// and leaves the local step at the paper's edge, amplified. detectQuad then
+// runs on THAT, unchanged, so nothing about the normal path moves.
+function localContrastImage(im){
+  const w = im.width, h = im.height, n = w*h, d = im.data;
+  const L = new Float32Array(n);
+  for (let i=0,j=0;i<n;i++,j+=4) L[i] = (d[j]*77 + d[j+1]*151 + d[j+2]*28) >> 8;
+  const bg = Float32Array.from(L);
+  boxBlurF(bg, w, h, Math.max(3, Math.round(Math.min(w,h)/8)));
+  const out = new Uint8ClampedArray(n*4);
+  for (let i=0,j=0;i<n;i++,j+=4){
+    // ×8 was chosen by sweeping amplification against blur radius over the six
+    // cases above; it is the lowest gain that finds all of them, including
+    // white-on-white and a blown-out page.
+    const v = 128 + (L[i] - bg[i]) * 8;
+    out[j] = out[j+1] = out[j+2] = v < 0 ? 0 : v > 255 ? 255 : v;
+    out[j+3] = 255;
+  }
+  return { data:out, width:w, height:h };
+}
+// The detector the app actually calls. Ordinary contrast first — that path is
+// unchanged and still wins — and only when it finds nothing is the pale-on-pale
+// fallback tried.
+export function detectQuadRobust(im){
+  const q = detectQuad(im);
+  if (q) return q;
+  try { return detectQuad(localContrastImage(im)); } catch(e){ return null; }
+}
+
 // ---- v11.32: auto-capture readiness ---------------------------------------
 // Pure decision helpers for the live preview: may the shutter fire by itself?
 //

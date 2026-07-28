@@ -5,7 +5,7 @@ import * as mupdf from "./vendor/mupdf/mupdf.js";
 // NOTE: keep this on ONE line. tests/harness.mjs and tests/scenario-tests.mjs
 // evaluate app.js by stripping `^import .*$` line by line, so a wrapped import
 // statement leaves a dangling `... } from "./scan-core.js";` behind.
-import { warpCore, colourBalanceCore, detectQuad, flattenIllumination, documentEnhance, idCardEnhance, autoCaptureReady, quadMaxCornerShift, AUTO } from "./scan-core.js";
+import { warpCore, colourBalanceCore, detectQuad, detectQuadRobust, flattenIllumination, documentEnhance, idCardEnhance, autoCaptureReady, quadMaxCornerShift, AUTO } from "./scan-core.js";
 
 const $ = id => document.getElementById(id);
 // v11.18: belt-and-braces dark keyboard — set color-scheme on the root via the
@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.57";
+const APP_BUILD = "11.58";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.57
+const BUILD_DATETIME = "27 Jul 2026";   // v11.58
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "editing a scanned page now matches the print properly: the typeface, the size and the baseline are measured from the ink itself instead of the recogniser's box. The typeface matching was also failing silently on the phone because it tried to redraw the whole page for one word — it now looks at just that word.";
+const WHATS_NEW = "the green outline now finds a white page on a pale table — it could only ever see a page darker than its background, which is why it never appeared on a report laid on a light surface. Retyped words on a scan are also sized more steadily, so a speck of noise beside a word no longer makes it come out too big.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -3433,15 +3433,39 @@ function spanInkMask(pageIndex, sp){
   return clipInkMask(pageIndex, [sp.x0-1, sp.y0-1, sp.x1+1, sp.y1+1], 44);
 }
 // Where the printed word's ink actually sits, in page points.
+//
+// v11.58: measured from the ROW PROFILE, not from the outermost ink pixel.
+// The outermost pixel is whatever strayed into the box — the descender of the
+// line above, a table rule, a speck of scanner noise — and one such row made
+// the measured height too large, which is how a retyped word came out
+// noticeably bigger than its neighbours. Rows carrying less than a twelfth of
+// the busiest row's ink are treated as strays and skipped; the real body of a
+// word is many rows of substantial ink, so this cannot trim the word itself.
 function inkExtentPt(mask){
   if (!mask) return null;
   const { m, w, h, s, x0Pt, y0Pt } = mask;
-  let top=h, bot=-1, left=w, right=-1;
-  for (let y=0;y<h;y++) for (let x=0;x<w;x++) if (m[y*w+x]){
-    if (y<top) top=y; if (y>bot) bot=y;
-    if (x<left) left=x; if (x>right) right=x;
+  const rows = new Int32Array(h);
+  let left=w, right=-1, any=0;
+  for (let y=0;y<h;y++){
+    let c = 0;
+    for (let x=0;x<w;x++) if (m[y*w+x]){
+      c++;
+      if (x<left) left=x; if (x>right) right=x;
+    }
+    rows[y] = c; if (c) any++;
   }
-  if (bot < 0) return null;
+  if (!any || right < 0) return null;
+  // Grow outwards from the densest row — the x-height band, which is always
+  // part of the word — and stop at the first genuinely blank row. Ascenders
+  // and descenders are joined to that band with no gap, so they are kept in
+  // full; a speck from the line above sits beyond a blank row, so it is left
+  // out. Thresholding by row density instead would have trimmed the sparse
+  // cap and ascender rows, which measured 9.3pt for 11pt print.
+  let peakRow = 0;
+  for (let y=1;y<h;y++) if (rows[y] > rows[peakRow]) peakRow = y;
+  let top = peakRow, bot = peakRow;
+  while (top > 0 && rows[top-1] > 0) top--;
+  while (bot < h-1 && rows[bot+1] > 0) bot++;
   return { topPt: y0Pt + top/s, botPt: y0Pt + (bot+1)/s,
            leftPt: x0Pt + left/s, rightPt: x0Pt + (right+1)/s,
            hPt: (bot-top+1)/s, wPt: (right-left+1)/s };
@@ -5907,7 +5931,7 @@ function detectOnVideoFrame(v){
   const sw=Math.max(2,Math.round(vw*s)), sh=Math.max(2,Math.round(vh*s));
   const ctx = scratch(sw,sh).getContext("2d",{willReadFrequently:true});
   ctx.drawImage(v,0,0,sw,sh);
-  const q = detectQuad(ctx.getImageData(0,0,sw,sh));
+  const q = detectQuadRobust(ctx.getImageData(0,0,sw,sh));
   return q ? q.map(p=>({x:p.x/s, y:p.y/s})) : null;   // → video px
 }
 // Draw the detected document outline on the live preview, plus (v11.32) the
@@ -6030,7 +6054,7 @@ function detectQuadOnFrame(frame){
     const sw=Math.max(2,Math.round(frame.width*s)), sh=Math.max(2,Math.round(frame.height*s));
     const ctx = scratch(sw,sh).getContext("2d",{willReadFrequently:true});
     ctx.drawImage(frame,0,0,sw,sh);
-    const q = detectQuad(ctx.getImageData(0,0,sw,sh));
+    const q = detectQuadRobust(ctx.getImageData(0,0,sw,sh));
     return q ? orderQuad(q.map(p=>({x:p.x/s, y:p.y/s}))) : null;
   } catch(e){ return null; }
 }
