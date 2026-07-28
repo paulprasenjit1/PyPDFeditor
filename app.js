@@ -5,7 +5,7 @@ import * as mupdf from "./vendor/mupdf/mupdf.js";
 // NOTE: keep this on ONE line. tests/harness.mjs and tests/scenario-tests.mjs
 // evaluate app.js by stripping `^import .*$` line by line, so a wrapped import
 // statement leaves a dangling `... } from "./scan-core.js";` behind.
-import { warpCore, colourBalanceCore, detectQuad, detectQuadRobust, frameStats, sharpEnough, inkFraction, looksBlank, flattenIllumination, documentEnhance, idCardEnhance, autoCaptureReady, quadMaxCornerShift, AUTO } from "./scan-core.js";
+import { warpCore, colourBalanceCore, detectQuad, detectQuadRobust, frameStats, sharpEnough, inkFraction, looksBlank, toGreyscale, toBlackAndWhite, flattenIllumination, documentEnhance, idCardEnhance, autoCaptureReady, quadMaxCornerShift, AUTO } from "./scan-core.js";
 
 const $ = id => document.getElementById(id);
 // v11.18: belt-and-braces dark keyboard — set color-scheme on the root via the
@@ -20,14 +20,14 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.66";
+const APP_BUILD = "11.67";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","qStd","qSmall","enhToggle","idToggle","cropReset","cropRetake","cropUse",
     "autoBtn","paperBtn","idBothToggle",
-    "whiteBtn","imgPlaceBtn","insImgInput","formBtn","hqBtn","hqIdle",
+    "whiteBtn","imgPlaceBtn","insImgInput","formBtn","hqBtn","hqIdle","colourBtn",
     "ge0","ge1","ge2","ge3","he0","he1","he2","he3"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.66
+const BUILD_DATETIME = "27 Jul 2026";   // v11.67
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "the blank black screen in HQ mode now explains itself — it shows a camera mark and a line telling you to tap there or the shutter for the next page, and tapping the empty area opens the camera.";
+const WHATS_NEW = "two scanner additions: a Colour / Greyscale / Black & white button (black & white makes a text page a fraction of the size, with sharper letters), and in the page review you can now retake a single page in place or move it earlier or later.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -5563,6 +5563,10 @@ const HQ_BUDGET  = 1100000;
 // the image. A4 is still one tap away in the crop filter row for anyone who
 // wants it, and the choice persists.
 let scanPaper = "auto";
+// v11.67: colour / grey / bw. See toBlackAndWhite in scan-core for why the
+// threshold is local rather than fixed.
+let scanColour = "colour";
+try { const c=localStorage.getItem("scanColour"); if (c==="grey"||c==="bw") scanColour=c; } catch(e){}
 try { const p=localStorage.getItem("scanPaper"); if (p && PAPER_SIZES[p]) scanPaper=p; } catch(e){}
 // v11.34 "Both sides": front and back of one card composited onto a single A4
 // page. Declared here with the rest of the scanner state because the toggle is
@@ -5571,6 +5575,8 @@ try { const p=localStorage.getItem("scanPaper"); if (p && PAPER_SIZES[p]) scanPa
 let idTwoSide = false;
 try { if (localStorage.getItem("scanIdTwoSide")==="1") idTwoSide=true; } catch(e){}
 let idPendingCard = null;     // canvas of side 1, held until side 2 arrives
+// v11.67: index a retake will replace, or -1 for "add to the end"
+let scanRetakeAt = -1;
 // v10.74: std now warps to a larger long side (was 2560) so the higher-res 4K
 // capture keeps its detail instead of being shrunk away. File size is held in
 // check by encodeUnderBudget() (size-budgeted adaptive JPEG) rather than a
@@ -5697,7 +5703,7 @@ let scanAppendTo = null;
 async function startScan(append){
   // scanPages is kept as-is: it is always [] here except when a previous
   // session was restored from IndexedDB, in which case we continue it
-  capFrame = null; scanFallback = false;
+  capFrame = null; scanFallback = false; scanRetakeAt = -1;
   scanAppendTo = (append && workingBytes) ? { name: fileName } : null;
   idPendingCard = null;
   disarmAuto(); autoBusy = false; autoNeedsRelease = false;
@@ -5734,7 +5740,7 @@ async function startScan(append){
 }
 function endScan(){
   stopCamera();
-  scanPages = []; capFrame = null;
+  scanPages = []; capFrame = null; scanRetakeAt = -1;
   scanAppendTo = null;           // v11.35: forget any append target
   idPendingCard = null;          // v11.34: drop a half-finished card pair
   disarmAuto(); autoBusy = false; autoNeedsRelease = false;
@@ -5782,6 +5788,14 @@ function openScanPageSheet(i){
     <h3>Scanned page ${i+1} of ${scanPages.length}</h3>
     <div class="row"><img class="pgprev" id="pgPrev" alt="Page ${i+1}"></div>
     <div class="row"><button class="full" id="pgRot">⟳ Rotate${rot?" (now "+rot+"°)":""}</button></div>
+    <!-- v11.67: fix one bad page without starting the stack again. Retake puts
+         the new photo back in THIS position, and the arrows move a page that
+         went in out of order — both previously meant deleting and rescanning. -->
+    <div class="row"><button class="full" id="pgRetake">Retake this page</button></div>
+    ${raw(scanPages.length > 1 ? `<div class="row teseg" id="pgMove">
+      <button class="segb" data-mv="-1" ${i===0?"disabled":""}>← Move earlier</button>
+      <button class="segb" data-mv="1" ${i===scanPages.length-1?"disabled":""}>Move later →</button>
+    </div>` : "")}
     <div class="row"><button class="full" id="pgDel">Delete this page</button></div>
     <div class="row"><button class="ghost full" id="pgClose">Close</button></div>`;
   // v11.33: the preview is turned with CSS so the stored JPEG is never
@@ -5805,6 +5819,32 @@ function openScanPageSheet(i){
     updateScanCount();
     setStatus(scanPages.length ? "Page removed — "+scanPages.length+" page(s) left."
                                : "Page removed — no pages scanned yet.","ok");
+  };
+  // v11.67: reorder. Buttons rather than a drag: a thumbnail strip on a phone
+  // is a poor drag target, and one tap per position is unambiguous.
+  if ($("pgMove")) $("pgMove").querySelectorAll("[data-mv]").forEach(b=>{
+    b.onclick = ()=>{
+      const dir = +b.dataset.mv, j = i + dir;
+      if (j < 0 || j >= scanPages.length) return;
+      const [m] = scanPages.splice(i,1);
+      scanPages.splice(j,0,m);
+      done();
+      renderScanThumbs(); persistScan(); updateScanCount();
+      setStatus("Page moved to position "+(j+1)+" of "+scanPages.length+".","ok");
+      openScanPageSheet(j);                 // follow the page the user moved
+    };
+  });
+  // v11.67: retake. The replacement goes back into THIS slot rather than onto
+  // the end, which is the whole point — otherwise it is delete-and-rescan with
+  // extra steps.
+  $("pgRetake").onclick=()=>{
+    done();
+    scanRetakeAt = i;
+    $("scanCrop").classList.remove("show");
+    $("scanCam").classList.add("show");
+    setStatus("Retaking page "+(i+1)+" — the new photo replaces it in place.","ok");
+    if (scanHiQ || scanFallback){ refreshScanIdle(); $("camInput").click(); }
+    else { refreshScanIdle(); resumeCamera(); }
   };
   $("pgClose").onclick=done;
   openSheet();
@@ -6677,6 +6717,25 @@ function refreshPaperBtn(){
 }
 refreshPaperBtn();
 
+// v11.67: colour mode cycler, in the same row as the paper size.
+const COLOUR_LABEL = { colour:"Colour", grey:"Greyscale", bw:"Black & white" };
+$("colourBtn").onclick = ()=>{
+  scanColour = scanColour === "colour" ? "grey" : scanColour === "grey" ? "bw" : "colour";
+  try { localStorage.setItem("scanColour", scanColour); } catch(e){}
+  refreshColourBtn();
+  setStatus(scanColour === "colour"
+    ? "Colour — pages are stored as captured."
+    : scanColour === "grey"
+    ? "Greyscale — colour dropped. Smaller files, and a printed document loses nothing."
+    : "Black & white — two tones, thresholded against the page's own paper. Much smaller, and text comes out sharper than a photograph of it.","ok");
+};
+function refreshColourBtn(){
+  const b = $("colourBtn"); if (!b) return;
+  b.textContent = COLOUR_LABEL[scanColour] || "Colour";
+  b.classList.toggle("on", scanColour !== "colour");
+}
+refreshColourBtn();
+
 // v11.32: auto capture toggle.
 $("autoBtn").onclick = ()=> setScanAuto(!scanAuto);
 function setScanAuto(on){
@@ -6943,6 +7002,10 @@ async function commitScanPage(frame, q, opts){
       if (scanEnhance){ flattenIllumination(out.data, out.width, out.height);
         documentEnhance(out.data, out.width, out.height); }   // natural Lens polish (v10.75)
     }
+    // v11.67: store the page the way the user asked for. Photo ID mode keeps
+    // its own colour-true treatment and is deliberately not touched here.
+    if (scanColour === "grey") toGreyscale(out.data, out.width, out.height);
+    else if (scanColour === "bw") toBlackAndWhite(out.data, out.width, out.height);
     c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
     c.getContext("2d").putImageData(out,0,0);
   }
@@ -7005,8 +7068,17 @@ async function pushScanPage(c, w, h){
     bc.getContext("2d",{willReadFrequently:true}).drawImage(c,0,0,bw,bh);
     blank = looksBlank(bc.getContext("2d").getImageData(0,0,bw,bh));
   } catch(e){}
-  scanPages.push({ bytes:new Uint8Array(await blob.arrayBuffer()), w, h,
-                   thumb:tc.toDataURL("image/jpeg",0.7), rot:0, blank });
+  const rec = { bytes:new Uint8Array(await blob.arrayBuffer()), w, h,
+                thumb:tc.toDataURL("image/jpeg",0.7), rot:0, blank };
+  // v11.67: a retake replaces the page it was started from, keeping its place
+  // in the stack; anything else goes on the end.
+  if (scanRetakeAt >= 0 && scanRetakeAt < scanPages.length){
+    scanPages[scanRetakeAt] = rec;
+    scanRetakeAt = -1;
+  } else {
+    scanRetakeAt = -1;
+    scanPages.push(rec);
+  }
 }
 
 $("cropUse").onclick = async ()=>{

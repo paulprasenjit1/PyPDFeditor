@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.66">
+<html lang="en" data-build="11.67">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -294,6 +294,10 @@
     <button id="qSmall">Small file</button>
     <button id="enhToggle" class="on" aria-pressed="true">Whiten</button>
     <button id="idToggle" aria-pressed="false">Photo ID</button>
+    <!-- v11.67: how the page is STORED. Cycles Colour -> Greyscale -> B&W;
+         B&W is what makes a text page a tenth of the size, with sharper
+         letters, because the compress pass then stores it as CCITT G4. -->
+    <button id="colourBtn" aria-label="Colour mode">Colour</button>
     <!-- v11.34: both sides of one card on a single A4 page. Only shown while
          Photo ID mode is on, since it means nothing otherwise. -->
     <button id="idBothToggle" aria-pressed="false" hidden>Both sides</button>

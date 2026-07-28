@@ -870,6 +870,51 @@ export function sharpEnough(sharp, best, ratio){
   return sharp >= best * (ratio == null ? 0.82 : ratio);
 }
 
+// ---- v11.67: how the finished page is stored ------------------------------
+// The choice every scanner app puts in front of the user, and the one this app
+// never had. It is not a filter — it decides how the page is ENCODED, which is
+// where nearly all of a scan's size lives:
+//
+//   colour  as captured.
+//   grey    chroma dropped. A JPEG of a grey page is much smaller than the
+//           same page in colour, and a printed document loses nothing.
+//   bw      two tones, thresholded against the page's own local paper level
+//           rather than a fixed grey — the same reasoning as blank detection,
+//           and it matters more here: a fixed threshold turns a shadowed
+//           corner solid black. Once the page really is two-tone the existing
+//           compress pass stores it as CCITT G4, which is how a text page ends
+//           up a tenth of the size with SHARPER letters than a JPEG gives.
+//
+// In place, on the ImageData the scanner already holds.
+export function toGreyscale(d, w, h){
+  const n = w*h;
+  for (let i=0;i<n;i++){
+    const j = i*4;
+    const L = (d[j]*77 + d[j+1]*151 + d[j+2]*28) >> 8;
+    d[j] = d[j+1] = d[j+2] = L;
+  }
+}
+export function toBlackAndWhite(d, w, h){
+  const n = w*h;
+  if (n < 16) return;
+  const L = new Float32Array(n);
+  for (let i=0;i<n;i++){ const j=i*4; L[i] = (d[j]*77 + d[j+1]*151 + d[j+2]*28) >> 8; }
+  // local paper level: a big box blur is the cheapest honest estimate, and the
+  // radius is a fraction of the page so it follows a shadow without following
+  // the letters
+  const bg = Float32Array.from(L);
+  boxBlurF(bg, w, h, Math.max(4, Math.round(Math.max(w,h)*0.02)));
+  for (let i=0;i<n;i++){
+    // 14 levels below the local paper is ink. Tighter than blank detection's
+    // 45, because here we are separating strokes from paper, not deciding
+    // whether a page has anything on it at all.
+    const ink = L[i] < bg[i] - 14;
+    const v = ink ? 0 : 255;
+    const j = i*4;
+    d[j] = d[j+1] = d[j+2] = v;
+  }
+}
+
 // ---- v11.64: is this page blank? ------------------------------------------
 // A blank page is one where almost nothing is darker than the paper it is
 // printed on. That has to be judged against the page's OWN paper, not a fixed

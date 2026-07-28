@@ -4,6 +4,40 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.67] — 2026-07-28 — Colour modes, and fixing one page without redoing the stack
+
+### Colour · Greyscale · Black & white
+The choice every scanner app puts in front of the user, and the one this app
+never had. It is not a filter — it decides how the page is **encoded**, which
+is where nearly all of a scan's size lives. New button in the crop row, beside
+the paper size, remembered between sessions.
+
+**Black & white is the interesting one.** It thresholds against the page's
+*own local paper level* rather than a fixed grey, which is what stops a
+shadowed corner turning solid black — measured on a page with a shadow across
+it, ink comes out at 22% on the bright side and 21% on the shadowed side,
+where a fixed threshold would have flooded one end. Once the page really is
+two-tone, the compress pass written back in v11.36 recognises it and stores it
+as **CCITT G4**: a text page ends up a fraction of the size, with *sharper*
+letters than a photograph of it gives. That is the same route the paid
+scanners take, arrived at through machinery the app already had.
+
+Photo ID mode keeps its own colour-true treatment and is deliberately untouched.
+
+### Retake one page, and reorder
+Both previously meant deleting and scanning the whole stack again.
+
+- **Retake this page** reshoots into *that position*, not onto the end — which
+  is the entire point; otherwise it is delete-and-rescan with extra steps. It
+  works in every capture mode, opening the phone camera in HQ and resuming the
+  preview otherwise, and a pending retake cannot leak into the next session.
+- **Move earlier / Move later** reorders a page that went in out of turn.
+  Buttons rather than a drag: a thumbnail strip on a phone is a poor drag
+  target, and one tap per position is unambiguous. The sheet follows the page
+  you moved rather than staying on the position.
+
+scan-tests 120 → 132. All sixteen suites green.
+
 ## [v11.66] — 2026-07-28 — HQ: the empty screen now explains itself
 
 The consequence of v11.65 that I flagged but did not solve. HQ takes each page
