@@ -4,6 +4,83 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.60] — 2026-07-28 — Selecting text on a scan
+
+"Nothing highlights, it selects the entire page and offers Copy — just like an
+image." That description named the fault: the page *image* was winning the
+touch, not the invisible word layer. Three things were wrong, one of them
+measured on the supplied file.
+
+- **48 of the 189 recognised lines on that scanned page had no usable box** —
+  zero width, zero height or zero size, the stray marks any recogniser
+  produces. Each became a zero-sized element sitting in the middle of the
+  selection order, which is enough to break the run iOS walks when a selection
+  is dragged. They are now skipped.
+- **Select mode never marked the page as having text.** The rule that stops
+  iOS treating a page as a picture is keyed on that mark, and only view mode
+  set it — so on a recognised scan the image callout could still take the
+  touch. Select mode now sets it, and only when the layer really has words.
+- **The image is now inert in Select mode** and the word layer sits above it,
+  so the touch can only land on the words.
+
+And when there is genuinely nothing to select — a scan that has never been
+recognised — the app now says so and offers to fix it, instead of leaving a
+page that behaves like a photograph with no explanation.
+
+**Not verified by me:** I cannot drive an iOS text selection here. The stray-box
+defect is measured and certain; the two callout changes are reasoned from the
+CSS and from the symptom you described. If a recognised scan still selects as
+a picture, the next thing to check is whether the words highlight but the
+copied text is empty, which would point somewhere different again.
+
+## [v11.59] — 2026-07-28 — Four fixes from a real merged PDF
+
+The user supplied the file, tested on an iPhone: born-digital invoice pages
+mixed with scans, carrying page numbers this app had stamped on it four times
+over. It is now `corpus/USER-merged.pdf` and drives a new suite.
+
+### Editing removed a table's top border
+Not the redaction — the **repaint**. The white patch covered the whole redacted
+band, and the band reaches a hair above the glyphs, far enough to rub out the
+cell rule running just over the text. On a type page the redaction has already
+removed the glyphs as vectors, so the patch only needs to cover where they
+were: it is now pulled in by 0.6pt and hairline rules survive. On a scan the
+redaction blanks the image itself, so there the patch still covers exactly.
+
+### "Recognise text" did nothing on a mixed document
+Pages were judged by character count, and that is not enough. Measured on the
+supplied file: page 2 is a near-blank sheet carrying **32 characters — nothing
+but the page numbers this app stamped on it** — which cleared the old
+20-character bar. Pages 3–5 are genuine scans that already carried an OCR
+layer. Every page therefore fell into "skip" and the run reported *nothing to
+recognise*.
+
+Pages are now judged by what they **are**: a page-filling raster is a scan
+(measured — a scan's image is 1.2–1.4× the page's own pixel count at 150 dpi,
+a letterhead logo 0.07). Four outcomes, and each is acted on honestly: scans
+without text are recognised, scans that already have text are offered a redo
+rather than skipped in silence, type is left alone, and a blank page says so.
+
+### Page numbers were stamped over the top of existing ones
+Nothing ever checked. The app now reads the top and bottom margins for text
+that reads as a number ("Page 2 of 5", "7", "3 / 12", "- 4 -") and, when it
+finds any, offers to number **only the pages without one**, to number every
+page anyway, or to cancel.
+
+### Watermark wording
+Any wording is accepted, up to two words. A watermark is set across the
+diagonal at a single size, so a third word shrinks it past readability — the
+limit now says that rather than silently mangling the result.
+
+New suite: mixed-tests (12), all against the supplied file. All sixteen suites
+green; corpus 53/53.
+
+### Still open
+**Selecting text to copy on a scanned page** is reported not working and is
+NOT fixed here. The layer is built, the CSS enables it, and the pages carry no
+rotation — three theories checked and eliminated, none of them the answer. It
+needs a proper look rather than another guess.
+
 ## [v11.58] — 2026-07-28 — The green outline finds pale pages; sizing steadied
 
 ### The outline never appeared on a white page on a pale surface

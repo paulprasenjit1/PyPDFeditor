@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.58";
+const APP_BUILD = "11.60";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.58
+const BUILD_DATETIME = "27 Jul 2026";   // v11.60
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "the green outline now finds a white page on a pale table — it could only ever see a page darker than its background, which is why it never appeared on a report laid on a light surface. Retyped words on a scan are also sized more steadily, so a speck of noise beside a word no longer makes it come out too big.";
+const WHATS_NEW = "selecting text on a recognised scan: the picture underneath was taking the touch, so the whole page was copied as an image instead of the words. The word layer now wins, stray recognition marks are skipped, and a scan with no text yet says so and offers to recognise it.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -1460,7 +1460,15 @@ async function renderStage(stage, i){
     if (cur && cur.isConnected && cur !== img) cur.replaceWith(img);
     delete stage.dataset.rtry;               // rendered fine — reset retry count
     if (mode === "text") await buildSpanBoxes(stage, i);
-    else if (mode === "select") buildTextLayer(stage, i);
+    else if (mode === "select"){
+      // v11.60: mark the stage in select mode too. The rule that stops iOS
+      // treating the page as a picture ("Copy" on the whole image) is keyed on
+      // .hastext, and select mode never set it — so on a page whose text came
+      // from recognition the image callout could still win the touch.
+      buildTextLayer(stage, i);
+      if (stage.querySelector(".txt") && stage.querySelector(".txt").childElementCount)
+        stage.classList.add("hastext");
+    }
     else if (mode === "form") buildFormBoxes(stage, i).catch(()=>{});
     // v11.21: born-digital documents get a selectable text layer in VIEW mode
     // too, so touch-and-hold selects real text (with the iOS Copy menu) instead
@@ -1582,7 +1590,14 @@ function buildTextLayer(stage, pageIndex){
   const s = dispW / wPt;                          // points -> css px
   const els = [];
   for (const sp of spans){
-    if (!sp.text) continue;
+    if (!sp.text || !sp.text.trim()) continue;
+    // v11.60: skip spans with no usable box. Measured on a real OCRed scan,
+    // 48 of 189 lines came back with zero width, zero height or zero size —
+    // recognition artefacts and stray marks. Each became a zero-sized element
+    // sitting in the middle of the selection order, which is enough to break
+    // the run iOS walks when you drag a selection across the page.
+    if (!isFinite(sp.x0) || !isFinite(sp.y0) || !isFinite(sp.x1) || !isFinite(sp.y1)) continue;
+    if (!(sp.x1 - sp.x0 > 0.2) || !(sp.y1 - sp.y0 > 0.2)) continue;
     const el = document.createElement("span");
     el.className = "tline";
     el.textContent = sp.text;
@@ -2722,8 +2737,23 @@ async function applyBlockEdit(pageIndex, block, newText, opts){
     const pg  = doc.getPage(pageIndex);
     const H   = pg.getHeight();
     const fillCol = editFillColour(bg);
-    for (const b of bands)
+    // v11.59: on a born-digital page the redaction has already removed the
+    // glyphs as vectors, so the repaint only has to cover where they WERE.
+    // Painting the full band was rubbing out the table rule that runs a hair
+    // above the text — "editing Admenta 5 removes the top border". Pulling the
+    // patch in by 0.6pt leaves hairline rules alone. On a scan the redaction
+    // blanks the image itself, so there the patch must still cover it exactly.
+    const fillIn = (()=>{ try { return docIsOcr() ? 0 : 0.6; } catch(e){ return 0.6; } })();
+    const shrink = r => {
+      const w = r[2]-r[0], h = r[3]-r[1];
+      const ix = Math.min(fillIn, Math.max(0, w/2 - 0.2));
+      const iy = Math.min(fillIn, Math.max(0, h/2 - 0.2));
+      return [r[0]+ix, r[1]+iy, r[2]-ix, r[3]-iy];
+    };
+    for (const b0 of bands){
+      const b = shrink(b0);
       pg.drawRectangle({ x:b[0], y:H-b[3], width:b[2]-b[0], height:b[3]-b[1], color:fillCol });
+    }
 
     const text = String(newText == null ? "" : newText);
     let overflow = false, substituted = false, usedLines = 0;
@@ -2850,7 +2880,21 @@ async function applyTextEdit(pageIndex, sp, newText, opts){
     // painting the full box would cover the descenders of the line above and
     // the ascenders of the line below, which the tighter redaction now spares.
     const fillCol = editFillColour(bg);
-    pg.drawRectangle({ x:band[0], y:H-band[3], width:band[2]-band[0], height:band[3]-band[1], color:fillCol });
+    // v11.59: on a born-digital page the redaction has already removed the
+    // glyphs as vectors, so the repaint only has to cover where they WERE.
+    // Painting the full band was rubbing out the table rule that runs a hair
+    // above the text — "editing Admenta 5 removes the top border". Pulling the
+    // patch in by 0.6pt leaves hairline rules alone. On a scan the redaction
+    // blanks the image itself, so there the patch must still cover it exactly.
+    const fillIn = (()=>{ try { return docIsOcr() ? 0 : 0.6; } catch(e){ return 0.6; } })();
+    const shrink = r => {
+      const w = r[2]-r[0], h = r[3]-r[1];
+      const ix = Math.min(fillIn, Math.max(0, w/2 - 0.2));
+      const iy = Math.min(fillIn, Math.max(0, h/2 - 0.2));
+      return [r[0]+ix, r[1]+iy, r[2]-ix, r[3]-iy];
+    };
+    { const fb = shrink(band);
+      pg.drawRectangle({ x:fb[0], y:H-fb[3], width:fb[2]-fb[0], height:fb[3]-fb[1], color:fillCol }); }
     // a text span is a single line; collapse any newlines the user typed so the
     // replacement stays on that line and can't flow downward past where the
     // original sat (and over the content below it)
@@ -3160,30 +3204,93 @@ function ocrWordPlacement(bbox, scale, pageH){
     size: hPt,
   };
 }
+// v11.59: is this page a photograph of something (a scan), or type?
+// Counting characters is not enough, and a real document proved it: a mixed
+// PDF had a scanned page carrying nothing but the page numbers this app had
+// stamped on it — 32 characters, over the 20-character "already has text"
+// line, so OCR skipped the page and reported nothing to do. A scan is
+// identified by what it IS: a raster covering the sheet.
+function pageHasBigImage(i){
+  try {
+    const dict = MDOC.findPage(i);
+    const res = dict && dict.get("Resources");
+    if (!res || res.isNull()) return false;
+    const xo = res.get("XObject");
+    if (!xo || xo.isNull()) return false;
+    const p = MDOC.loadPage(i);
+    const [x0,y0,x1,y1] = p.getBounds();
+    p.destroy();
+    const pageAt150 = ((x1-x0)/72*150) * ((y1-y0)/72*150);
+    if (!(pageAt150 > 0)) return false;
+    let biggest = 0;
+    xo.forEach((v)=>{
+      try {
+        if (String(v.get("Subtype")||"").replace(/^\//,"") !== "Image") return;
+        const w = v.get("Width").asNumber(), h = v.get("Height").asNumber();
+        if (w*h > biggest) biggest = w*h;
+      } catch(e){}
+    });
+    // a page-filling scan measured 1.2–1.4 of the page's own pixel count at
+    // 150dpi; a letterhead logo measured 0.07
+    return biggest >= pageAt150 * 0.35;
+  } catch(e){ return false; }
+}
+function pageCharCount(i){
+  try {
+    const page = MDOC.loadPage(i);
+    const st = page.toStructuredText("preserve-spans");
+    let c = 0; st.walk({ onChar(ch){ if (ch && ch.trim()) c++; } });
+    st.destroy(); page.destroy();
+    return c;
+  } catch(e){ return 0; }
+}
+//   "scan"      a photographed page with no real text  -> recognise
+//   "scan-done" a photographed page that already has text (ours, or another
+//               app's) -> offer to do it again rather than silently skipping
+//   "text"      type, not a photograph -> leave alone
+//   "blank"     neither -> nothing to recognise
+function pageOcrKind(i){
+  const big = pageHasBigImage(i), chars = pageCharCount(i);
+  if (!big) return chars < OCR_SKIP_CHARS ? "blank" : "text";
+  return chars < OCR_SKIP_CHARS ? "scan" : "scan-done";
+}
 async function runOcr(){
   if (!workingBytes || ocrBusy) return;
   const n = MDOC.countPages();
-  // which pages need it? (born-digital pages are skipped, not double-texted)
-  const todo = [];
+  const todo = [], redo = [];
   for (let i=0;i<n;i++){
-    try {
-      const page = MDOC.loadPage(i);
-      const st = page.toStructuredText("preserve-spans");
-      let c = 0; st.walk({ onChar(ch){ if (ch && ch.trim()) c++; } });
-      st.destroy(); page.destroy();
-      if (c < OCR_SKIP_CHARS) todo.push(i);
-    } catch(e){ todo.push(i); }
+    const k = pageOcrKind(i);
+    if (k === "scan") todo.push(i);
+    else if (k === "scan-done") redo.push(i);
   }
-  if (!todo.length){
-    setStatus("Every page already has real text — nothing to recognise.","ok");
+  if (!todo.length && !redo.length){
+    setStatus(n > 1
+      ? "No scanned pages found — every page in this document is already type, not a photograph."
+      : "This page is already type, not a photograph — there is nothing to recognise.","ok");
+    return;
+  }
+  if (!todo.length && redo.length){
+    // everything scanned has been done before; offer the redo rather than
+    // reporting "nothing to do", which is what the old code did
+    $("sheet").innerHTML = h`
+      <h3>Already recognised</h3>
+      <p class="hint">All ${redo.length} scanned page${redo.length>1?"s":""} in this document already carry recognised text. You can run it again — useful if the first pass was poor, or was done by an older version of this app.</p>
+      <div class="row"><button class="full" id="ocAgain">Recognise ${redo.length} page${redo.length>1?"s":""} again</button></div>
+      <div class="row"><button class="ghost full" id="ocNo2">Cancel</button></div>`;
+    $("ocAgain").onclick = ()=>{ closeSheet(); doOcr(redo); };
+    $("ocNo2").onclick = closeSheet;
+    openSheet();
     return;
   }
   $("sheet").innerHTML = h`
     <h3>Recognise text (OCR)</h3>
-    <p class="hint">${todo.length} of ${n} page${n>1?"s":""} look scanned. Each gets an invisible text layer laid over the image, so the document becomes searchable and selectable — here and in any PDF app. Runs entirely on this device (English). The first use downloads the recogniser (~17 MB, kept for next time). Roughly a few seconds per page.</p>
+    <p class="hint">${todo.length} of ${n} page${n>1?"s":""} ${todo.length===1?"is a scan with":"are scans with"} no text yet. Each gets an invisible text layer laid over the image, so the document becomes searchable and selectable — here and in any PDF app. Pages that are already type are left alone. Runs entirely on this device (English). The first use downloads the recogniser (~17 MB, kept for next time). Roughly a few seconds per page.</p>
+    ${raw(redo.length ? `<p class="hint">${redo.length} other scanned page${redo.length>1?"s":""} already ${redo.length>1?"carry":"carries"} recognised text.</p>` : "")}
     <div class="row"><button class="full" id="ocGo">Recognise ${todo.length} page${todo.length>1?"s":""}</button></div>
+    ${raw(redo.length ? `<div class="row"><button class="full" id="ocAll">Do those ${redo.length} again as well</button></div>` : "")}
     <div class="row"><button class="ghost full" id="ocNo">Cancel</button></div>`;
   $("ocGo").onclick = ()=>{ closeSheet(); doOcr(todo); };
+  if (redo.length) $("ocAll").onclick = ()=>{ closeSheet(); doOcr(todo.concat(redo).sort((a,b)=>a-b)); };
   $("ocNo").onclick = closeSheet;
   openSheet();
 }
@@ -3645,10 +3752,23 @@ function setMode(m){
   } else if (m==="select"){
     // build the invisible selectable text layer over every already-rendered
     // page; pages scrolled into view later get theirs in renderStage
+    let anyText = false;
     document.querySelectorAll(".stage").forEach(s=>{
-      if (s.dataset.rendered) try { buildTextLayer(s, +s.dataset.page); } catch(e){}
+      if (!s.dataset.rendered) return;
+      try {
+        buildTextLayer(s, +s.dataset.page);
+        const t = s.querySelector(".txt");
+        if (t && t.childElementCount){ s.classList.add("hastext"); anyText = true; }
+      } catch(e){}
     });
-    setStatus("Select any text, then copy it.","ok");
+    // v11.60: a scan that has never been recognised has nothing to select, and
+    // iOS then treats the page as a picture — touch-and-hold grabs the whole
+    // image and offers Copy, which is what "select text doesn't work" looked
+    // like. Say what is actually going on and offer the thing that fixes it.
+    if (!anyText && workingBytes && MDOC){
+      setStatus("These pages are pictures, so there is no text to select yet — run More → Recognise text first.","warn");
+      setTimeout(()=>{ if (mode === "select" && !ocrBusy) offerOcrForSelect(); }, 400);
+    } else setStatus("Select any text, then copy it.","ok");
   } else if (m==="sign"){ setStatus(insImgPlacing
       ? "Drag a box where the picture should go."
       : "Drag a box where the signature should go.","ok"); }
@@ -3678,6 +3798,18 @@ $("textBtn").onclick = ()=>{
 // page simply highlighted nothing and said "tap any highlighted text" — with
 // nothing to tap and no explanation. A scan has no text to edit until it is
 // recognised, which the app can now do (v11.48), so say that and offer it.
+// v11.60: the same offer, from Select mode.
+function offerOcrForSelect(){
+  if (!workingBytes || !MDOC || ocrBusy) return;
+  $("sheet").innerHTML = h`
+    <h3>Nothing to select yet</h3>
+    <p class="hint">These pages are photographs, so there are no words for the app to hand you — touching and holding just picks up the whole picture. Recognising the text lays real, invisible words over the image; after that you can select and copy normally, and Find works too.</p>
+    <div class="row"><button class="full" id="soGo">Recognise text</button></div>
+    <div class="row"><button class="ghost full" id="soNo">Not now</button></div>`;
+  $("soGo").onclick = async ()=>{ closeSheet(); await runOcr(); };
+  $("soNo").onclick = ()=>{ closeSheet(); setStatus("You can still touch and hold to use the iPhone's own Live Text.","ok"); };
+  openSheet();
+}
 function maybeOfferOcrForEditing(){
   if (!workingBytes || !MDOC || ocrBusy) return;
   if (docHasText()) return;                     // there IS text to tap
@@ -4796,7 +4928,9 @@ async function applyPageNumbers(o){
     const size = o.size || 10;
     const total = pages.length - from + startAt;
     let stamped = 0;
+    const skipSet = new Set(o.skip || []);
     for (let i = from-1; i < pages.length; i++){
+      if (skipSet.has(i)) continue;      // v11.59: already has a number
       const pg = pages[i];
       const w = pg.getWidth(), h = pg.getHeight();
       const rot = (pg.getRotation && pg.getRotation().angle) || 0;
@@ -4848,7 +4982,15 @@ function openWatermarkSheet(){
     $("wmCol").querySelectorAll("[data-k]").forEach(b=> b.onclick = ()=>{ colour=b.dataset.k; draw(); });
     $("wmAng").querySelectorAll("[data-d]").forEach(b=> b.onclick = ()=>{ diagonal=b.dataset.d==="1"; draw(); });
     $("wmOk").onclick = async ()=>{
-      const t = $("wmIn").value;
+      // v11.59: any wording is allowed, but a watermark is set across the
+      // diagonal at one size — a third word shrinks it to the point of being
+      // unreadable, so two is the limit and the reason is given.
+      const t = String($("wmIn").value||"").trim().replace(/\s+/g, " ");
+      if (!t){ setStatus("Type the word you want stamped across the pages.","warn"); return; }
+      if (t.split(" ").length > 2){
+        setStatus("Up to two words — a longer phrase has to be set so small across the page that it stops being readable.","warn");
+        return;
+      }
       closeSheet();
       await applyWatermark(t, {
         colour: (TE_COLOURS.find(c=>c.k===colour)||{}).rgb || [0.5,0.5,0.5],
@@ -4861,7 +5003,59 @@ function openWatermarkSheet(){
   draw(); openSheet();
   setTimeout(()=>{ try{ $("wmIn").focus(); }catch(e){} }, 100);
 }
+// v11.59: does this page already carry a page number? Judged the way a reader
+// would: a short run of text sitting in the top or bottom margin that reads as
+// a number. The document that prompted this had "Page 2 of 5" stamped on it
+// FOUR times, because nothing ever checked.
+function looksLikePageNumber(t){
+  const s = String(t||"").trim();
+  if (!s || s.length > 24) return false;
+  return /^(page\s*)?\d{1,4}(\s*(of|\/)\s*\d{1,4})?$/i.test(s)
+      || /^[-–—]\s*\d{1,4}\s*[-–—]$/.test(s);
+}
+function pagesWithNumbers(){
+  const hits = [];
+  const n = MDOC.countPages();
+  for (let i=0;i<n;i++){
+    try {
+      const p = MDOC.loadPage(i);
+      const [x0,y0,x1,y1] = p.getBounds();
+      const hPt = y1-y0, margin = Math.max(24, hPt*0.09);
+      const st = p.toStructuredText("preserve-spans");
+      let cur = null, found = false;
+      st.walk({
+        beginLine(){ cur = { t:"", y:0 }; },
+        onChar(c, origin){ if (!cur) return; cur.t += c; if (!cur.y) cur.y = origin[1];
+          if (!found && looksLikePageNumber(cur.t) &&
+              (cur.y <= y0 + margin || cur.y >= y1 - margin)) found = true; },
+      });
+      st.destroy(); p.destroy();
+      if (found) hits.push(i);
+    } catch(e){}
+  }
+  return hits;
+}
 function openPageNumberSheet(){
+  const n = MDOC.countPages();
+  const already = pagesWithNumbers();
+  if (already.length){
+    const all = already.length === n;
+    $("sheet").innerHTML = h`
+      <h3>Numbers are already there</h3>
+      <p class="hint">${already.length} of ${n} page${n>1?"s":""} already ${already.length>1?"carry":"carries"} what looks like a page number${all?"":" — page"+(already.length>1?"s ":" ")+already.map(i=>i+1).join(", ")}. Adding another set would stack a second number on top of the first.</p>
+      <div class="row"><button class="full" id="pnSkip" ${all?"disabled":""}>Number only the ${n-already.length} page${n-already.length===1?"":"s"} without one</button></div>
+      <div class="row"><button class="full" id="pnAnyway">Number every page anyway</button></div>
+      <div class="row"><button class="ghost full" id="pnStop">Cancel</button></div>`;
+    $("pnAnyway").onclick = ()=> pageNumberOptions(null);
+    if (!all) $("pnSkip").onclick = ()=> pageNumberOptions(already);
+    $("pnStop").onclick = closeSheet;
+    openSheet();
+    return;
+  }
+  pageNumberOptions(null);
+}
+// `skip` is a list of page indexes to leave alone, or null for all pages.
+function pageNumberOptions(skip){
   const n = MDOC.countPages();
   let format = "plain", align = "center", edge = "bottom", skipCover = false;
   const draw = ()=>{
@@ -4893,7 +5087,8 @@ function openPageNumberSheet(){
     if ($("pnSkip")) $("pnSkip").querySelectorAll("[data-k]").forEach(b=> b.onclick = ()=>{ skipCover=!skipCover; draw(); });
     $("pnOk").onclick = async ()=>{
       closeSheet();
-      await applyPageNumbers({ format, align, edge, from: skipCover ? 2 : 1, startAt: skipCover ? 2 : 1 });
+      await applyPageNumbers({ format, align, edge, from: skipCover ? 2 : 1,
+                               startAt: skipCover ? 2 : 1, skip });
     };
     $("pnCancel").onclick = closeSheet;
   };

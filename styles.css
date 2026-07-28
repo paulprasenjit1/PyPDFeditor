@@ -280,6 +280,14 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .viewer .stage.hastext img { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
 .viewer.textmode .stage img, .viewer.selmode .stage img,
 .stage.placing img { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
+/* v11.60: in Select mode the invisible word layer must win the touch. Without
+   this the image underneath can still take a touch-and-hold and iOS offers to
+   copy the whole PAGE as a picture — which is exactly what "select text on a
+   scan does nothing" looked like: no words highlight, the sheet appears, and
+   what you get is an image. The layer sits above the image already (z-index),
+   so it only needed to be the thing that is selectable. */
+.viewer.selmode .stage .txt { z-index:2; }
+.viewer.selmode .stage img { pointer-events:none; }
 .stage .holder { background:#fff; }
 /* v10.98: a page that failed to rasterise shows a tappable retry message
    instead of staying silently blank. */
