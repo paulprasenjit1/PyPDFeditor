@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.64";
+const APP_BUILD = "11.65";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.64
+const BUILD_DATETIME = "27 Jul 2026";   // v11.65
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "blank pages are spotted as they are scanned and can be left out of the PDF in one tap, and when you save a file still called “Scan 28 Jul…” the app offers a name taken from the heading printed on the page.";
+const WHATS_NEW = "HQ no longer leaves two cameras open. Turning it on while the scanner is already running now stops the preview and goes straight to the iPhone camera, and asking for Auto turns HQ back off — the preview and the phone camera are alternatives, never both.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -6679,6 +6679,21 @@ $("autoBtn").onclick = ()=> setScanAuto(!scanAuto);
 function setScanAuto(on){
   scanAuto = !!on;
   try { localStorage.setItem("scanAuto", scanAuto ? "1" : "0"); } catch(e){}
+  // v11.65: the mirror of the rule in setScanHiQ. Hands-free capture needs a
+  // preview to watch, so asking for Auto turns HQ off and brings the preview
+  // back — rather than leaving Auto lit with nothing to fire from.
+  if (scanAuto && scanHiQ){
+    scanHiQ = false;
+    try { localStorage.setItem("scanHiQ","0"); } catch(e){}
+    refreshHqBtn();
+    const inScanner = $("scanCam").classList.contains("show");
+    if (inScanner && !capFrame && !scanFallback && !scanStream){
+      refreshAutoBtn();
+      setStatus("Auto capture on, high quality off — the preview is back, and pages are taken for you.","ok");
+      startCamera();
+      return;
+    }
+  }
   refreshAutoBtn();
   if (!scanAuto) disarmAuto();
   setStatus(scanAuto
@@ -6707,6 +6722,26 @@ function setScanHiQ(on){
     disarmAuto(); refreshAutoBtn();
   }
   refreshHqBtn(); refreshAutoBtn();
+  // v11.65: switch camera NOW if the scanner is already open. v11.62 only
+  // handled the case where HQ was already on when Scan was tapped — turn it on
+  // from inside the scanner and the live preview kept running, so the shutter
+  // opened the iPhone's camera on TOP of it and the user met two cameras
+  // again. The preview and the native camera are alternatives, never both.
+  const inScanner = $("scanCam").classList.contains("show") || !!scanStream;
+  const onCropScreen = !!capFrame;
+  if (inScanner && !onCropScreen){
+    if (scanHiQ){
+      stopCamera();                  // also clears the green outline
+      setStatus("High quality on — the iPhone's camera takes each page.","ok");
+      $("camInput").click();         // one tap, one camera
+      return;
+    }
+    if (!scanFallback){
+      setStatus("High quality off — back to the live preview, with the outline and hands-free capture.","ok");
+      startCamera();
+      return;
+    }
+  }
   setStatus(scanHiQ
     ? "High quality on — the shutter opens the iPhone's camera for a full-resolution photo. Sharper, but no green outline and no hands-free capture."
     : "High quality off — back to the live preview, with the outline and hands-free capture.","ok");

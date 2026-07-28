@@ -4,6 +4,30 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.65] — 2026-07-28 — HQ: one camera, from wherever you turn it on
+
+The two-camera problem again, and the screenshots showed exactly why my v11.62
+fix missed it. That fix only handled HQ being **already on when Scan was
+tapped**. Turn it on from *inside* the scanner — which is the natural thing to
+do, since the button is right there in the scan title bar — and the live
+preview carried on running, so the shutter opened the iPhone's camera on top of
+it. The first screenshot is the app's own preview with the green outline; the
+second is iOS's camera over it.
+
+- Turning **HQ on inside the scanner** now stops the live preview immediately
+  (which also clears the green outline, so nothing is left frozen on a dead
+  screen) and goes straight to the camera. Still one tap.
+- Turning **HQ off** brings the preview back, rather than leaving a black
+  rectangle where the camera used to be.
+- **Asking for Auto turns HQ off**, the mirror of the existing rule that HQ
+  turns Auto off. Hands-free capture needs a preview to watch; leaving Auto lit
+  with nothing to fire from would be a toggle that silently does nothing.
+- Neither swap is attempted while the Adjust screen is up, so a page waiting to
+  be cropped is never disturbed.
+
+The preview and the native camera are alternatives, never both — that is now
+the rule, wherever the switch is thrown from. scan-tests 109 → 115.
+
 ## [v11.64] — 2026-07-28 — Blank pages, and files that name themselves
 
 ### Blank pages
