@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.56";
+const APP_BUILD = "11.57";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -97,10 +97,10 @@ window.addEventListener("unhandledrejection", (e)=>{
 // ---------------- app version (shown in the About dialog) ----------------
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
-const BUILD_DATETIME = "27 Jul 2026";   // v11.56
+const BUILD_DATETIME = "27 Jul 2026";   // v11.57
 // One-line release note shown once after an update (keep in sync with APP_BUILD,
 // so the banner never describes an older release).
-const WHATS_NEW = "the faint box around an edited name turned out to be printed in the document itself, not added by editing — measured on your own file. The change made for it is reverted, so light-grey shaded cells keep their shade. Everything else from the last update stands.";
+const WHATS_NEW = "editing a scanned page now matches the print properly: the typeface, the size and the baseline are measured from the ink itself instead of the recogniser's box. The typeface matching was also failing silently on the phone because it tried to redraw the whole page for one word — it now looks at just that word.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -2802,12 +2802,21 @@ async function applyTextEdit(pageIndex, sp, newText, opts){
     // at the ink instead and retype in the closest face we have. Only when the
     // user has not chosen a typeface themselves, and only when the match is
     // clear — matchScanFace returns null rather than guess.
-    let scanFace = null;
-    if ((!opts.font || opts.font === "keep") && docIsOcr()){
-      try {
-        scanFace = await matchScanFace(sp.text, spanInkMask(pageIndex, sp), { PDFDocument, mupdf });
-      } catch(e){ scanFace = null; }
-      if (scanFace){ opts = Object.assign({}, opts, { font: scanFace.key }); fres = null; }
+    let scanFace = null, scanFit = null;
+    if (docIsOcr()){
+      const eng = { PDFDocument, mupdf };
+      if (!opts.font || opts.font === "keep"){
+        try {
+          scanFace = await matchScanFace(sp.text, spanInkMask(pageIndex, sp), eng);
+        } catch(e){ scanFace = null; }
+        if (scanFace){ opts = Object.assign({}, opts, { font: scanFace.key }); fres = null; }
+      }
+      // Fit the SIZE (and baseline) to the printed ink, in whichever face is
+      // going to be used — the fit depends on the face's own proportions.
+      const faceKey = (opts.font && opts.font !== "keep") ? opts.font : "sans";
+      const shown = String(newText == null ? "" : newText).replace(/[\r\n]+/g, " ").trim();
+      try { scanFit = await scanEditFit(pageIndex, sp, shown || sp.text, faceKey, eng); }
+      catch(e){ scanFit = null; }
     }
     let pageW = 0;
     try { const mp = MDOC.loadPage(pageIndex); const b = mp.getBounds(); pageW = b[2]-b[0]; mp.destroy(); } catch(e){}
@@ -2850,9 +2859,13 @@ async function applyTextEdit(pageIndex, sp, newText, opts){
     if (text.trim() !== ""){
       // v11.37: the sheet can override size and colour. Both default to the
       // original, so an edit that touches neither is byte-identical to v11.36.
-      const baseSize = opts.size != null ? opts.size : (sp.size || 11);
+      // v11.57: on a SCAN, fit to the ink rather than to the OCR box (see
+      // scanEditFit). scanFit is null unless this is an OCRed page and the
+      // measurement succeeded, so every other document is untouched.
+      const baseSize = opts.size != null ? opts.size
+                     : (scanFit ? scanFit.size : (sp.size || 11));
       const colour = opts.colour || sp.color || [0,0,0];
-      const y = H - sp.origin[1];                       // baseline never moves
+      const y = H - (scanFit ? scanFit.originY : sp.origin[1]);   // baseline
       // TIER 1 (v11.29): type it in the document's own embedded font, so the
       // edited field is indistinguishable from the text around it. Silently
       // declines (returns null) for exotic encodings or a character the
@@ -3383,31 +3396,105 @@ async function matchScanFace(text, targetMask, eng){
   if (best.score - next.score < 0.02) return null;    // a coin toss between two
   return best;
 }
-// The ink of one span, straight off the page, ready for matchScanFace.
-function spanInkMask(pageIndex, sp){
-  let page = null, pix = null;
+// v11.57: render ONLY the word's own rectangle, through a draw device clipped
+// to it. The v11.54 version rasterised the WHOLE PAGE at up to 8× to look at
+// one word — 3570×5052 pixels (≈72 MB) to inspect a patch of 398×85. On a
+// phone that either failed outright or was killed for memory, and because the
+// caller swallows exceptions the only symptom was the typeface silently
+// falling back to plain Helvetica. Same picture, 530× less of it.
+// Returns the mask plus where it sits on the page, so sizes can be measured
+// in points rather than guessed from the OCR box.
+function clipInkMask(pageIndex, rectPt, targetInkPx){
+  let page = null, pm = null, dev = null;
   try {
     page = MDOC.loadPage(pageIndex);
-    const s = Math.max(2, Math.min(8, 40/Math.max(1, sp.y1-sp.y0)));
-    const pad = 1;
-    const rect = [sp.x0-pad, sp.y0-pad, sp.x1+pad, sp.y1+pad];
-    pix = page.toPixmap(mupdf.Matrix.scale(s,s), mupdf.ColorSpace.DeviceRGB, false, false,
-                        undefined, undefined);
-    const W = pix.getWidth(), H = pix.getHeight(), St = pix.getStride(), n = pix.getNumberOfComponents();
-    const src = pix.getPixels();
-    // crop the span's rectangle out of the page raster
-    const cx0 = Math.max(0, Math.round(rect[0]*s)), cy0 = Math.max(0, Math.round(rect[1]*s));
-    const cx1 = Math.min(W, Math.round(rect[2]*s)), cy1 = Math.min(H, Math.round(rect[3]*s));
-    const cw = cx1-cx0, ch = cy1-cy0;
-    if (cw < 4 || ch < 4) return null;
-    const buf = new Uint8Array(cw*ch*3);
-    for (let y=0;y<ch;y++) for (let x=0;x<cw;x++){
-      const si = (cy0+y)*St + (cx0+x)*n, di = (y*cw+x)*3;
-      buf[di]=src[si]; buf[di+1]=src[si+1]; buf[di+2]=src[si+2];
-    }
-    return inkMaskFrom(buf, cw, ch, cw*3, 3);
+    const hPt = Math.max(0.5, rectPt[3]-rectPt[1]);
+    const s = Math.max(2, Math.min(12, (targetInkPx || 44) / hPt));
+    const bbox = [Math.floor(rectPt[0]*s), Math.floor(rectPt[1]*s),
+                  Math.ceil(rectPt[2]*s),  Math.ceil(rectPt[3]*s)];
+    if (bbox[2]-bbox[0] < 4 || bbox[3]-bbox[1] < 4) return null;
+    pm = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, bbox, false);
+    pm.clear(255);
+    dev = new mupdf.DrawDevice(mupdf.Matrix.scale(s,s), pm);
+    page.run(dev, mupdf.Matrix.identity);
+    dev.close();
+    const W = pm.getWidth(), H = pm.getHeight(), St = pm.getStride(), n = pm.getNumberOfComponents();
+    const mask = inkMaskFrom(pm.getPixels(), W, H, St, n);
+    return mask ? Object.assign(mask, { s, x0Pt: bbox[0]/s, y0Pt: bbox[1]/s }) : null;
   } catch(e){ return null; }
-  finally { try{ if(pix) pix.destroy(); }catch(e){} try{ if(page) page.destroy(); }catch(e){} }
+  finally {
+    try{ if(dev) dev.close(); }catch(e){}
+    try{ if(pm) pm.destroy(); }catch(e){}
+    try{ if(page) page.destroy(); }catch(e){}
+  }
+}
+// The ink of one span, straight off the page, ready for matchScanFace.
+function spanInkMask(pageIndex, sp){
+  return clipInkMask(pageIndex, [sp.x0-1, sp.y0-1, sp.x1+1, sp.y1+1], 44);
+}
+// Where the printed word's ink actually sits, in page points.
+function inkExtentPt(mask){
+  if (!mask) return null;
+  const { m, w, h, s, x0Pt, y0Pt } = mask;
+  let top=h, bot=-1, left=w, right=-1;
+  for (let y=0;y<h;y++) for (let x=0;x<w;x++) if (m[y*w+x]){
+    if (y<top) top=y; if (y>bot) bot=y;
+    if (x<left) left=x; if (x>right) right=x;
+  }
+  if (bot < 0) return null;
+  return { topPt: y0Pt + top/s, botPt: y0Pt + (bot+1)/s,
+           leftPt: x0Pt + left/s, rightPt: x0Pt + (right+1)/s,
+           hPt: (bot-top+1)/s, wPt: (right-left+1)/s };
+}
+// How tall is `text` in this face, and how far does it fall below the
+// baseline? Measured by drawing it and looking, because the answer depends on
+// the actual letters: "Antra" has no descender, "Payment" does.
+async function measureFaceInk(text, key, eng, size){
+  const doc = await eng.PDFDocument.create();
+  const font = await doc.embedFont(scanFaceFont(key));
+  const w = Math.max(8, font.widthOfTextAtSize(text, size));
+  const base = size*1.5;
+  const pg = doc.addPage([w + size, size*3]);
+  pg.drawText(text, { x:size*0.5, y:base, size, font });
+  const bytes = new Uint8Array(await doc.save());
+  const d = eng.mupdf.Document.openDocument(bytes.slice(0), "application/pdf").asPDF();
+  const p = d.loadPage(0);
+  const S = 4;
+  const pix = p.toPixmap(eng.mupdf.Matrix.scale(S,S), eng.mupdf.ColorSpace.DeviceRGB, false);
+  const W=pix.getWidth(), H=pix.getHeight(), St=pix.getStride(), n=pix.getNumberOfComponents(), px=pix.getPixels();
+  let top=H, bot=-1;
+  for (let y=0;y<H;y++) for (let x=0;x<W;x++){
+    const i=y*St+x*n;
+    if (((px[i]*77+px[i+1]*151+px[i+2]*28)>>8) < 140){ if(y<top)top=y; if(y>bot)bot=y; }
+  }
+  pix.destroy(); p.destroy(); d.destroy();
+  if (bot < 0) return null;
+  const pageH = size*3;
+  // page y of the ink, converted back to "distance from the baseline"
+  const inkTopY = pageH - top/S, inkBotY = pageH - (bot+1)/S;
+  return { hPt: (bot-top+1)/S, above: inkTopY - base, below: base - inkBotY };
+}
+// Size and baseline for a replacement on a SCAN, fitted to the ink that is
+// actually printed rather than to the OCR box. The OCR box is the wrong ruler:
+// it is the recogniser's bounding box, so a word of capitals and a word with a
+// descender of the same point size get very different boxes — which is how a
+// retyped word ended up visibly larger than its neighbours.
+async function scanEditFit(pageIndex, sp, text, faceKey, eng){
+  try {
+    const mask = spanInkMask(pageIndex, sp);
+    const ink = inkExtentPt(mask);
+    if (!ink || !(ink.hPt > 0.5)) return null;
+    const REF = 40;
+    const ref = await measureFaceInk(text, faceKey, eng, REF);
+    if (!ref || !(ref.hPt > 0.5)) return null;
+    let size = REF * (ink.hPt / ref.hPt);
+    if (!(size > 1) || size > 400) return null;
+    // a sanity band: never more than a third away from what the OCR box implied
+    const implied = sp.size || size;
+    if (size > implied*2.2 || size < implied*0.45) return null;
+    const below = ref.below * (size/REF);
+    return { size, originY: ink.botPt - below };
+  } catch(e){ return null; }
 }
 
 // ---- v11.53: straighten sideways pages ------------------------------------

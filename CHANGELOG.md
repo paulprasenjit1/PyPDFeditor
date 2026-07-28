@@ -4,6 +4,45 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.57] — 2026-07-28 — Editing a scan: right face, right size, right baseline
+
+Reported from a real endoscopy report: a retyped word came out in the wrong
+typeface *and* visibly larger than the print around it. Two separate causes,
+both found by measurement.
+
+### The face matcher was rasterising the whole page for one word
+`spanInkMask` rendered the **entire page** at up to 8× to inspect a single
+word — 3570×5052 pixels (tens of MB) to look at a patch of 77×45. On a phone
+that fails or is killed for memory, and because the caller swallows the error
+the only symptom was the typeface quietly reverting to plain Helvetica. So
+v11.54's matcher, which tested perfectly in Node, was **largely dead on the
+device**. It now renders only the word's own rectangle through a clipped draw
+device: same picture, **530× less of it**.
+
+### The OCR box is the wrong ruler for type size
+The size came from the recogniser's bounding box, but that box depends on
+which letters a word happens to contain — a word of capitals and a word with a
+descender at the same point size give very different boxes. On the test
+fixture the box implies **8.8pt for text printed at 11pt, a fifth out**.
+
+The replacement is now fitted to the **ink that is actually printed**: the
+word's ink height is measured off the page, the chosen face is measured at a
+reference size, and the point size is scaled so the two match. The baseline is
+placed from the ink's own bottom edge (allowing for the face's descender)
+rather than from the OCR origin. Measured on a real JPEG'd scan of 11pt Times:
+
+| | result |
+|---|---|
+| OCR box (old) | 8.79pt — 20% out |
+| fitted to ink (new) | **11.29pt — 3% out** |
+| face | serif, correctly matched through the JPEG |
+
+Guards kept: a size the user types still wins over everything; the fit is
+refused if it lands more than a third away from what the box implied; and on
+any page that is not a scan the behaviour is byte-for-byte what it was.
+
+editor-tests 78 → 85. All fifteen suites green.
+
 ## [v11.56] — 2026-07-28 — The box was never ours; reverting the wrong fix
 
 The user supplied the actual file. Reproducing on it settles the question that
