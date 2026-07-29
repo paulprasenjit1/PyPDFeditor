@@ -4,6 +4,50 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.83] — 2026-07-29 — The bottom bar reaches the bottom
+
+Reported with two screenshots taken minutes apart: sometimes a band of black
+sits below the toolbar, sometimes it does not.
+
+### What the screenshots say
+The header is in exactly the same place in both. So the page is not shifted —
+the **layout viewport is ending about 52px short of the screen**, and a
+`position:fixed; bottom:0` bar is honestly obeying it. That is an iOS
+standalone-PWA behaviour, and it is intermittent, which puts it in the same
+class as three other device-only bugs this session that I diagnosed wrongly
+from a screenshot.
+
+### So this measures rather than guesses
+A new `--vvdrop` is computed from `visualViewport.height + offsetTop -
+innerHeight` — how far the visible bottom sits below where `bottom:0` lands —
+and added to every bottom-anchored control. Re-measured on resize, rotation,
+visual-viewport scroll, and on **resume from background**, which is when iOS
+settles the standalone viewport.
+
+Two properties make it safe to ship without being able to reproduce it:
+
+- **It is a no-op when nothing is wrong.** With the viewports in agreement the
+  value is `0px` and every rule reads exactly as it did in v11.82. A blind fix
+  for an intermittent bug must not be able to break the common case.
+- **It is clamped to 0–120px**, so a transient measurement mid-rotation cannot
+  push the toolbar off the screen.
+
+The correction is applied as **padding** on the toolbar rather than as a
+negative `bottom`. Growing the bar downwards keeps its background covering the
+gap; moving it would only relocate the black band.
+
+### A tidy-up that came with it
+The bottom inset was the same 40-character expression repeated six times. It is
+now `--botpad` (and `--botpad2` for the short-screen media query), named once.
+That is what made adding the correction in one place possible rather than six.
+
+### Confirming it on the phone
+**About now shows the viewport numbers** — `visualViewport/innerHeight drop
+Npx`. If the gap appears and About reads `drop 0px`, my diagnosis is wrong and
+the numbers will say so in one round rather than several.
+
+scan 199 → 207. Seventeen suites green, corpus green.
+
 ## [v11.82] — 2026-07-29 — Both sides / Single side, and the held front reappears
 
 Interface only. The scan pipeline is still v11.77's, untouched.

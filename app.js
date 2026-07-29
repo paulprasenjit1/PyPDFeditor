@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.82";
+const APP_BUILD = "11.83";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -4324,6 +4324,9 @@ function openAbout(){
     <div class="about">
       <div class="abrow"><span>Version</span><b>${APP_VERSION}</b></div>
       <div class="abrow"><span>Build</span><b>${BUILD_DATETIME}</b></div>
+      <div class="abrow"><span>Viewport</span><b>${(window.visualViewport
+          ? Math.round(window.visualViewport.height)+"/"+window.innerHeight+" drop "+vvDrop+"px"
+          : "n/a")}</b></div>
       <div class="abrow"><span>Cache</span><b>${cache}</b></div>
       <div class="abrow"><span>Engine</span><b>MuPDF.js (WASM) + pdf-lib</b></div>
       <div class="abrow"><span>Licence</span><b>MuPDF.js is AGPL-3.0 — <a href="https://github.com/ArtifexSoftware/mupdf.js" target="_blank" rel="noopener noreferrer">engine source</a></b></div>
@@ -8937,6 +8940,49 @@ function updateModalInert(){
   for (const id of ["sheetBg","scanCam","scanCrop"]){
     const el = $(id); if (el) mo.observe(el, { attributes:true, attributeFilter:["class"] });
   }
+})();
+// ---------------- bottom chrome, pinned to the real bottom (v11.83) --------
+// Reported with two screenshots taken minutes apart: sometimes a band of black
+// sits BELOW the toolbar, sometimes it does not. The header is in the same
+// place in both, so the page is not shifted — the LAYOUT viewport is ending
+// short of the screen, and a `position:fixed; bottom:0` bar honestly obeys it.
+// That is an iOS standalone-PWA behaviour I cannot reproduce off-device, so
+// this measures the discrepancy rather than assuming a cause.
+//
+// --vvdrop is how far the visible bottom is below where `bottom:0` lands. When
+// the two agree it is 0px and every rule that uses it is unchanged, so this is
+// a no-op on every device that was already correct — which matters, because a
+// blind fix for an intermittent bug should not be able to break the common case.
+//
+// The value is added as PADDING on the toolbar rather than as a negative
+// `bottom`: growing the bar downwards keeps its background covering the gap,
+// where moving it would just relocate the black band.
+let vvDrop = 0;
+function pinBottomChrome(){
+  const vv = window.visualViewport;
+  if (!vv) return;
+  // innerHeight is the layout viewport; vv.height + offsetTop is the visible
+  // bottom. Rounded, clamped, and capped so a transient measurement during a
+  // rotation cannot push the toolbar off the screen.
+  const drop = Math.max(0, Math.min(120, Math.round(vv.height + vv.offsetTop - window.innerHeight)));
+  if (drop === vvDrop) return;                 // avoid a style write per scroll event
+  vvDrop = drop;
+  document.documentElement.style.setProperty("--vvdrop", drop + "px");
+}
+(function watchBottomChrome(){
+  const vv = window.visualViewport;
+  if (!vv || typeof vv.addEventListener !== "function") return;
+  vv.addEventListener("resize", pinBottomChrome);
+  vv.addEventListener("scroll", pinBottomChrome);
+  window.addEventListener("orientationchange", ()=> setTimeout(pinBottomChrome, 300));
+  window.addEventListener("resize", pinBottomChrome);
+  // iOS settles the standalone viewport a beat after launch and again after a
+  // resume from background, which is when the gap appears.
+  document.addEventListener("visibilitychange", ()=>{
+    if (!document.hidden) setTimeout(pinBottomChrome, 250);
+  });
+  pinBottomChrome();
+  setTimeout(pinBottomChrome, 500);
 })();
 // ---------------- keyboard avoidance (v10.97) ----------------
 // On smaller iPhones the on-screen keyboard can cover a bottom sheet's input
