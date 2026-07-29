@@ -628,10 +628,6 @@ input[type=file] { display:none; }
 .scanthumbs .sthumb .num { position:absolute; right:-4px; top:-6px; min-width:18px;
           height:18px; border-radius:9px; background:var(--accent2); color:#fff;
           font-size:11px; line-height:18px; text-align:center; padding:0 4px; }
-/* v11.80: Delete is destructive, so it is tinted red — but it stays a ghost
-   button so it never competes with Use page for the eye. */
-.scanctl button.danger { background:transparent; border:0.5px solid rgba(255,69,58,.5); color:#ff6961; }
-.scanctl button.danger:active:not(:disabled) { background:rgba(255,69,58,.12); }
 .scanctl { display:flex; align-items:center; justify-content:space-evenly; gap:10px;
           padding:12px 16px calc(16px + env(safe-area-inset-bottom)); background:#000; }
 .scanctl button:not(.shutter) { min-width:86px; }
@@ -674,10 +670,14 @@ input[type=file] { display:none; }
 .scantype .seg button { flex:1; background:transparent; border:0; color:#c9cfd8;
           font-size:12px; padding:7px 4px; border-radius:7px; min-height:32px; }
 .scantype .seg button.on { background:var(--accent2); color:#fff; }
-.scantype .bothbtn { align-self:flex-start; margin-left:48px; background:transparent;
-          border:0.5px solid var(--line); color:#cfd6e4; font-size:12px; padding:6px 12px; }
-.scantype .bothbtn.on { background:var(--accent2); border-color:var(--accent2); color:#fff; }
-.scantype .bothbtn[hidden] { display:none; }
+/* v11.81: Both sides sits directly BELOW Photo ID, in the same column and with
+   the same button styling — a sub-option of that type, not a separate control.
+   The invisible track and left spacer are what line it up under the right half
+   of the segmented pair; without them it would drift under Document. */
+.scantype .bothrow[hidden] { display:none; }
+.scantype .seg.ghosted { background:transparent; }
+.scantype .seg .spacer { flex:1; }
+.scantype .seg button[aria-pressed] { flex:1; }
 .scanfilters { display:flex; flex-direction:column; gap:8px; padding:10px 16px 0; background:#000; }
 .scanfilters .fgrp { display:flex; align-items:center; gap:10px; }
 .scanfilters .flab { flex:0 0 52px; font-size:11px; color:#7e8896; }

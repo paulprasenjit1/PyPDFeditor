@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.80">
+<html lang="en" data-build="11.81">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -256,9 +256,16 @@
         <button id="idToggle" aria-pressed="false">Photo ID</button>
       </div>
     </div>
-    <!-- v11.80: both sides sits beside Photo ID, because it is a property of
-         that type and means nothing for a document. Hidden otherwise. -->
-    <button id="idBothToggle" class="bothbtn" aria-pressed="false" hidden>Both sides</button>
+    <!-- v11.81: both sides sits directly BELOW Photo ID, in the same column and
+         with the same button styling, so it reads as a sub-option of that type
+         rather than a separate control. Hidden unless Photo ID is chosen. -->
+    <div class="fgrp bothrow" id="bothRow" hidden>
+      <span class="flab" aria-hidden="true"></span>
+      <div class="seg ghosted">
+        <span class="spacer" aria-hidden="true"></span>
+        <button id="idBothToggle" aria-pressed="false">Both sides</button>
+      </div>
+    </div>
   </div>
   <!-- scanned pages so far — tap one to review or delete it -->
   <div class="scanthumbs" id="scanThumbs"></div>
@@ -313,9 +320,6 @@
   <div class="scanctl">
     <button class="ghost" id="cropRetake">Retake</button>
     <button class="ghost" id="cropRotate" aria-label="Rotate the page a quarter turn">⟳ Rotate</button>
-    <!-- v11.80: throw this capture away and go back to the viewfinder. Distinct
-         from Retake, which reshoots straight away. -->
-    <button class="ghost danger" id="cropDelete" aria-label="Discard this capture">Delete</button>
     <button id="cropUse">Use page</button>
   </div>
 </div>

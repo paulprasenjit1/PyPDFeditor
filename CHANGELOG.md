@@ -4,6 +4,50 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.81] — 2026-07-29 — The scanner opens the same way every time
+
+Interface only, again. The scan pipeline is still v11.77's, untouched.
+
+### Type and Auto are defaults, not preferences
+Tapping Scan now always starts at **Type = Document** with **Auto off**,
+whatever the last session did. Neither is read back from storage any more, and
+a value stored by an older build is cleared on load.
+
+This matters more than it sounds for Type: a remembered **Photo ID** would
+ambush the next document scan with card framing and A4 compositing, which is a
+surprising way to lose a page. Auto is off because it takes the shutter out of
+your hands — a reasonable thing to switch on for a stack of pages on a desk,
+and a poor thing to inherit silently.
+
+`idTwoSide` is deliberately **not** reset with them: it is a Photo ID
+sub-choice, not one of the two defaults asked for, and resetting it would be a
+behaviour change nobody requested.
+
+### Both sides moved below Photo ID
+It sits directly beneath the Photo ID half of the segmented pair, in the same
+column and with the same button styling, so it reads as a sub-option of that
+type rather than a separate control. The whole row hides when Photo ID is not
+chosen — hiding only the button would have left an empty segmented track
+floating under it.
+
+### Delete removed
+You were right that it duplicated Retake. Both dropped the capture being
+reviewed and returned to the camera; the only difference was that Retake also
+reopened the shutter on the fallback path. One action does not need two
+buttons, so the action row is back to **Retake · Rotate · Use page**.
+
+### Tests
+`SC127d` asserted Delete sat beside Rotate; it now asserts no such button
+exists and that Retake still occupies that role. `T9e2`/`T9e3` in the harness
+drive Retake instead, and check it leaves already-accepted pages alone.
+
+`T9e0a` is the one worth naming: it reads the **live state** after the scanner
+opens rather than grepping the source, because a default that is written and
+then overwritten by a stored preference would still pass a source check. That
+is exactly the failure this release is about.
+
+scan 180 → 188, harness 113 → 115. Seventeen suites green, corpus green.
+
 ## [v11.80] — 2026-07-29 — Type before the shutter, and three fewer choices
 
 Interface only. **No change to how a captured page is processed or encoded** —

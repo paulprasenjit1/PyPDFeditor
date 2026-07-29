@@ -20,13 +20,13 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.80";
+const APP_BUILD = "11.81";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","enhToggle","idToggle","cropReset","cropRetake","cropUse",
-    "autoBtn","paperBtn","idBothToggle","paperVal","camBoot","cropDelete",
+    "autoBtn","paperBtn","idBothToggle","paperVal","camBoot",
     "whiteBtn","imgPlaceBtn","insImgInput","formBtn",
     "ge0","ge1","ge2","ge3","he0","he1","he2","he3"];
   const missing = need.filter(id=>!document.getElementById(id));
@@ -5525,15 +5525,30 @@ const cropFilter = "colour";  // scanner is colour-only (B&W removed in v10.20)
 // nothing. The constant stays (SCAN_Q, encodeUnderBudget and the HQ path all
 // read it) but there is no longer a way to set it to "small".
 const scanQuality = "std";
-let scanEnhance = true;   // v11.80: Document is the default and the only document type       // "Whiten": flatten illumination so paper reads white
-try { if (localStorage.getItem("scanEnhance")==="0") scanEnhance=false; } catch(e){}
+// v11.81: Type and Auto are DEFAULTS, not preferences. Both are reset every
+// time the scanner opens — see resetScanDefaults() — so tapping Scan always
+// starts from Document with Auto off, whatever the last session did. A stored
+// Photo ID from an earlier build would otherwise ambush the next document scan
+// with card framing, which is a surprising way to lose a page.
+let scanEnhance = true;       // "Document": flatten illumination so paper reads white
 let scanIdMode = false;       // v10.79 "Photo ID": light, colour-true card placed on a white A4 page
-try { if (localStorage.getItem("scanIdMode")==="1") scanIdMode=true; } catch(e){}
-// v11.32 auto capture. ON by default — it is the faster path for the common
-// case (a stack of pages on a desk) and the shutter is still there for anyone
-// who wants to frame a shot deliberately. Persisted, so the choice sticks.
-let scanAuto = true;
-try { if (localStorage.getItem("scanAuto")==="0") scanAuto=false; } catch(e){}
+try { localStorage.removeItem("scanEnhance"); localStorage.removeItem("scanIdMode"); } catch(e){}
+// v11.32 auto capture. v11.81: OFF by default and no longer persisted. It fires
+// the shutter by itself once the page looks framed and still, which is faster
+// for a stack on a desk but takes the shot out of your hands — a poor thing to
+// inherit silently from a previous session. Turn it on per session when it
+// suits the job.
+let scanAuto = false;
+try { localStorage.removeItem("scanAuto"); } catch(e){}
+// Called from startScan: every scanning session begins from the same place.
+function resetScanDefaults(){
+  scanEnhance = true;         // Type = Document
+  scanIdMode  = false;
+  scanAuto    = false;        // Auto off
+  // idTwoSide is deliberately NOT reset here: it is a Photo ID sub-choice, not
+  // one of the two defaults asked for, and resetting it would be a behaviour
+  // change nobody requested.
+}
 // v11.61 "HQ": take the page with the iPhone's OWN camera rather than lifting a
 // frame off the live preview. This is the only change that raises the ceiling
 // on scan sharpness rather than polishing underneath it.
@@ -5754,6 +5769,7 @@ async function startScan(append){
   // launch — a different room, or a different phone camera state, deserves a
   // fresh look at whether the high-resolution mode is behaving.
   capFrame = null; scanFallback = false; scanRetakeAt = -1; exposureChecked = false;
+  resetScanDefaults();        // v11.81: Document, Auto off, every time
   scanAppendTo = (append && workingBytes) ? { name: fileName } : null;
   idPendingCard = null;
   disarmAuto(); autoBusy = false; autoNeedsRelease = false;
@@ -6940,7 +6956,11 @@ function setScanIdMode(on){
 // filter row from wrapping to a third line on a small phone.
 function refreshIdTwoSideBtn(){
   const b = $("idBothToggle"); if (!b) return;
-  b.hidden = !scanIdMode;
+  // v11.81: the whole row hides, not just the button — the button now lives
+  // inside a segmented track, and hiding only the button would leave an empty
+  // track sitting under Photo ID.
+  const row = $("bothRow"); if (row) row.hidden = !scanIdMode;
+  b.hidden = false;
   b.classList.toggle("on", idTwoSide);
   b.setAttribute("aria-pressed", String(idTwoSide));
 }
@@ -7129,27 +7149,9 @@ $("cropRetake").onclick = async ()=>{
   $("scanCam").classList.add("show");
   if (scanFallback) $("camInput").click(); else await resumeCamera();
 };
-// v11.80: Delete — throw this capture away and go back to the viewfinder.
-// Deliberately NOT the same as Retake: Retake reshoots immediately (in the
-// fallback path it reopens the camera straight away), which is what you want
-// when the shot was bad. Delete is for when you did not want the page at all,
-// and it leaves you looking at the preview rather than at a shutter.
-//
-// It only ever discards the capture being reviewed. Pages already accepted are
-// untouched — those are removed from the thumbnail strip, where each one can be
-// seen before it goes.
-$("cropDelete").onclick = async ()=>{
-  const wasRetake = scanRetakeAt;
-  capFrame = null;
-  scanRetakeAt = -1;            // a cancelled retake must not replace anything
-  $("scanCrop").classList.remove("show");
-  $("scanCam").classList.add("show");
-  if (!scanFallback) await resumeCamera();
-  refreshScanIdle();
-  setStatus(wasRetake >= 0
-    ? "Retake discarded — page "+(wasRetake+1)+" is unchanged."
-    : "Capture discarded.", "warn");
-};
+// v11.81: the Delete button is removed. Retake does the same job — it drops
+// the capture being reviewed and puts you back at the camera — so two buttons
+// for one action was a choice with no difference behind it.
 $("scanCancel").onclick = ()=>{
   if (!scanPages.length){ endScan(); setStatus("Scan cancelled.","warn"); return; }
   // in-app sheet instead of the native confirm() dialog
