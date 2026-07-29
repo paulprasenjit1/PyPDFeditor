@@ -4,6 +4,55 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.85] — 2026-07-29 — Both of those, actually fixed
+
+You reported both again. v11.83 and v11.84 did not work, and in each case I can
+say exactly why.
+
+### The bottom gap: v11.83 could not have worked
+Two independent mistakes, either of which alone was fatal.
+
+**1. It measured the wrong thing.** `visualViewport.height + offsetTop -
+innerHeight`. On your device those agree *even when the gap is on screen*, so it
+read `0px` and did nothing at all.
+
+**2. Even with a correct number, it could not have moved the bar.** I applied
+the correction as **padding** on an element with `bottom:0`. Padding on a
+bottom-anchored element grows it **upward** — the bar would have got taller and
+its bottom edge would have stayed exactly where it was.
+
+My own test `SC183` asserted "the toolbar grows downwards rather than moving
+down", which is a description of the defect. Writing a confident sentence about
+a thing does not make the thing true, and a test that agrees with the sentence
+rather than the behaviour is worse than no test.
+
+Now: the correction is measured on **the toolbar's own bottom edge** against
+`window.innerHeight` — the symptom itself, requiring no theory about why the
+layout viewport is short — and applied as a **negative `bottom`** plus matching
+padding. The bar moves down onto the real screen bottom; the buttons stay put;
+its top edge is unchanged, which is why the floating controls above it are
+deliberately *not* shifted (`SC183b`).
+
+### The scanner preview: v11.84 assumed the change would be observed
+A `ResizeObserver` on the viewfinder only helps if the box change is what the
+observer sees. It shipped on that assumption and did not fix it.
+
+`fitPreviewBox()` is now called from the **live-detect tick that already runs
+while the camera is up**. It no-ops unless the box or the stream size actually
+changed — two integer reads — so it costs nothing and converges within one tick
+*whatever* moved the preview and *whenever*. The observer stays, but nothing
+depends on it any more.
+
+### Also
+`Scan a document` → `Scan Document`.
+
+### The diagnostic is now the measurement
+About shows `Bottom bar 812/866 drop 54px` — the bar's own edge, the window
+height, and the correction being applied. If the gap appears and it reads
+`drop 0px`, the measurement is wrong and that says so directly.
+
+scan 214 → 218. Seventeen suites green, corpus green.
+
 ## [v11.84] — 2026-07-29 — The preview follows its box
 
 Reported: the scanner opens with the picture drawn small — about 75% of the

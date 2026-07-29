@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.84";
+const APP_BUILD = "11.85";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -4324,9 +4324,7 @@ function openAbout(){
     <div class="about">
       <div class="abrow"><span>Version</span><b>${APP_VERSION}</b></div>
       <div class="abrow"><span>Build</span><b>${BUILD_DATETIME}</b></div>
-      <div class="abrow"><span>Viewport</span><b>${(window.visualViewport
-          ? Math.round(window.visualViewport.height)+"/"+window.innerHeight+" drop "+vvDrop+"px"
-          : "n/a")}</b></div>
+      <div class="abrow"><span>Bottom bar</span><b>${(vvLast || "-")+" drop "+vvDrop+"px"}</b></div>
       <div class="abrow"><span>Cache</span><b>${cache}</b></div>
       <div class="abrow"><span>Engine</span><b>MuPDF.js (WASM) + pdf-lib</b></div>
       <div class="abrow"><span>Licence</span><b>MuPDF.js is AGPL-3.0 — <a href="https://github.com/ArtifexSoftware/mupdf.js" target="_blank" rel="noopener noreferrer">engine source</a></b></div>
@@ -5778,7 +5776,7 @@ async function startScan(append){
   // v11.76: the exposure check runs once per scanning session, not once per app
   // launch — a different room, or a different phone camera state, deserves a
   // fresh look at whether the high-resolution mode is behaving.
-  capFrame = null; scanFallback = false; scanRetakeAt = -1; exposureChecked = false;
+  capFrame = null; scanFallback = false; scanRetakeAt = -1; exposureChecked = false; fitLast = "";
   resetScanDefaults();        // v11.81: Document, Auto off, every time
   scanAppendTo = (append && workingBytes) ? { name: fileName } : null;
   idPendingCard = null; idPendingThumb = null;
@@ -5958,12 +5956,20 @@ const CAM_FIRST_FRAME_MS = 1200;   // never hide the preview longer than this
 //
 // Styles are set through the CSSOM (el.style.x), never a style attribute, so
 // the strict style-src 'self' CSP still holds.
+let fitLast = "";
 function fitPreviewBox(){
   const view = $("scanView"), v = $("scanVideo");
   if (!view || !v) return null;
   const bw = view.clientWidth|0, bh = view.clientHeight|0;
   const vw = v.videoWidth|0, vh = v.videoHeight|0;
   if (bw <= 0 || bh <= 0 || vw <= 0 || vh <= 0) return null;
+  // v11.85: cheap enough to call every tick of the live-detect loop, which is
+  // what makes the fit SELF-HEALING rather than event-driven. v11.84 hung it
+  // off a ResizeObserver, which still assumes the box change is observed —
+  // this converges within one tick no matter what moved, or when.
+  const key = bw+"x"+bh+"/"+vw+"x"+vh;
+  if (key === fitLast) return null;
+  fitLast = key;
   // Deliberately the SAME function the green outline is positioned with. The
   // outline is drawn at containFit(video, canvas) on a canvas that matches the
   // viewfinder box, so if the video is drawn to any other fit the outline lands
@@ -5976,6 +5982,7 @@ function fitPreviewBox(){
   v.style.width  = w + "px";
   v.style.height = h + "px";
   v.style.right = "auto"; v.style.bottom = "auto";
+  sizeQuadCanvas();
   return { bw, bh, vw, vh, w, h };
 }
 // v11.84: the fit has to follow the BOX, not just the stream.
@@ -6214,7 +6221,7 @@ $("torchBtn").onclick = toggleTorch;
 function stopCamera(){
   if (scanLive){ clearInterval(scanLive); scanLive = 0; }
   if (scanStream){ for (const t of scanStream.getTracks()){ try{ t.stop(); }catch(e){} } scanStream = null; }
-  const v = $("scanVideo"); v.srcObject = null; v.classList.remove("ready");
+  const v = $("scanVideo"); v.srcObject = null; v.classList.remove("ready"); fitLast = "";
   const boot = $("camBoot"); if (boot) boot.hidden = false;
   const q = $("scanQuad");
   if (q.width) q.getContext("2d").clearRect(0,0,q.width,q.height);
@@ -6515,6 +6522,11 @@ function startLiveDetect(){
     try {
       const v = $("scanVideo");
       if (!v.videoWidth || document.hidden) return;
+      // v11.85: re-fit every tick. fitPreviewBox() no-ops unless the box or the
+      // stream size actually changed, so this costs two integer reads — and it
+      // means the preview corrects itself whatever moved it and whenever,
+      // instead of relying on an observer or a listener to notice.
+      fitPreviewBox();
       // battery: once the box has locked, detect every other tick (600ms) —
       // a steady scene doesn't need re-detection 3×/second. Any jump or miss
       // clears the lock (in smoothQuad/resetLiveQuad) and full rate resumes.
@@ -8992,31 +9004,45 @@ function updateModalInert(){
 // `bottom`: growing the bar downwards keeps its background covering the gap,
 // where moving it would just relocate the black band.
 let vvDrop = 0;
+let vvLast = "";        // for the About readout
 function pinBottomChrome(){
-  const vv = window.visualViewport;
-  if (!vv) return;
-  // innerHeight is the layout viewport; vv.height + offsetTop is the visible
-  // bottom. Rounded, clamped, and capped so a transient measurement during a
-  // rotation cannot push the toolbar off the screen.
-  const drop = Math.max(0, Math.min(120, Math.round(vv.height + vv.offsetTop - window.innerHeight)));
-  if (drop === vvDrop) return;                 // avoid a style write per scroll event
-  vvDrop = drop;
-  document.documentElement.style.setProperty("--vvdrop", drop + "px");
+  const bar = $("toolbar");
+  if (!bar || !bar.getBoundingClientRect) return;
+  const r = bar.getBoundingClientRect();
+  // How far the bar's own bottom edge sits ABOVE the bottom of the visible
+  // window. This is the symptom itself — no theory about WHY the layout
+  // viewport is short is needed, and none of the several candidate causes has
+  // to be guessed right.
+  //
+  // v11.83 measured visualViewport against innerHeight instead. On this device
+  // those two agree even when the gap is there, so it read 0 and did nothing.
+  const shortfall = Math.round(window.innerHeight - r.bottom);
+  vvLast = Math.round(r.bottom) + "/" + window.innerHeight;
+  if (Math.abs(shortfall) < 1) return;              // already flush
+  // The measurement is taken WITH the current correction applied, so it is a
+  // residual: add it. One step converges; the clamp stops a bad frame running
+  // away, and re-measuring next tick corrects any overshoot.
+  const next = Math.max(0, Math.min(160, vvDrop + shortfall));
+  if (next === vvDrop) return;
+  vvDrop = next;
+  document.documentElement.style.setProperty("--vvdrop", next + "px");
 }
 (function watchBottomChrome(){
+  const recheck = ()=> requestAnimationFrame(pinBottomChrome);
+  window.addEventListener("resize", recheck);
+  window.addEventListener("orientationchange", ()=> setTimeout(recheck, 300));
   const vv = window.visualViewport;
-  if (!vv || typeof vv.addEventListener !== "function") return;
-  vv.addEventListener("resize", pinBottomChrome);
-  vv.addEventListener("scroll", pinBottomChrome);
-  window.addEventListener("orientationchange", ()=> setTimeout(pinBottomChrome, 300));
-  window.addEventListener("resize", pinBottomChrome);
-  // iOS settles the standalone viewport a beat after launch and again after a
-  // resume from background, which is when the gap appears.
+  if (vv && typeof vv.addEventListener === "function"){
+    vv.addEventListener("resize", recheck);
+    vv.addEventListener("scroll", recheck);
+  }
+  // iOS settles the standalone viewport some time after launch and again after
+  // a resume, and there is no event that reliably marks the end of it. A short
+  // ladder of checks costs nothing and covers every device I cannot test on.
   document.addEventListener("visibilitychange", ()=>{
-    if (!document.hidden) setTimeout(pinBottomChrome, 250);
+    if (!document.hidden) [0,150,400,900].forEach(t=> setTimeout(pinBottomChrome, t));
   });
-  pinBottomChrome();
-  setTimeout(pinBottomChrome, 500);
+  [0,150,400,900,1800].forEach(t=> setTimeout(pinBottomChrome, t));
 })();
 // ---------------- keyboard avoidance (v10.97) ----------------
 // On smaller iPhones the on-screen keyboard can cover a bottom sheet's input

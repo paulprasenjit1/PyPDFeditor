@@ -80,10 +80,17 @@ header .meta .meta-info { white-space:nowrap; flex:0 0 auto; }
 /* v11.14: near-opaque bar material — the translucent --chrome read as washed-out
    grey the moment white pages scrolled beneath the fixed bar. Buttons centre
    vertically (align-items:center) and the ribbon is squeezed further. */
+/* v11.85: the correction is a NEGATIVE BOTTOM, not just padding. v11.83 added
+   --vvdrop as padding only — and padding on a `bottom:0` element grows it
+   UPWARD, so the bar got taller and its bottom edge never moved. The gap stayed
+   exactly where it was. Moving the bar down by --vvdrop and padding by the same
+   amount puts its bottom edge on the real screen bottom while leaving the
+   buttons where they were, and its top edge at 48px+botpad either way — which
+   is why the floating controls below are NOT shifted. */
 .toolbar { order:4; display:flex; flex-wrap:nowrap; gap:2px;
            padding:3px 6px calc(var(--botpad) + var(--vvdrop));
            background:rgba(16,16,18,.96);
-           position:fixed; bottom:0; left:0; right:0; z-index:30;
+           position:fixed; bottom:calc(0px - var(--vvdrop)); left:0; right:0; z-index:30;
            -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
            border-top:0.5px solid var(--line); align-items:center; overflow:hidden;
            transition:transform .32s cubic-bezier(.32,.72,0,1); }
@@ -124,7 +131,7 @@ input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
    default and revealed (.show, added by refreshZoomButtons) only while a
    document is open. Moving it out of the toolbar fixed the long-standing issue
    where zoom disappeared entirely on every iPhone (<600px). */
-.zoomctl { position:fixed; right:12px; bottom:calc(48px + var(--botpad) + var(--vvdrop));
+.zoomctl { position:fixed; right:12px; bottom:calc(48px + var(--botpad));
            z-index:55; display:none; align-items:center; gap:2px;
            background:var(--chrome); border:0.5px solid var(--line); border-radius:18px;
            -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
@@ -161,7 +168,7 @@ header .xbtn { background:transparent; border:0; color:var(--muted); padding:5px
 header .xbtn svg.ic { width:16px; height:16px; }
 /* v11.11 Markup popover: floats above the toolbar like the zoom pill */
 .mkmenu { position:fixed; left:50%; transform:translateX(-50%);
-        bottom:calc(48px + var(--botpad) + var(--vvdrop)); z-index:56;
+        bottom:calc(48px + var(--botpad)); z-index:56;
         display:flex; gap:2px; padding:4px;
         background:var(--chrome); border:0.5px solid var(--line); border-radius:18px;
         -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
@@ -189,7 +196,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 
 /* Floating Undo pill (bottom-left). Mirrors the zoom pill on the right; shown
    by refreshUndo() only while the undo stack is non-empty. */
-.undofab { position:fixed; left:12px; bottom:calc(48px + var(--botpad) + var(--vvdrop));
+.undofab { position:fixed; left:12px; bottom:calc(48px + var(--botpad));
            z-index:55; display:none; flex-direction:row; align-items:center; gap:6px;
            background:var(--chrome); border:0.5px solid var(--line); border-radius:18px;
            -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
@@ -226,7 +233,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    horizontally centred (align-items). */
 .viewer { flex:1; overflow:auto;
           padding:calc(32px + max(3px, env(safe-area-inset-top))) 4px
-                  calc(48px + var(--botpad) + var(--vvdrop));
+                  calc(48px + var(--botpad));
           display:flex; flex-direction:column; gap:10px; -webkit-overflow-scrolling:touch;
           align-items:safe center; touch-action:pan-x pan-y;
           overscroll-behavior:none; }   /* v11.23: no rubber-band drift on touch */
@@ -237,12 +244,12 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    than before (user asked for less bottom spacing, not more). Floating
    controls (zoom, undo, markup popover) track the toolbar height. */
 @media (min-width:428px){
-  .viewer { padding-bottom:calc(50px + var(--botpad2) + var(--vvdrop)); }
+  .viewer { padding-bottom:calc(50px + var(--botpad2)); }
   .toolbar { gap:6px; padding:4px 10px calc(var(--botpad2) + var(--vvdrop)); }
   .toolbar .tbtn span { font-size:11.5px; }
   .toolbar .tbtn svg.ic { width:25px; height:25px; }
   .zoomctl, .undofab,
-  .mkmenu { bottom:calc(50px + var(--botpad2) + var(--vvdrop)); }
+  .mkmenu { bottom:calc(50px + var(--botpad2)); }
 }
 .pagewrap { display:flex; flex-direction:column; gap:10px; align-items:safe center; }
 /* GPU promotion ONLY during an active pinch — a permanently promoted wrapper
@@ -468,7 +475,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    shortcut — tap it to open Go to page — so it gets an accent outline and is
    only tappable while visible (pointer-events:auto on .show). */
 .pgpill { position:fixed; left:50%; transform:translateX(-50%);
-          bottom:calc(48px + var(--botpad) + var(--vvdrop)); z-index:50;
+          bottom:calc(48px + var(--botpad)); z-index:50;
           background:var(--pill-bg); color:var(--pill-fg); font-size:12px; font-weight:600;
           padding:6px 13px; border-radius:15px; border:1px solid var(--accent);
           -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
