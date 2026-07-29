@@ -20,14 +20,14 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.78";
+const APP_BUILD = "11.80";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","enhToggle","idToggle","cropReset","cropRetake","cropUse",
-    "autoBtn","paperBtn","idBothToggle","lookPlain","paperVal","camBoot",
-    "whiteBtn","imgPlaceBtn","insImgInput","formBtn","hqBtn","hqIdle",
+    "autoBtn","paperBtn","idBothToggle","paperVal","camBoot","cropDelete",
+    "whiteBtn","imgPlaceBtn","insImgInput","formBtn",
     "ge0","ge1","ge2","ge3","he0","he1","he2","he3"];
   const missing = need.filter(id=>!document.getElementById(id));
   if (!missing.length && pageBuild === APP_BUILD){
@@ -5525,7 +5525,7 @@ const cropFilter = "colour";  // scanner is colour-only (B&W removed in v10.20)
 // nothing. The constant stays (SCAN_Q, encodeUnderBudget and the HQ path all
 // read it) but there is no longer a way to set it to "small".
 const scanQuality = "std";
-let scanEnhance = true;       // "Whiten": flatten illumination so paper reads white
+let scanEnhance = true;   // v11.80: Document is the default and the only document type       // "Whiten": flatten illumination so paper reads white
 try { if (localStorage.getItem("scanEnhance")==="0") scanEnhance=false; } catch(e){}
 let scanIdMode = false;       // v10.79 "Photo ID": light, colour-true card placed on a white A4 page
 try { if (localStorage.getItem("scanIdMode")==="1") scanIdMode=true; } catch(e){}
@@ -5551,23 +5551,14 @@ try { if (localStorage.getItem("scanAuto")==="0") scanAuto=false; } catch(e){}
 // camera UI replaces ours, so there is no green outline and no hands-free
 // capture, and it is two more taps per page. Auto stays the right choice for
 // working through a stack; HQ is for the page that matters.
-let scanHiQ = false;
-try { if (localStorage.getItem("scanHiQ")==="1") scanHiQ=true; } catch(e){}
-const HQ_MAX_DIM = 4600;     // warp ceiling in HQ (memory-safe on a phone)
-// v11.62: 1.1MB, not the 3.2MB v11.61 allowed. That budget was set to "match
-// the extra detail" and simply let a page balloon: a real HQ scan came back at
-// 308 dpi and 2.73 MB for ONE page. The encoder steps quality down only as far
-// as the budget requires, so a tighter figure costs nothing on a sparse page
-// and stops a dense one running away. Text at 300 dpi survives q70 easily;
-// what it cannot survive is being stored at 96 dpi, which is the trade the old
-// "Small file" setting made.
-// v11.75: 1.1MB -> 1.3MB, which is a LOOSENING, not a licence to balloon. The
-// starting quality just dropped to 0.80, and an HQ page carries about 2.1x the
-// pixels of a standard one (4600 vs 3200 on the long side), so at the new
-// quality it lands near 1.2MB on its own. Holding the old 1.1MB ceiling would
-// force the encoder to step down and spend HQ's extra detail on meeting a
-// budget — which is the one thing HQ exists not to do.
-const HQ_BUDGET  = 1300000;
+// v11.80: HQ is gone. It routed the shutter to the iPhone's own camera app for
+// a full-resolution still, which did give more pixels — but it cost the live
+// green outline, hands-free capture, and it caused a run of "two cameras"
+// bugs (v11.62, v11.65, v11.66) because a native camera and a live preview can
+// never both be on screen. Since v11.76 the 4:3 sensor request gets most of
+// that resolution back inside the normal preview, so the trade stopped being
+// worth it. The constant remains only so nothing reads an undefined value.
+try { localStorage.removeItem("scanHiQ"); } catch(e){}   // v11.80: drop a stored preference
 // v11.33 output paper size for scanned pages. "auto" keeps the captured shape
 // (the pre-v11.33 behaviour) and is deliberately NOT the default: a scan of an
 // A4 sheet should come out A4 so it prints with even margins and merges
@@ -5602,10 +5593,6 @@ if (scanPaper !== "a4" && scanPaper !== "auto") scanPaper = "auto";
 let idTwoSide = true;
 try { if (localStorage.getItem("scanIdTwoSide")==="0") idTwoSide=false; } catch(e){}
 let idPendingCard = null;     // canvas of side 1, held until side 2 arrives
-// v11.78: a thumbnail for that held side. Without it the strip stayed empty
-// after capturing the front of a card and only filled in once the back was
-// done — so the one capture that most needs confirming showed nothing.
-let idPendingThumb = null;
 // v11.67: index a retake will replace, or -1 for "add to the end"
 let scanRetakeAt = -1;
 // v10.74: std now warps to a larger long side (was 2560) so the higher-res 4K
@@ -5642,20 +5629,7 @@ let scanRetakeAt = -1;
 // 900KB leaves the encoder at its starting quality instead of stepping down.
 // v11.76's page was 714KB against a 700KB budget and had NOT been stepped down
 // (q0.80 re-encodes to 697KB), so the budget was already at its useful edge.
-// v11.78: budget 900KB -> 780KB. Two corrections from real v11.77 output.
-//
-// First, my 3500 figure did not buy 300 dpi. The v11.77 page came out 3255px,
-// BELOW the cap — so the sensor, not the constant, is the limit after all, and
-// raising it moved the resolution only 274 -> 278 dpi. The cap is harmless
-// where it is (it no longer binds) but it is not what improved the picture.
-//
-// What actually improved was quality: v11.76's 714KB was against a 700KB
-// budget, so it HAD been stepped down to the q0.70 floor. v11.77 at a 900KB
-// budget stays at q0.80. That is the whole 714 -> 869KB difference, and it was
-// worth having — but not all of it. The same page re-encoded at q0.72 is
-// indistinguishable from q0.80 at 100% on this text, so 780KB lets a sparse
-// page hold q0.80 and eases a dense one down a notch nobody can see.
-const SCAN_Q = { std:{ jpeg:0.80, maxDim:3508, budget:780000, qFloor:0.70 },
+const SCAN_Q = { std:{ jpeg:0.80, maxDim:3500, budget:900000, qFloor:0.70 },
                  small:{ jpeg:0.62, maxDim:1400 } };
 // Encode a canvas to JPEG, stepping quality down only if the blob exceeds the
 // byte budget (document scans are mostly white and compress well, so a sparse
@@ -5781,7 +5755,7 @@ async function startScan(append){
   // fresh look at whether the high-resolution mode is behaving.
   capFrame = null; scanFallback = false; scanRetakeAt = -1; exposureChecked = false;
   scanAppendTo = (append && workingBytes) ? { name: fileName } : null;
-  idPendingCard = null; idPendingThumb = null;
+  idPendingCard = null;
   disarmAuto(); autoBusy = false; autoNeedsRelease = false;
   refreshAutoBtn(); refreshPaperBtn(); refreshIdTwoSideBtn();
   updateScanCount();
@@ -5803,7 +5777,6 @@ async function startScan(append){
   } catch(e){}
   if (!camHint) setStatus(
     scanAppendTo ? "Scanning into “"+scanAppendTo.name+"” — the pages will be added to the end."
-    : scanHiQ    ? "High quality — the camera opens for each page."
     : scanAuto   ? "Hold the camera over a page — it is taken automatically once framed and steady."
                  : "Point the camera at a document and tap the shutter.", "ok");
   // v11.62: in HQ do NOT open the live preview at all. v11.61 started it and
@@ -5811,14 +5784,13 @@ async function startScan(append){
   // the user met two camera screens for one photo — "confusing", and rightly
   // so. There is only ever one camera in HQ, and it opens straight away: the
   // page is one tap from the Scan button, not two.
-  if (scanHiQ){ refreshScanIdle(); $("camInput").click(); return; }
   await startCamera();
 }
 function endScan(){
   stopCamera();
   scanPages = []; capFrame = null; scanRetakeAt = -1;
   scanAppendTo = null;           // v11.35: forget any append target
-  idPendingCard = null; idPendingThumb = null;   // v11.34: drop a half-finished card pair
+  idPendingCard = null;          // v11.34: drop a half-finished card pair
   disarmAuto(); autoBusy = false; autoNeedsRelease = false;
   updateScanCount();
   $("scanCam").classList.remove("show");
@@ -5842,18 +5814,9 @@ function updateScanCount(){
 // thumbnail strip above the shutter: tap a page to review or delete it
 function renderScanThumbs(){
   const strip=$("scanThumbs");
-  // v11.78: the held front of a two-sided card counts as something to show.
-  strip.classList.toggle("has", scanPages.length>0 || !!idPendingThumb);
+  strip.classList.toggle("has", scanPages.length>0);
   strip.innerHTML = scanPages.map((p,i)=>
-    h`<button class="sthumb" data-pg="${i}" aria-label="Review scanned page ${i+1}"><img src="${p.thumb}" alt="Page ${i+1}"><span class="num">${i+1}</span></button>`).join("")
-    // It is deliberately marked as waiting rather than numbered: it is not a
-    // page yet, and tapping it discards the side rather than opening a review
-    // sheet for a page that does not exist.
-    + (idPendingThumb
-        ? h`<button class="sthumb pending" id="idPendingThumb" aria-label="Front of the card, waiting for the back — tap to discard it"><img src="${idPendingThumb}" alt="Front of the card"><span class="num">front</span></button>`
-        : "");
-  const pend = $("idPendingThumb");
-  if (pend) pend.onclick = ()=> clearIdPending(false);
+    h`<button class="sthumb" data-pg="${i}" aria-label="Review scanned page ${i+1}"><img src="${p.thumb}" alt="Page ${i+1}"><span class="num">${i+1}</span></button>`).join("");
   strip.querySelectorAll("[data-pg]").forEach(b=>{
     const i = +b.dataset.pg;
     b.onclick = ()=> openScanPageSheet(i);
@@ -5928,7 +5891,7 @@ function openScanPageSheet(i){
     $("scanCrop").classList.remove("show");
     $("scanCam").classList.add("show");
     setStatus("Retaking page "+(i+1)+" — the new photo replaces it in place.","ok");
-    if (scanHiQ || scanFallback){ refreshScanIdle(); $("camInput").click(); }
+    if (scanFallback){ refreshScanIdle(); $("camInput").click(); }
     else { refreshScanIdle(); resumeCamera(); }
   };
   $("pgClose").onclick=done;
@@ -6615,7 +6578,6 @@ $("scanShot").onclick = ()=>{
   if (scanFallback){ $("camInput").click(); return; }
   // v11.61: in HQ the shutter hands over to the iPhone's camera, which returns
   // a full-resolution photo instead of a preview frame.
-  if (scanHiQ){ disarmAuto(); $("camInput").click(); return; }
   // v11.32: a deliberate tap cancels any countdown in progress — the user has
   // decided to frame this one themselves, and it goes through Adjust.
   disarmAuto();
@@ -6637,7 +6599,7 @@ async function loadPhotoToCrop(f){
     // hardcoded 3200 sitting beside a constant of the same value — raising one
     // and not the other would have quietly left the native-photo path a
     // resolution behind the live one.
-    const cap = scanHiQ ? HQ_MAX_DIM : SCAN_Q.std.maxDim;
+    const cap = SCAN_Q.std.maxDim;
     const s = Math.min(1, cap/Math.max(im.naturalWidth, im.naturalHeight));
     const c=document.createElement("canvas");
     c.width=Math.round(im.naturalWidth*s); c.height=Math.round(im.naturalHeight*s);
@@ -6924,31 +6886,29 @@ try { localStorage.removeItem("scanQuality"); } catch(e){}
 // invisible, so the pair could be read as "both on" when that state never
 // existed. setScanEnhance and setScanIdMode keep their old signatures and
 // storage keys so everything downstream (and the tests) is unaffected.
-function scanLook(){ return scanIdMode ? "id" : scanEnhance ? "whiten" : "plain"; }
-function refreshLookSeg(){
-  const l = scanLook();
+// v11.80: Type has two values, Document and Photo ID. "Plain" is gone — it was
+// the unprocessed capture, and every document scan now gets the illumination
+// flattening and polish that used to be called Whiten. Document is the default.
+function scanType(){ return scanIdMode ? "id" : "document"; }
+function refreshTypeSeg(){
+  const t = scanType();
   const set = (id, on)=>{
     const b = $(id); if (!b) return;
     b.classList.toggle("on", on);
     b.setAttribute("aria-pressed", String(on));
   };
-  set("lookPlain", l === "plain");
-  set("enhToggle", l === "whiten");
-  set("idToggle",  l === "id");
+  set("enhToggle", t === "document");
+  set("idToggle",  t === "id");
 }
-$("lookPlain").onclick = ()=>{
-  if (scanIdMode) setScanIdMode(false);      // leaving ID mode also clears a held front side
-  setScanEnhance(false);
-};
-try { refreshLookSeg(); } catch(e){}
+try { refreshTypeSeg(); } catch(e){}
 $("enhToggle").onclick = ()=>{
-  if (scanIdMode) setScanIdMode(false);
+  if (scanIdMode) setScanIdMode(false);      // also clears any held front side
   setScanEnhance(true);
 };
 function setScanEnhance(on){
   scanEnhance = !!on;
   try { localStorage.setItem("scanEnhance", scanEnhance ? "1" : "0"); } catch(e){}
-  refreshLookSeg();
+  refreshTypeSeg();
   renderCropPreview();
 }
 // "Photo ID": treat the selected region as an ID/photo card — process it light and
@@ -6966,8 +6926,12 @@ function setScanIdMode(on){
       : "Photo ID mode: the card will be placed on a white A4 page. Frame just the card.","ok");
   } else {
     clearIdPending(true);     // leaving ID mode abandons any held front side
+    // v11.80: there is no unprocessed type any more, so leaving Photo ID must
+    // land on Document rather than on nothing.
+    scanEnhance = true;
+    try { localStorage.setItem("scanEnhance","1"); } catch(e){}
   }
-  refreshLookSeg();
+  refreshTypeSeg();
   refreshIdTwoSideBtn();
   renderCropPreview();
 }
@@ -7035,21 +6999,6 @@ $("autoBtn").onclick = ()=> setScanAuto(!scanAuto);
 function setScanAuto(on){
   scanAuto = !!on;
   try { localStorage.setItem("scanAuto", scanAuto ? "1" : "0"); } catch(e){}
-  // v11.65: the mirror of the rule in setScanHiQ. Hands-free capture needs a
-  // preview to watch, so asking for Auto turns HQ off and brings the preview
-  // back — rather than leaving Auto lit with nothing to fire from.
-  if (scanAuto && scanHiQ){
-    scanHiQ = false;
-    try { localStorage.setItem("scanHiQ","0"); } catch(e){}
-    refreshHqBtn();
-    const inScanner = $("scanCam").classList.contains("show");
-    if (inScanner && !capFrame && !scanFallback && !scanStream){
-      refreshAutoBtn();
-      setStatus("Auto capture on, high quality off — the preview is back, and pages are taken for you.","ok");
-      startCamera();
-      return;
-    }
-  }
   refreshAutoBtn();
   if (!scanAuto) disarmAuto();
   setStatus(scanAuto
@@ -7065,64 +7014,11 @@ function refreshAutoBtn(){
   b.hidden = scanFallback;
 }
 refreshAutoBtn();
-// v11.61: HQ toggle. Auto capture and HQ are mutually exclusive by nature —
-// the iPhone's camera takes over the screen, so there is no preview to watch
-// and nothing to fire by itself. Turning HQ on therefore turns Auto off, and
-// says so rather than leaving a toggle that silently does nothing.
-$("hqBtn").onclick = ()=> setScanHiQ(!scanHiQ);
-// v11.66: the empty preview area IS the shutter in HQ — tapping it is the
-// first thing anyone tries, so it opens the camera rather than doing nothing.
-$("hqIdle").onclick = ()=>{ if (scanHiQ && !capFrame) $("camInput").click(); };
-function setScanHiQ(on){
-  scanHiQ = !!on;
-  try { localStorage.setItem("scanHiQ", scanHiQ ? "1" : "0"); } catch(e){}
-  if (scanHiQ && scanAuto){ scanAuto = false;
-    try { localStorage.setItem("scanAuto","0"); } catch(e){}
-    disarmAuto(); refreshAutoBtn();
-  }
-  refreshHqBtn(); refreshAutoBtn(); refreshScanIdle();
-  // v11.65: switch camera NOW if the scanner is already open. v11.62 only
-  // handled the case where HQ was already on when Scan was tapped — turn it on
-  // from inside the scanner and the live preview kept running, so the shutter
-  // opened the iPhone's camera on TOP of it and the user met two cameras
-  // again. The preview and the native camera are alternatives, never both.
-  const inScanner = $("scanCam").classList.contains("show") || !!scanStream;
-  const onCropScreen = !!capFrame;
-  if (inScanner && !onCropScreen){
-    if (scanHiQ){
-      stopCamera();                  // also clears the green outline
-      refreshScanIdle();
-      setStatus("High quality on — the iPhone's camera takes each page.","ok");
-      $("camInput").click();         // one tap, one camera
-      return;
-    }
-    if (!scanFallback){
-      setStatus("High quality off — back to the live preview, with the outline and hands-free capture.","ok");
-      startCamera();
-      return;
-    }
-  }
-  setStatus(scanHiQ
-    ? "High quality on — the shutter opens the iPhone's camera for a full-resolution photo. Sharper, but no green outline and no hands-free capture."
-    : "High quality off — back to the live preview, with the outline and hands-free capture.","ok");
-}
-// v11.66: HQ has no live preview, so the preview area would otherwise be a
-// black rectangle with no explanation — which reads as a broken camera rather
-// than as a mode that works differently. Show a sign there instead, and make
-// it a button: tapping the empty space is what most people try first.
-function refreshScanIdle(){
-  const el = $("hqIdle");
-  if (!el) return;
-  const onScanScreen = $("scanCam").classList.contains("show");
-  el.hidden = !(scanHiQ && onScanScreen && !scanStream && !capFrame);
-}
-function refreshHqBtn(){
-  const b = $("hqBtn"); if (!b) return;
-  b.classList.toggle("on", scanHiQ);
-  b.setAttribute("aria-pressed", String(scanHiQ));
-  b.hidden = scanFallback;      // the fallback path is already native capture
-}
-refreshHqBtn();
+// v11.80: the high-quality toggle, its button and its idle sign are removed with the
+// mode itself. refreshScanIdle survives as a no-op guard because it is called
+// from several places in the capture flow; leaving those calls pointing at a
+// missing function would break the scanner rather than the button.
+function refreshScanIdle(){ /* nothing to show: there is only one camera now */ }
 // ---- v11.34: both sides of a card on ONE page ----------------------------
 // "Both sides" is the single most-requested shape of an ID scan and the one
 // every print shop produces: front and back of the same card, stacked on one
@@ -7150,16 +7046,7 @@ function compositeCardsOnA4(cards){
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
   if (!list.length) return c;
 
-  // v11.78: 46% -> 78% of the page width.
-  //
-  // At 46% a card was placed at roughly life size (an ID-1 card is 85.6mm on a
-  // 210mm sheet, so 41%), which sounds right and reads badly: the fine print on
-  // a driving licence came out mushy, and 37% of the sheet was left blank
-  // underneath. A scan of an ID exists to be READ, not to be a facsimile at
-  // life size, and the pixels are already captured — they were being thrown
-  // away by drawing small. 78% is about 1.7x the linear size, so the same
-  // captured detail lands on 1.7x the paper.
-  const TARGET_W = Math.round(ID_PAGE_W*0.78);
+  const TARGET_W = Math.round(ID_PAGE_W*0.46);          // card width ≈ 46% of the page
   // Each side is fitted independently: the two captures are rarely framed
   // identically, and forcing a shared scale would shrink whichever side
   // happened to be photographed from further away.
@@ -7171,25 +7058,18 @@ function compositeCardsOnA4(cards){
   };
   if (list.length === 1){
     const { dw, dh } = fit(list[0], Math.round(ID_PAGE_H*0.42));
-    // v11.78: centre it on the sheet. The old 17% offset put a single card high
-    // on the page with roughly half of it blank underneath — the same bias the
-    // two-sided layout had, and just as odd on a printed page.
-    ctx.drawImage(list[0], Math.round((ID_PAGE_W-dw)/2), Math.round((ID_PAGE_H-dh)/2), dw, dh);
+    ctx.drawImage(list[0], Math.round((ID_PAGE_W-dw)/2), Math.round(ID_PAGE_H*0.17), dw, dh);
     return c;
   }
   // Two sides: stack them in the upper two-thirds with a clear gap, both
   // horizontally centred. Height cap is per card so a tall card (a passport
   // page rather than an ID-1 card) still cannot overrun the sheet.
-  // v11.78: the height cap rises with the width, or it would simply undo it —
-  // an ID-1 card at 78% width is 1234px tall, over the old 30% (1052) ceiling,
-  // so the card would have been re-shrunk to fit and nothing would change.
-  const maxH = Math.round(ID_PAGE_H*0.38);
+  const maxH = Math.round(ID_PAGE_H*0.30);
   const a = fit(list[0], maxH), b = fit(list[1], maxH);
-  const gap = Math.round(ID_PAGE_H*0.045);
+  const gap = Math.round(ID_PAGE_H*0.055);
   const total = a.dh + gap + b.dh;
-  // v11.78: centre the pair on the WHOLE sheet rather than the upper 78%. The
-  // old bias left 37% of the page empty at the bottom on a real two-sided scan.
-  let y = Math.max(Math.round(ID_PAGE_H*0.06), Math.round((ID_PAGE_H-total)/2));
+  // centre the pair in the upper 78% of the page, never higher than a 9% margin
+  let y = Math.max(Math.round(ID_PAGE_H*0.09), Math.round((ID_PAGE_H*0.78-total)/2));
   ctx.drawImage(list[0], Math.round((ID_PAGE_W-a.dw)/2), y, a.dw, a.dh);
   y += a.dh + gap;
   ctx.drawImage(list[1], Math.round((ID_PAGE_W-b.dw)/2), y, b.dw, b.dh);
@@ -7202,17 +7082,6 @@ function compositeCardOnA4(cardCanvas){ return compositeCardsOnA4([cardCanvas]);
 function takeIdSide(card, returnToCamera){
   if (!idPendingCard){
     idPendingCard = card;
-    // v11.78: make a thumbnail for the held side straight away, so the strip
-    // shows the front the moment it is taken instead of staying empty until the
-    // back is done.
-    try {
-      const t = document.createElement("canvas");
-      const s = Math.min(1, 220/Math.max(card.width, card.height));
-      t.width = Math.max(1, Math.round(card.width*s));
-      t.height = Math.max(1, Math.round(card.height*s));
-      t.getContext("2d").drawImage(card, 0, 0, t.width, t.height);
-      idPendingThumb = t.toDataURL("image/jpeg", 0.7);
-    } catch(e){ idPendingThumb = null; }
     capFrame = null;
     if (returnToCamera){
       $("scanCrop").classList.remove("show");
@@ -7220,12 +7089,11 @@ function takeIdSide(card, returnToCamera){
       if (!scanFallback) resumeCamera();
     }
     updateScanCount();          // refreshes the "side 1 held" hint
-    renderScanThumbs();         // ...and shows the front that is being held
     setStatus("Front captured. Turn the card over and scan the back.","ok");
     return null;
   }
   const page = compositeCardsOnA4([idPendingCard, card]);
-  idPendingCard = null; idPendingThumb = null;
+  idPendingCard = null;
   return page;
 }
 // Drop a half-finished card pair. Called when ID mode or the two-side toggle is
@@ -7233,8 +7101,8 @@ function takeIdSide(card, returnToCamera){
 // silently welded onto an unrelated card later.
 function clearIdPending(quiet){
   if (!idPendingCard) return;
-  idPendingCard = null; idPendingThumb = null;
-  updateScanCount(); renderScanThumbs();
+  idPendingCard = null;
+  updateScanCount();
   if (!quiet) setStatus("The held front side was discarded.","warn");
 }
 // draw the captured photo onto the crop canvas with the active filter applied,
@@ -7260,6 +7128,27 @@ $("cropRetake").onclick = async ()=>{
   $("scanCrop").classList.remove("show");
   $("scanCam").classList.add("show");
   if (scanFallback) $("camInput").click(); else await resumeCamera();
+};
+// v11.80: Delete — throw this capture away and go back to the viewfinder.
+// Deliberately NOT the same as Retake: Retake reshoots immediately (in the
+// fallback path it reopens the camera straight away), which is what you want
+// when the shot was bad. Delete is for when you did not want the page at all,
+// and it leaves you looking at the preview rather than at a shutter.
+//
+// It only ever discards the capture being reviewed. Pages already accepted are
+// untouched — those are removed from the thumbnail strip, where each one can be
+// seen before it goes.
+$("cropDelete").onclick = async ()=>{
+  const wasRetake = scanRetakeAt;
+  capFrame = null;
+  scanRetakeAt = -1;            // a cancelled retake must not replace anything
+  $("scanCrop").classList.remove("show");
+  $("scanCam").classList.add("show");
+  if (!scanFallback) await resumeCamera();
+  refreshScanIdle();
+  setStatus(wasRetake >= 0
+    ? "Retake discarded — page "+(wasRetake+1)+" is unchanged."
+    : "Capture discarded.", "warn");
 };
 $("scanCancel").onclick = ()=>{
   if (!scanPages.length){ endScan(); setStatus("Scan cancelled.","warn"); return; }
@@ -7288,12 +7177,7 @@ let cropBusy = false;          // re-entrancy guard: one processing at a time
 async function commitScanPage(frame, q, opts){
   const returnToCamera = !!(opts && opts.returnToCamera);
   const Q0 = SCAN_Q[scanQuality] || SCAN_Q.std;
-  // v11.61: in HQ the warp keeps the photo's detail instead of shrinking it to
-  // the preview-frame ceiling, and the JPEG gets a budget to match — a 4600px
-  // page squeezed into the old 1.4MB budget would just be re-lost as artefacts.
-  const Q = (scanHiQ && scanQuality !== "small")
-    ? { jpeg:Q0.jpeg, maxDim:Math.max(Q0.maxDim, HQ_MAX_DIM), budget:HQ_BUDGET, qFloor:Q0.qFloor }
-    : Q0;
+  const Q = Q0;                       // v11.80: no HQ branch left to choose
   let out, c;
   if (scanIdMode){
     // Photo ID: warp just the card, enhance it light + colour-true, then
@@ -7339,7 +7223,7 @@ async function commitScanPage(frame, q, opts){
     $("scanCam").classList.add("show");
     // v11.62: in HQ there is no preview to resume — the next page comes from
     // the iPhone's camera, opened again by the shutter (one tap per page).
-    if (!scanFallback && !scanHiQ) await resumeCamera();
+    if (!scanFallback) await resumeCamera();
     refreshScanIdle();
   }
   // v11.61: say what the page actually came out at. 300dpi is the mark the
@@ -7374,8 +7258,7 @@ function scanPageDpi(w, h){
 // encode + record one finished page canvas
 async function pushScanPage(c, w, h){
   const QQ0 = SCAN_Q[scanQuality] || SCAN_Q.std;
-  const QQ = (scanHiQ && scanQuality !== "small")
-    ? { jpeg:QQ0.jpeg, budget:HQ_BUDGET, qFloor:QQ0.qFloor } : QQ0;
+  const QQ = QQ0;                     // v11.80: no HQ branch left to choose
   const blob = await encodeScanJpeg(c, QQ.jpeg, QQ.budget, QQ.qFloor);
   // small thumbnail (112px tall ≈ 56 css px at 2×) for the review strip
   const tc=document.createElement("canvas");

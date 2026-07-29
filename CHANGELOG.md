@@ -4,7 +4,109 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
-## [v11.78] — 2026-07-29 — Photo ID gets its pixels back, and a correction
+## [v11.80] — 2026-07-29 — Type before the shutter, and three fewer choices
+
+Interface only. **No change to how a captured page is processed or encoded** —
+the scan pipeline is v11.77's, untouched, which is the build whose output was
+good.
+
+### Type is chosen before you capture, not after
+It used to sit on the Adjust screen, after the shot. That was backwards: in
+Photo ID the type decides how the page is framed, warped and composited, so
+picking it afterwards meant the live preview and the auto-capture gate were
+working to different rules from the result. It now sits under the viewfinder,
+where it is a decision about what you are about to photograph.
+
+### Look becomes Type, and loses a value
+| was | now |
+|---|---|
+| Plain · Whiten · Photo ID | **Document** · Photo ID |
+
+- **Plain is gone.** It was the unprocessed capture; every document scan now
+  gets the illumination flattening that used to be called Whiten.
+- **Whiten becomes Document**, and is the default. The old name described the
+  filter; the new one describes what you are scanning.
+- **Photo ID is unchanged**, and **Both sides** now sits beside it rather than
+  in the row below — it is a property of that type and means nothing for a
+  document, so it appears only when Photo ID is chosen.
+- Leaving Photo ID lands on Document. With no third state there is nothing else
+  to fall into, and the code says so explicitly rather than relying on a flag
+  happening to be true.
+
+### Delete, beside Rotate
+Throws away the capture you are looking at and returns you to the viewfinder.
+Deliberately not the same as Retake, which reshoots immediately — that is what
+you want when the shot was bad; Delete is for when you did not want the page.
+
+It discards only the capture being reviewed. Pages already accepted are
+untouched, and a cancelled *retake* clears its pending slot so the page it was
+started from survives (`SC127e`).
+
+### HQ is removed
+It routed the shutter to the iPhone's own camera for a full-resolution still.
+That did give more pixels — but it cost the live green outline and hands-free
+capture, and it caused a run of "two cameras" bugs across v11.62, v11.65 and
+v11.66, because a native camera and a live preview can never both be on screen.
+Since v11.76 the 4:3 sensor request recovers most of that resolution inside the
+normal preview, so the trade stopped being worth it.
+
+`camInput` deliberately **survives**: it is also the fallback for a device with
+no live camera, which has nothing to do with HQ. `SC78c` pins that.
+
+### Tests rewritten rather than deleted
+Eighteen assertions pinned features this release removes. Each now states the
+removal instead:
+
+- `SC75`–`SC78` asserted how HQ behaved; they now assert no trace of it
+  survives — measured against a **comment-stripped** view of the source, since
+  the comments legitimately still explain why it went.
+- `SC100`–`SC104` pinned the machinery keeping two cameras apart. `SC100` now
+  counts every `camInput.click()` call site and requires all of them to be
+  fallback-guarded, which is a stronger statement than the three releases of
+  fixes it replaces.
+- `SC123`–`SC127` followed Look to Type, plus new checks that Type is on the
+  camera screen *before* the shutter and that Delete sits beside Rotate.
+- `T9e` in the harness drives the real DOM: Document lit by default and alone,
+  Photo ID exclusive, Document not un-choosable, and Delete leaving accepted
+  pages alone.
+
+Seventeen suites green (scan 177 → 180, harness 108 → 113).
+
+## [v11.79] — 2026-07-29 — Restore point: v11.77, renumbered
+
+Code identical to v11.77 in every respect — only `APP_BUILD`, the service
+worker cache name and `data-build` change. It exists so the PWA on the phone
+sees a NEW version and refetches, since v11.78 had already been installed under
+a higher number and a straight rollback to "11.77" would look like an older
+build to anyone reading the About sheet.
+
+Nothing else in this release. It is the known-good scanner, renumbered, and the
+baseline the v11.80 interface work is built on.
+
+## [v11.78] — 2026-07-29 — REVERTED, DO NOT RE-APPLY WITHOUT A DEVICE TEST
+
+> **Reverted on 2026-07-29.** On the phone this made scans worse again. The
+> tree is back to v11.77 byte for byte, verified by comparing every shipped
+> file against `backups/v11.77-2026-07-28.zip`.
+>
+> Everything below shipped together in one release, which is exactly why it
+> cannot be salvaged piecemeal from here — I do not know which of the four
+> changes did the damage. The candidates, in the order I would suspect them:
+>
+> 1. **JPEG budget 900 KB → 780 KB.** Most likely. I judged q0.80 against
+>    q0.72 "indistinguishable" from a Pillow re-encode of an already-compressed
+>    page. That is a re-compression of a compression — not the same thing as
+>    the phone encoding once at q0.72 — and I had already been caught out once
+>    this session assuming Safari's encoder matches Pillow's.
+> 2. **Photo ID card 46% → 78% of the sheet.** Affects ID scans only.
+> 3. **`maxDim` 3500 → 3508.** Should be inert; the capture does not reach it.
+> 4. **The held-side thumbnail.** UI only, cannot touch image data.
+>
+> If any of this is wanted again it should go back **one change at a time**,
+> each tested on the phone before the next. The size reduction in particular
+> was my suggestion, not a request, and it was not worth it.
+
+## [v11.78 — original entry] — Photo ID gets its pixels back, and a correction
 
 ### Correcting v11.77
 I said raising `maxDim` to 3500 would give 300 dpi. It gave **278**. The real

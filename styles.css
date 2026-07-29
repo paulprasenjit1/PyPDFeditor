@@ -623,15 +623,15 @@ input[type=file] { display:none; }
 .scanthumbs.has { display:flex; }
 .scanthumbs .sthumb { position:relative; flex:0 0 auto; border:0; padding:0;
           background:transparent; border-radius:6px; }
-/* v11.78: the held front of a two-sided card. Dashed edge and a word instead of
-   a number, because it is not a page yet — tapping it discards the side. */
-.scanthumbs .sthumb.pending img { outline:1.5px dashed var(--accent2); outline-offset:1px; opacity:.85; }
-.scanthumbs .sthumb.pending .num { background:var(--accent2); font-size:9px; padding:0 4px; }
 .scanthumbs .sthumb img { display:block; height:56px; width:auto; border-radius:6px;
           border:1px solid #3a4150; background:#fff; }
 .scanthumbs .sthumb .num { position:absolute; right:-4px; top:-6px; min-width:18px;
           height:18px; border-radius:9px; background:var(--accent2); color:#fff;
           font-size:11px; line-height:18px; text-align:center; padding:0 4px; }
+/* v11.80: Delete is destructive, so it is tinted red — but it stays a ghost
+   button so it never competes with Use page for the eye. */
+.scanctl button.danger { background:transparent; border:0.5px solid rgba(255,69,58,.5); color:#ff6961; }
+.scanctl button.danger:active:not(:disabled) { background:rgba(255,69,58,.12); }
 .scanctl { display:flex; align-items:center; justify-content:space-evenly; gap:10px;
           padding:12px 16px calc(16px + env(safe-area-inset-bottom)); background:#000; }
 .scanctl button:not(.shutter) { min-width:86px; }
@@ -665,6 +665,19 @@ input[type=file] { display:none; }
 /* v11.69: the review controls, regrouped so the shape of a control tells you
    how it behaves. A segmented control = pick one of these. A chip showing a
    value = this setting currently holds that value, tap to change it. */
+/* v11.80: Type lives on the CAMERA screen now, above the thumbnail strip. Same
+   segmented look as the review row so the two screens read as one scanner. */
+.scantype { display:flex; flex-direction:column; gap:8px; padding:10px 16px 0; background:#000; }
+.scantype .fgrp { display:flex; align-items:center; gap:10px; }
+.scantype .flab { flex:0 0 38px; font-size:11px; color:#7e8896; }
+.scantype .seg { display:flex; flex:1; background:#16191d; border-radius:9px; padding:3px; gap:2px; }
+.scantype .seg button { flex:1; background:transparent; border:0; color:#c9cfd8;
+          font-size:12px; padding:7px 4px; border-radius:7px; min-height:32px; }
+.scantype .seg button.on { background:var(--accent2); color:#fff; }
+.scantype .bothbtn { align-self:flex-start; margin-left:48px; background:transparent;
+          border:0.5px solid var(--line); color:#cfd6e4; font-size:12px; padding:6px 12px; }
+.scantype .bothbtn.on { background:var(--accent2); border-color:var(--accent2); color:#fff; }
+.scantype .bothbtn[hidden] { display:none; }
 .scanfilters { display:flex; flex-direction:column; gap:8px; padding:10px 16px 0; background:#000; }
 .scanfilters .fgrp { display:flex; align-items:center; gap:10px; }
 .scanfilters .flab { flex:0 0 52px; font-size:11px; color:#7e8896; }
