@@ -20,13 +20,13 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.81";
+const APP_BUILD = "11.82";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
     "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","enhToggle","idToggle","cropReset","cropRetake","cropUse",
-    "autoBtn","paperBtn","idBothToggle","paperVal","camBoot",
+    "autoBtn","paperBtn","idBothToggle","idSingleToggle","paperVal","camBoot",
     "whiteBtn","imgPlaceBtn","insImgInput","formBtn",
     "ge0","ge1","ge2","ge3","he0","he1","he2","he3"];
   const missing = need.filter(id=>!document.getElementById(id));
@@ -5545,9 +5545,7 @@ function resetScanDefaults(){
   scanEnhance = true;         // Type = Document
   scanIdMode  = false;
   scanAuto    = false;        // Auto off
-  // idTwoSide is deliberately NOT reset here: it is a Photo ID sub-choice, not
-  // one of the two defaults asked for, and resetting it would be a behaviour
-  // change nobody requested.
+  idTwoSide   = true;         // v11.82: Photo ID captures both sides
 }
 // v11.61 "HQ": take the page with the iPhone's OWN camera rather than lifting a
 // frame off the live preview. This is the only change that raises the ceiling
@@ -5605,9 +5603,18 @@ if (scanPaper !== "a4" && scanPaper !== "auto") scanPaper = "auto";
 // v11.70: both sides is now the default. An ID card has two sides worth
 // keeping far more often than not, and the old default meant scanning the back
 // as a separate page and merging it afterwards.
+// v11.82: Both sides is the default and, like Type and Auto, is a DEFAULT
+// rather than a remembered preference — the scanner starts the same way every
+// session. A card has two sides worth keeping far more often than not.
 let idTwoSide = true;
-try { if (localStorage.getItem("scanIdTwoSide")==="0") idTwoSide=false; } catch(e){}
+try { localStorage.removeItem("scanIdTwoSide"); } catch(e){}
 let idPendingCard = null;     // canvas of side 1, held until side 2 arrives
+// v11.82: a thumbnail for that held side. Without it the strip stayed empty
+// after capturing the FRONT of a card and only filled in once the back was
+// done — so the one capture that most needs confirming showed nothing. (This
+// shipped in v11.78 and was lost when that release was reverted wholesale; it
+// is UI only and cannot affect image data.)
+let idPendingThumb = null;
 // v11.67: index a retake will replace, or -1 for "add to the end"
 let scanRetakeAt = -1;
 // v10.74: std now warps to a larger long side (was 2560) so the higher-res 4K
@@ -5771,7 +5778,7 @@ async function startScan(append){
   capFrame = null; scanFallback = false; scanRetakeAt = -1; exposureChecked = false;
   resetScanDefaults();        // v11.81: Document, Auto off, every time
   scanAppendTo = (append && workingBytes) ? { name: fileName } : null;
-  idPendingCard = null;
+  idPendingCard = null; idPendingThumb = null;
   disarmAuto(); autoBusy = false; autoNeedsRelease = false;
   refreshAutoBtn(); refreshPaperBtn(); refreshIdTwoSideBtn();
   updateScanCount();
@@ -5806,7 +5813,7 @@ function endScan(){
   stopCamera();
   scanPages = []; capFrame = null; scanRetakeAt = -1;
   scanAppendTo = null;           // v11.35: forget any append target
-  idPendingCard = null;          // v11.34: drop a half-finished card pair
+  idPendingCard = null; idPendingThumb = null;   // v11.34: drop a half-finished card pair
   disarmAuto(); autoBusy = false; autoNeedsRelease = false;
   updateScanCount();
   $("scanCam").classList.remove("show");
@@ -5830,9 +5837,17 @@ function updateScanCount(){
 // thumbnail strip above the shutter: tap a page to review or delete it
 function renderScanThumbs(){
   const strip=$("scanThumbs");
-  strip.classList.toggle("has", scanPages.length>0);
+  // v11.82: a held card side counts as something to show, even with no
+  // finished pages yet.
+  strip.classList.toggle("has", scanPages.length>0 || !!idPendingThumb);
   strip.innerHTML = scanPages.map((p,i)=>
-    h`<button class="sthumb" data-pg="${i}" aria-label="Review scanned page ${i+1}"><img src="${p.thumb}" alt="Page ${i+1}"><span class="num">${i+1}</span></button>`).join("");
+    h`<button class="sthumb" data-pg="${i}" aria-label="Review scanned page ${i+1}"><img src="${p.thumb}" alt="Page ${i+1}"><span class="num">${i+1}</span></button>`).join("")
+    // Marked as waiting rather than numbered: it is not a page yet, and tapping
+    // it discards the side rather than opening a review sheet for a page that
+    // does not exist.
+    + (idPendingThumb
+        ? h`<button class="sthumb pending" id="idPendingThumb" aria-label="Front of the card, waiting for the back — tap to discard it"><img src="${idPendingThumb}" alt="Front of the card"><span class="num">front</span></button>`
+        : "");
   strip.querySelectorAll("[data-pg]").forEach(b=>{
     const i = +b.dataset.pg;
     b.onclick = ()=> openScanPageSheet(i);
@@ -5842,6 +5857,8 @@ function renderScanThumbs(){
     const im = b.querySelector("img");
     if (im && r) im.style.transform = "rotate("+r+"deg)";
   });
+  const pend = $("idPendingThumb");
+  if (pend) pend.onclick = ()=> clearIdPending(false);
   strip.scrollLeft = strip.scrollWidth;          // keep the newest page in view
 }
 function openScanPageSheet(i){
@@ -6956,6 +6973,14 @@ function setScanIdMode(on){
 // filter row from wrapping to a third line on a small phone.
 function refreshIdTwoSideBtn(){
   const b = $("idBothToggle"); if (!b) return;
+  // v11.82: a one-of pair, so BOTH buttons are set — lighting one without
+  // clearing the other is how a segmented control ends up showing two
+  // selections at once.
+  const one = $("idSingleToggle");
+  if (one){
+    one.classList.toggle("on", !idTwoSide);
+    one.setAttribute("aria-pressed", String(!idTwoSide));
+  }
   // v11.81: the whole row hides, not just the button — the button now lives
   // inside a segmented track, and hiding only the button would leave an empty
   // track sitting under Photo ID.
@@ -6964,7 +6989,8 @@ function refreshIdTwoSideBtn(){
   b.classList.toggle("on", idTwoSide);
   b.setAttribute("aria-pressed", String(idTwoSide));
 }
-$("idBothToggle").onclick = ()=> setIdTwoSide(!idTwoSide);
+$("idBothToggle").onclick   = ()=> setIdTwoSide(true);
+$("idSingleToggle").onclick = ()=> setIdTwoSide(false);
 function setIdTwoSide(on){
   idTwoSide = !!on;
   try { localStorage.setItem("scanIdTwoSide", idTwoSide ? "1" : "0"); } catch(e){}
@@ -7102,6 +7128,14 @@ function compositeCardOnA4(cardCanvas){ return compositeCardsOnA4([cardCanvas]);
 function takeIdSide(card, returnToCamera){
   if (!idPendingCard){
     idPendingCard = card;
+    try {
+      const t = document.createElement("canvas");
+      const sc = Math.min(1, 220/Math.max(card.width, card.height));
+      t.width  = Math.max(1, Math.round(card.width*sc));
+      t.height = Math.max(1, Math.round(card.height*sc));
+      t.getContext("2d").drawImage(card, 0, 0, t.width, t.height);
+      idPendingThumb = t.toDataURL("image/jpeg", 0.7);
+    } catch(e){ idPendingThumb = null; }
     capFrame = null;
     if (returnToCamera){
       $("scanCrop").classList.remove("show");
@@ -7109,11 +7143,12 @@ function takeIdSide(card, returnToCamera){
       if (!scanFallback) resumeCamera();
     }
     updateScanCount();          // refreshes the "side 1 held" hint
+    renderScanThumbs();         // ...and shows the front that is being held
     setStatus("Front captured. Turn the card over and scan the back.","ok");
     return null;
   }
   const page = compositeCardsOnA4([idPendingCard, card]);
-  idPendingCard = null;
+  idPendingCard = null; idPendingThumb = null;
   return page;
 }
 // Drop a half-finished card pair. Called when ID mode or the two-side toggle is
@@ -7121,8 +7156,8 @@ function takeIdSide(card, returnToCamera){
 // silently welded onto an unrelated card later.
 function clearIdPending(quiet){
   if (!idPendingCard) return;
-  idPendingCard = null;
-  updateScanCount();
+  idPendingCard = null; idPendingThumb = null;
+  updateScanCount(); renderScanThumbs();
   if (!quiet) setStatus("The held front side was discarded.","warn");
 }
 // draw the captured photo onto the crop canvas with the active filter applied,

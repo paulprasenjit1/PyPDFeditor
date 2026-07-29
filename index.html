@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="11.81">
+<html lang="en" data-build="11.82">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -256,14 +256,16 @@
         <button id="idToggle" aria-pressed="false">Photo ID</button>
       </div>
     </div>
-    <!-- v11.81: both sides sits directly BELOW Photo ID, in the same column and
-         with the same button styling, so it reads as a sub-option of that type
-         rather than a separate control. Hidden unless Photo ID is chosen. -->
+    <!-- v11.82: how many sides of the card, as a one-of pair rather than an
+         on/off toggle — "Both sides" lit meant two, unlit meant one, which the
+         button never actually said. Both sides is first and is the default.
+         Sits directly BELOW Photo ID, same column, same styling, so it reads as
+         a sub-option of that type. Hidden unless Photo ID is chosen. -->
     <div class="fgrp bothrow" id="bothRow" hidden>
       <span class="flab" aria-hidden="true"></span>
-      <div class="seg ghosted">
-        <span class="spacer" aria-hidden="true"></span>
-        <button id="idBothToggle" aria-pressed="false">Both sides</button>
+      <div class="seg" role="group" aria-label="How many sides of the card">
+        <button id="idBothToggle" aria-pressed="true" class="on">Both sides</button>
+        <button id="idSingleToggle" aria-pressed="false">Single side</button>
       </div>
     </div>
   </div>

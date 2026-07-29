@@ -4,6 +4,51 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.82] — 2026-07-29 — Both sides / Single side, and the held front reappears
+
+Interface only. The scan pipeline is still v11.77's, untouched.
+
+### Both sides · Single side
+The old control was an on/off toggle: "Both sides" lit meant two sides, unlit
+meant one — which the button never actually said. It is now a one-of pair, with
+**Both sides first and selected by default**, in the same segmented styling as
+Type directly above it.
+
+Both halves are set together in `refreshIdTwoSideBtn`. Lighting one without
+clearing the other is exactly how a segmented control ends up showing two
+selections at once, so `SC139f` pins it.
+
+Like Type and Auto, the choice is now a **default rather than a remembered
+preference** — reset each time the scanner opens. In v11.81 I deliberately left
+this one alone because you had not asked about it; now that you have specified
+the default, it joins the others.
+
+### The held front side shows a thumbnail again
+You reported this twice, and you were right both times. It was fixed in v11.78
+and **lost when I reverted that release wholesale** — the fix was UI-only and
+could not have affected image quality, but I rolled back the whole build rather
+than picking it apart, and this went with it.
+
+The thumbnail strip only ever mapped `scanPages`, and a held card side is not a
+page yet. The front now appears the moment it is taken, marked with a dashed
+edge and the word "front" instead of a number: it is not a page, and tapping it
+discards the side rather than opening a review sheet for something that does
+not exist.
+
+### The test now drives your exact repro
+`T13d`–`T13k` in the harness do what you described: scan a document page, then
+switch to Photo ID **inside the same session**, capture the front, and assert
+the strip shows it immediately. It also checks that leaving Photo ID drops both
+the held side and its thumbnail, so a ghost front cannot survive into the next
+card, and that the block leaves the scanner back on Document for the tests
+after it.
+
+`SC173` counts clear-sites: every place that sets `idPendingCard = null` must
+clear `idPendingThumb` too. That is the invariant a piecemeal re-application
+would most easily miss.
+
+scan 188 → 199, harness 115 → 123. Seventeen suites green, corpus green.
+
 ## [v11.81] — 2026-07-29 — The scanner opens the same way every time
 
 Interface only, again. The scan pipeline is still v11.77's, untouched.
