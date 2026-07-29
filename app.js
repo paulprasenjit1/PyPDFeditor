@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.83";
+const APP_BUILD = "11.84";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -5978,12 +5978,36 @@ function fitPreviewBox(){
   v.style.right = "auto"; v.style.bottom = "auto";
   return { bw, bh, vw, vh, w, h };
 }
-// The viewfinder box changes on rotation and when the thumbnail strip appears,
-// so the fit has to be recomputed rather than set once.
-window.addEventListener("resize", ()=>{ fitPreviewBox(); sizeQuadCanvas(); });
-window.addEventListener("orientationchange", ()=>{
-  setTimeout(()=>{ fitPreviewBox(); sizeQuadCanvas(); }, 250);
-});
+// v11.84: the fit has to follow the BOX, not just the stream.
+//
+// Reported: the preview opens small — drawn at about 75% of the width it should
+// be, with "Starting camera…" showing through the letterbox — and then snaps to
+// normal. fitPreviewBox() was setting explicit pixel geometry once, at the first
+// frame, so anything that resized the container afterwards left the video at the
+// old size. There are at least three such things: the Type row and the thumbnail
+// strip appearing, and iOS settling the standalone viewport a beat after launch
+// (which v11.83 established really does happen here).
+//
+// A ResizeObserver watches the viewfinder itself, so it does not matter WHICH of
+// those moved it — any change re-fits. The window listeners stay as a fallback
+// for engines without ResizeObserver.
+function refitPreview(){ fitPreviewBox(); sizeQuadCanvas(); }
+window.addEventListener("resize", refitPreview);
+window.addEventListener("orientationchange", ()=> setTimeout(refitPreview, 250));
+(function watchPreviewBox(){
+  if (typeof ResizeObserver !== "function") return;
+  const view = $("scanView");
+  if (!view) return;
+  // rAF-coalesced: a resize can fire many times during a layout settle, and
+  // each fit writes styles that could otherwise feed the next observation.
+  let queued = false;
+  const ro = new ResizeObserver(()=>{
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(()=>{ queued = false; refitPreview(); });
+  });
+  ro.observe(view);
+})();
 function awaitFirstFrame(v){
   let done = false;
   const show = (why)=>{
@@ -5997,6 +6021,10 @@ function awaitFirstFrame(v){
     const fit = fitPreviewBox();
     if (camDiag && fit) camDiag.fit = fit;
     v.classList.add("ready");
+    // v11.84: the label sits UNDER the preview, so while the video was drawn
+    // too small it showed through the letterbox beside it. Hide it once there
+    // is a picture rather than relying on the video to cover it.
+    const boot = $("camBoot"); if (boot) boot.hidden = true;
     sizeQuadCanvas();
   };
   // Track later resolution changes so the diagnostic can show whether iOS really
@@ -6187,6 +6215,7 @@ function stopCamera(){
   if (scanLive){ clearInterval(scanLive); scanLive = 0; }
   if (scanStream){ for (const t of scanStream.getTracks()){ try{ t.stop(); }catch(e){} } scanStream = null; }
   const v = $("scanVideo"); v.srcObject = null; v.classList.remove("ready");
+  const boot = $("camBoot"); if (boot) boot.hidden = false;
   const q = $("scanQuad");
   if (q.width) q.getContext("2d").clearRect(0,0,q.width,q.height);
   refreshScanIdle();
@@ -6213,6 +6242,11 @@ async function resumeCamera(){
     // half-started state to hide — show it immediately rather than fading in
     // again between every page
     v.classList.add("ready");
+    // v11.84: this path bypasses awaitFirstFrame, so it must hide the label and
+    // re-fit for itself. Returning from the Adjust screen changes the box (the
+    // thumbnail strip is there now), which is exactly when a stale fit shows.
+    const boot = $("camBoot"); if (boot) boot.hidden = true;
+    fitPreviewBox();
     sizeQuadCanvas();
     startLiveDetect();
     return;

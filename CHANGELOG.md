@@ -4,6 +4,47 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.84] — 2026-07-29 — The preview follows its box
+
+Reported: the scanner opens with the picture drawn small — about 75% of the
+width it should be — with "Starting camera…" showing through the letterbox
+beside it, then it snaps to normal.
+
+### This was my own v11.71 fix biting back
+`fitPreviewBox()` writes explicit pixel geometry, which is what made the
+preview fill the viewfinder in the first place. But it ran **once, at the first
+frame**, so anything that resized the container afterwards left the video at
+the old size. At least three things do:
+
+- the Type row appearing (v11.80 put it under the viewfinder)
+- the thumbnail strip appearing after page 1
+- **iOS settling the standalone viewport a beat after launch** — which v11.83
+  established, one release ago, really does happen on this device
+
+A `ResizeObserver` now watches the viewfinder itself. It does not matter which
+of those moved it: any change to the box re-fits. Re-fits are coalesced per
+animation frame, so a layout settle cannot feed itself, and the window
+listeners remain for engines without ResizeObserver.
+
+`resumeCamera` — the path back from the Adjust screen — bypasses the first-frame
+code entirely, and that is precisely when the box has just changed because the
+thumbnail strip appeared. It now re-fits for itself.
+
+### The label was showing through
+"Starting camera…" sits UNDER the preview, on the assumption the video covers
+it. While the video was drawn too small it showed through the letterbox beside
+it. It is now hidden explicitly once there is a picture, on both reveal paths,
+and restored when the camera stops so the next open still explains itself.
+
+### Two tests were brittle rather than wrong
+`SC105` read a fixed 400 characters of `stopCamera` and `SC133` required two
+lines to be adjacent. Adding a line between them broke both while the
+behaviour they guard was untouched. `SC105` now reads the whole function, and
+`SC133` asserts that **every** reveal path reaches `sizeQuadCanvas` — which is
+the actual invariant, and is stronger than the adjacency it replaced.
+
+scan 207 → 214. Seventeen suites green, corpus green.
+
 ## [v11.83] — 2026-07-29 — The bottom bar reaches the bottom
 
 Reported with two screenshots taken minutes apart: sometimes a band of black
