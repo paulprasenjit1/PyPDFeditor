@@ -4,6 +4,48 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.89] — 2026-07-29 — Bottom bar: the ladder could miss the settle
+
+You asked whether v11.87/88 broke the v11.86 bottom-bar fix. **They did not.**
+The only change to that code across three releases is:
+
+```
+- const recheck = ()=> requestAnimationFrame(pinBottomChrome);
++ const recheck = ()=> nextFrame(pinBottomChrome);
+```
+
+`nextFrame` calls `requestAnimationFrame` in Safari, so it is functionally
+identical, and the CSS is byte-identical. Verified by diff.
+
+The honest conclusion is therefore that **v11.86 probably never fixed it on the
+device either** — the scanner issue was reported next, so the bottom bar was
+never re-confirmed in between.
+
+### The weakness that is fixable without guessing
+The correction ran on a fixed ladder — 0, 150, 400, 900, 1800ms — plus events.
+A fixed ladder can only catch a settle it happens to land on. If the viewport
+reaches its final size after the last rung, nothing re-measures and the gap
+stays for the rest of the session.
+
+It now also polls every 500ms for the first ten seconds. `pinBottomChrome` is
+one `getBoundingClientRect` and returns immediately when the bar is already
+flush, so twenty of them cost nothing — and it removes the dependence on
+guessing the right moment to look.
+
+### What would settle this in one round
+About shows `Bottom bar 898/898/956 drop 58px` and `Display mode`. Those numbers
+say which of the two measurement terms is failing:
+
+- **bar/viewport differ** → term 1 should have fired
+- **viewport < screen** → term 2 should have fired
+- **all three equal, gap still visible** → both terms are blind to it, and the
+  cause is something neither measures
+
+Without that reading the next attempt is another guess, and there have been
+three.
+
+Seventeen suites green, corpus green.
+
 ## [v11.88] — 2026-07-29 — The permission prompt was hiding the bug
 
 **No scan-quality code touched.** `scan-core.js` is byte-identical to v11.86.

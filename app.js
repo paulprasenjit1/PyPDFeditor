@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.88";
+const APP_BUILD = "11.89";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -9142,6 +9142,17 @@ function pinBottomChrome(){
     if (!document.hidden) [0,150,400,900].forEach(t=> setTimeout(pinBottomChrome, t));
   });
   [0,150,400,900,1800].forEach(t=> setTimeout(pinBottomChrome, t));
+  // v11.89: a fixed ladder can only catch a settle it happens to land on. If
+  // the viewport reaches its final size later than the last rung, nothing
+  // re-measures and the gap stays for the rest of the session. Poll gently for
+  // the first ten seconds as well — pinBottomChrome is one getBoundingClientRect
+  // and returns immediately when the bar is already flush, so twenty of them
+  // cost nothing and remove the dependence on guessing the right moment.
+  let polls = 0;
+  const poll = setInterval(()=>{
+    pinBottomChrome();
+    if (++polls >= 20) clearInterval(poll);
+  }, 500);
 })();
 // ---------------- keyboard avoidance (v10.97) ----------------
 // On smaller iPhones the on-screen keyboard can cover a bottom sheet's input
