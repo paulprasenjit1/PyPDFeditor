@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.86";
+const APP_BUILD = "11.87";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -6014,10 +6014,42 @@ window.addEventListener("orientationchange", ()=> setTimeout(refitPreview, 250))
   const ro = new ResizeObserver(()=>{
     if (queued) return;
     queued = true;
-    requestAnimationFrame(()=>{ queued = false; refitPreview(); });
+    nextFrame(()=>{ queued = false; refitPreview(); });
   });
   ro.observe(view);
 })();
+// v11.87: a frame tick that cannot be missing. The reveal below depends on it,
+// and a preview that is never revealed is a permanently black scanner — so it
+// must not rest on an optional API. Caught by the headless harness, which has
+// no requestAnimationFrame.
+const nextFrame = (fn)=> (typeof requestAnimationFrame === "function")
+  ? requestAnimationFrame(fn) : setTimeout(fn, 16);
+// reveal only once the fit has stopped changing — see the note in
+// awaitFirstFrame. Used by BOTH reveal paths: the first frame, and returning
+// from the Adjust screen (where the thumbnail strip has just changed the box,
+// which is precisely a moment the fit moves).
+function revealPreviewWhenSettled(v){
+  let lastKey = "", same = 0;
+  const started = Date.now();
+  const settle = ()=>{
+    fitPreviewBox();
+    if (fitLast && fitLast === lastKey) same++;
+    else { same = 0; lastKey = fitLast; }
+    const stable  = fitLast && same >= 3;          // ~50ms unchanged
+    const timedUp = Date.now() - started > CAM_FIRST_FRAME_MS;
+    if (!stable && !timedUp){ nextFrame(settle); return; }
+    if (camDiag){
+      camDiag.settleMs = Date.now() - started;
+      camDiag.settledBy = stable ? "stable" : "timeout";
+    }
+    v.classList.add("ready");
+    // The label sits UNDER the preview, so while the video was drawn too small
+    // it showed through the letterbox beside it. Hide it explicitly.
+    const boot = $("camBoot"); if (boot) boot.hidden = true;
+    sizeQuadCanvas();
+  };
+  nextFrame(settle);
+}
 function awaitFirstFrame(v){
   let done = false;
   const show = (why)=>{
@@ -6028,14 +6060,24 @@ function awaitFirstFrame(v){
       camDiag.why = why;
       camDiag.sizes.push(v.videoWidth + "x" + v.videoHeight + " @" + camDiag.first + "ms");
     }
-    const fit = fitPreviewBox();
-    if (camDiag && fit) camDiag.fit = fit;
-    v.classList.add("ready");
-    // v11.84: the label sits UNDER the preview, so while the video was drawn
-    // too small it showed through the letterbox beside it. Hide it once there
-    // is a picture rather than relying on the video to cover it.
-    const boot = $("camBoot"); if (boot) boot.hidden = true;
-    sizeQuadCanvas();
+    // v11.87: do not reveal on the FIRST fit — wait until the fit stops
+    // changing.
+    //
+    // Reported four times: the preview opens small and grows to full size a
+    // fraction of a second later. Every previous attempt tried to make the
+    // first measurement correct — re-fit on resize (v11.84), re-fit on every
+    // live tick (v11.85). Those do correct it, which is exactly why it "becomes
+    // normal": the correction is real, it just happens after the preview is
+    // already on screen.
+    //
+    // I still cannot explain from a screenshot WHY the first measurement is
+    // wrong; the small size is not a containFit result against the full box, so
+    // my model of it is incomplete. So this stops trying to be right first time
+    // and instead refuses to show anything until the answer has settled: the
+    // same fit three animation frames running (~50ms), or the existing hard
+    // timeout, whichever comes first. The user sees black, then the correct
+    // size — never the wrong one.
+    revealPreviewWhenSettled(v);
   };
   // Track later resolution changes so the diagnostic can show whether iOS really
   // is switching capture mode after the first frame.
@@ -6191,8 +6233,10 @@ function camDiagText(){
   const e = camDiag.blown === undefined ? " · exposure not checked yet"
           : " · blown " + (100*camDiag.blown).toFixed(1) + "%"
             + (camDiag.exposureFallback ? " -> FELL BACK to 16:9" : " (high-res mode kept)");
+  const st = camDiag.settleMs === undefined ? ""
+           : " · settled " + camDiag.settleMs + "ms (" + camDiag.settledBy + ")";
   return "gUM " + camDiag.gum + "ms · frame " + (camDiag.first || "-") + "ms"
-       + " (" + (camDiag.why || "-") + ") · " + s + f + e;
+       + " (" + (camDiag.why || "-") + ")" + st + " · " + s + f + e;
 }
 (function bindCamDiag(){
   // v11.71: this was bound to the page counter, which is EMPTY until a page has
@@ -6251,13 +6295,10 @@ async function resumeCamera(){
     // the stream is already running at its settled resolution, so there is no
     // half-started state to hide — show it immediately rather than fading in
     // again between every page
-    v.classList.add("ready");
-    // v11.84: this path bypasses awaitFirstFrame, so it must hide the label and
-    // re-fit for itself. Returning from the Adjust screen changes the box (the
-    // thumbnail strip is there now), which is exactly when a stale fit shows.
-    const boot = $("camBoot"); if (boot) boot.hidden = true;
-    fitPreviewBox();
-    sizeQuadCanvas();
+    // v11.87: settle before revealing here too. Returning from the Adjust
+    // screen changes the box — the thumbnail strip is there now — which is
+    // exactly when a stale fit would be shown.
+    revealPreviewWhenSettled(v);
     startLiveDetect();
     return;
   }
@@ -9064,7 +9105,7 @@ function pinBottomChrome(){
   document.documentElement.style.setProperty("--vvdrop", next + "px");
 }
 (function watchBottomChrome(){
-  const recheck = ()=> requestAnimationFrame(pinBottomChrome);
+  const recheck = ()=> nextFrame(pinBottomChrome);
   window.addEventListener("resize", recheck);
   window.addEventListener("orientationchange", ()=> setTimeout(recheck, 300));
   const vv = window.visualViewport;

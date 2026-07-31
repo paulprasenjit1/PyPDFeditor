@@ -4,6 +4,52 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.87] — 2026-07-29 — The preview is not shown until it has stopped moving
+
+Fourth report of the same thing: the scanner opens small and grows to full size
+a fraction of a second later.
+
+**No scan-quality code touched.** `scan-core.js` is byte-identical to v11.86,
+and every quality call site (`SCAN_Q`, `applyAutoContrast`, `colourBalanceCore`,
+`documentEnhance`, `flattenIllumination`, `warpCore`, `encodeUnderBudget`,
+`idCardEnhance`) is unchanged — verified by diff, not by memory.
+
+### Why the three previous attempts all failed the same way
+v11.84 re-fitted on a ResizeObserver. v11.85 re-fitted on every live tick. Both
+corrections are real and both work — **which is exactly why it "becomes
+normal"**. The correction lands *after* the preview is already on screen. I was
+fixing the second half of the symptom and leaving the first half visible.
+
+### What changed
+The preview is no longer revealed on the first fit. It stays hidden — showing
+"Starting camera…" — until the fit is **unchanged for three animation frames**
+(~50ms), or the existing 1200ms hard timeout fires, whichever comes first. You
+see black, then the correct size, never the wrong one. Both reveal paths (first
+frame, and returning from the Adjust screen where the thumbnail strip has just
+changed the box) go through the same helper.
+
+### Stated plainly
+I still cannot explain *why* the first measurement is wrong. I worked the
+arithmetic from the screenshot and the small size is not a `containFit` result
+against the full box, so my model of it is incomplete. This release does not
+fix that — it stops the unsettled state being visible. If the preview ever
+appears at the wrong size and *stays* there, the cause is still unfound and the
+diagnostic will show it.
+
+### The harness caught a real bug
+Adding the settle loop broke the headless harness: `requestAnimationFrame` is
+not defined there. That is not merely a test-environment quirk — the reveal now
+depends on that tick, and a preview that is never revealed is a **permanently
+black scanner**. It now falls back to a timer. A genuine robustness hole, found
+because the harness runs the real app rather than grepping it.
+
+### Diagnostic
+Press and hold "Scan document": `… settled 48ms (stable)` or `… settled 1201ms
+(timeout)`. A timeout there means the fit never stopped changing, which would
+be a different and worse bug than the one being fixed.
+
+scan 225 → 229. Seventeen suites green, corpus green.
+
 ## [v11.86] — 2026-07-29 — Measuring against the screen, not against the viewport
 
 Third attempt at the bottom gap, and the first with the right reference.
