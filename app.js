@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.87";
+const APP_BUILD = "11.88";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -5788,6 +5788,7 @@ async function startScan(append){
   updateScanCount();
   $("scanCrop").classList.remove("show");
   $("scanCam").classList.add("show");
+  await afterLayout();     // v11.88: lay the panel out before the camera arrives
   // v10.95: one-time expectation-setting on installed iOS web apps — WebKit
   // does not persist getUserMedia grants for standalone PWAs (bugs 215884 /
   // 185448), so the OS re-asks on every app launch. Say so once, so the
@@ -6024,6 +6025,21 @@ window.addEventListener("orientationchange", ()=> setTimeout(refitPreview, 250))
 // no requestAnimationFrame.
 const nextFrame = (fn)=> (typeof requestAnimationFrame === "function")
   ? requestAnimationFrame(fn) : setTimeout(fn, 16);
+// v11.88: wait for the scanner panel to be LAID OUT before anything measures it.
+//
+// This is the difference the user found: opening the scanner for the first time
+// works, cancelling and reopening does not. On the first open getUserMedia
+// blocks for seconds on the iOS permission prompt, so by the time any code
+// measures the viewfinder the panel has long since laid out. On a reopen the
+// grant is already held and the camera returns in milliseconds — measuring a
+// panel that was made visible microseconds earlier.
+//
+// The permission prompt was accidentally providing the settle. This provides it
+// deliberately: two frames after `.show`, which is a style recalc and a layout
+// pass. About 32ms, once per scanner open.
+function afterLayout(){
+  return new Promise(res=> nextFrame(()=> nextFrame(res)));
+}
 // reveal only once the fit has stopped changing — see the note in
 // awaitFirstFrame. Used by BOTH reveal paths: the first frame, and returning
 // from the Adjust screen (where the thumbnail strip has just changed the box,
@@ -6287,6 +6303,12 @@ function pauseCamera(){
   if (scanLive){ clearInterval(scanLive); scanLive = 0; }
 }
 async function resumeCamera(){
+  // v11.88: same settle as startScan, and this path needs it MORE — the stream
+  // is already live, so there is nothing at all to wait for and the fit would
+  // otherwise run against a panel shown microseconds ago. Every route back to
+  // the viewfinder (Retake, Use page, Delete, retake-a-page) comes through
+  // here, so one wait covers them all.
+  await afterLayout();
   const track = (scanStream && scanStream.getVideoTracks) ? scanStream.getVideoTracks()[0] : null;
   if (track && track.readyState === "live"){
     const v = $("scanVideo");

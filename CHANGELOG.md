@@ -4,6 +4,49 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.88] — 2026-07-29 — The permission prompt was hiding the bug
+
+**No scan-quality code touched.** `scan-core.js` is byte-identical to v11.86.
+
+### You found the discriminating case
+Close the app completely and reopen: the camera permission prompt appears, and
+the preview opens correctly. Cancel the scan, reopen the scanner: the small
+preview is back.
+
+That is the whole answer, and it is a **race**, not a geometry problem:
+
+```
+$("scanCam").classList.add("show");   // panel becomes display:flex
+await startCamera();                  // getUserMedia
+```
+
+On a **first** open, `getUserMedia` blocks for seconds behind the iOS permission
+prompt. Dozens of frames pass, the panel lays out completely, and by the time
+anything measures the viewfinder the answer is right. On a **reopen** the grant
+is already held and the camera returns in milliseconds — measuring a panel that
+was made visible microseconds earlier.
+
+**The permission prompt was accidentally providing the settle.** Every version
+of this app has depended on it without anyone knowing, which is why it looked
+intermittent and why it survived four attempts: v11.84 and v11.85 corrected the
+fit *afterwards* (real corrections — that is what "becomes normal" was), and
+v11.87 waited for stability *after* the panel was already being measured wrong.
+
+### The fix
+`afterLayout()` — two frames, a style recalc and a layout pass — after the panel
+is shown and before anything can measure it. About 32ms, once per scanner open.
+
+Applied in `startScan`, and in `resumeCamera`, which needs it **more**: the
+stream is already live there, so there is nothing whatsoever to wait for. Every
+route back to the viewfinder (Retake, Use page, retake-a-page) goes through
+`resumeCamera`, so one wait covers them all — `SC203` checks no path bypasses it.
+
+The v11.87 settle loop stays as a safety net, and v11.85's per-tick re-fit stays
+as a backstop. But the ordering is now correct at the source rather than being
+repaired downstream.
+
+scan 229 → 233. Seventeen suites green, corpus green.
+
 ## [v11.87] — 2026-07-29 — The preview is not shown until it has stopped moving
 
 Fourth report of the same thing: the scanner opens small and grows to full size
