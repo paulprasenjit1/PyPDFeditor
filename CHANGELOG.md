@@ -4,6 +4,54 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.86] — 2026-07-29 — Measuring against the screen, not against the viewport
+
+Third attempt at the bottom gap, and the first with the right reference.
+
+### Why the previous two could not work
+v11.83 and v11.85 both measured the toolbar against `window.innerHeight`. On an
+iPhone 16 Pro Max in standalone that reads **zero while the gap is plainly on
+screen** — because the bar IS exactly where `bottom:0` puts it. The layout
+viewport itself is short. Measuring the bar against the very thing that is too
+small can never see it.
+
+### The clue was in the screenshots
+Three screenshots, and the gap correlates perfectly with the **"Ready…" toast
+being visible**. The toast is not a cause — it is `position:fixed` and cannot
+push anything. It is a **clock**: it shows for a few seconds after launch and
+fades. So the gap is a launch-time state that settles by itself, which is
+exactly why it appears "sometimes" — it depends on when you look.
+
+### Two references
+| term | question | catches |
+|---|---|---|
+| 1 | is the bar where the viewport says the bottom is? | a mis-positioned bar |
+| 2 | does the **viewport** reach the bottom of the **screen**? | the real case |
+
+Term 2 uses `screen.height`, which does not move. It is gated hard:
+
+- **installed standalone only.** In a Safari tab `innerHeight` is legitimately
+  far smaller than the screen, and pushing the bar down there would put it
+  under the browser UI.
+- **shortfall ≤ 120px only.** A large difference is a genuinely smaller window
+  (iPad multitasking), not this bug.
+- the screen axis is picked by orientation, since iOS does not swap
+  `screen.width`/`height` on rotation.
+
+### The convergence is simulated, not asserted
+With the correction applied, term 1 reads `-drop` and term 2 reads `+short`, so
+the next value is exactly `short` — no oscillation, and it unwinds itself when
+iOS later expands the viewport. `SC185c`–`SC185e` run that loop and check it:
+converges to a flush bar in one step and holds; unwinds when the viewport
+catches up; never touches a device that was correct from the start.
+
+### If it is still wrong
+About now shows `Bottom bar 898/898/956 drop 58px` — the bar's edge, the
+viewport, the screen — and `Display mode: standalone`. Those three numbers
+identify which term is failing without another round of guessing.
+
+scan 218 → 225. Seventeen suites green, corpus green.
+
 ## [v11.85] — 2026-07-29 — Both of those, actually fixed
 
 You reported both again. v11.83 and v11.84 did not work, and in each case I can

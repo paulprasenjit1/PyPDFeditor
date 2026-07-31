@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.85";
+const APP_BUILD = "11.86";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -4325,6 +4325,9 @@ function openAbout(){
       <div class="abrow"><span>Version</span><b>${APP_VERSION}</b></div>
       <div class="abrow"><span>Build</span><b>${BUILD_DATETIME}</b></div>
       <div class="abrow"><span>Bottom bar</span><b>${(vvLast || "-")+" drop "+vvDrop+"px"}</b></div>
+      <div class="abrow"><span>Display mode</span><b>${((window.navigator && window.navigator.standalone===true)
+          || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
+          ? "standalone" : "browser tab")}</b></div>
       <div class="abrow"><span>Cache</span><b>${cache}</b></div>
       <div class="abrow"><span>Engine</span><b>MuPDF.js (WASM) + pdf-lib</b></div>
       <div class="abrow"><span>Licence</span><b>MuPDF.js is AGPL-3.0 — <a href="https://github.com/ArtifexSoftware/mupdf.js" target="_blank" rel="noopener noreferrer">engine source</a></b></div>
@@ -9005,23 +9008,56 @@ function updateModalInert(){
 // where moving it would just relocate the black band.
 let vvDrop = 0;
 let vvLast = "";        // for the About readout
-function pinBottomChrome(){
+// v11.86: TWO references, because either alone misses the real case.
+//
+// v11.85 measured only the bar's own edge against window.innerHeight. On this
+// device that reads ZERO while the gap is plainly on screen — because the bar
+// is exactly where `bottom:0` puts it, and it is the LAYOUT VIEWPORT that is
+// short. Measuring the bar against the thing that is itself too small can
+// never see it. That is why v11.83 and v11.85 both did nothing.
+//
+// The clue was in the screenshots: the gap is there while the "Ready…" toast is
+// up and gone once it has faded. The toast is not a cause — it is `position:
+// fixed` and cannot push anything — it is a CLOCK. It shows for a few seconds
+// after launch, so the gap is a launch-time state that settles by itself.
+//
+// So the second reference is screen.height, which does not move. Gated to
+// installed-standalone only: in a Safari tab innerHeight is legitimately much
+// smaller than the screen (browser chrome), and pushing the toolbar down there
+// would shove it under the browser UI.
+function bottomShortfall(){
   const bar = $("toolbar");
-  if (!bar || !bar.getBoundingClientRect) return;
+  if (!bar || !bar.getBoundingClientRect) return null;
   const r = bar.getBoundingClientRect();
-  // How far the bar's own bottom edge sits ABOVE the bottom of the visible
-  // window. This is the symptom itself — no theory about WHY the layout
-  // viewport is short is needed, and none of the several candidate causes has
-  // to be guessed right.
-  //
-  // v11.83 measured visualViewport against innerHeight instead. On this device
-  // those two agree even when the gap is there, so it read 0 and did nothing.
-  const shortfall = Math.round(window.innerHeight - r.bottom);
-  vvLast = Math.round(r.bottom) + "/" + window.innerHeight;
-  if (Math.abs(shortfall) < 1) return;              // already flush
+  // (1) is the bar where the viewport says the bottom is?
+  let gap = Math.round(window.innerHeight - r.bottom);
+  // (2) does the viewport itself reach the bottom of the screen?
+  let short = 0;
+  const standalone = (window.navigator && window.navigator.standalone === true)
+    || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+  if (standalone && window.screen && window.screen.height){
+    const portrait = window.innerHeight >= window.innerWidth;
+    // iOS does not swap screen.width/height on rotation, so pick by orientation
+    const screenH = portrait ? Math.max(window.screen.width, window.screen.height)
+                             : Math.min(window.screen.width, window.screen.height);
+    const d = Math.round(screenH - window.innerHeight);
+    // A small shortfall is the bug. A large one is a legitimately smaller
+    // window (iPad multitasking, a resized window) and must be left alone.
+    if (d > 0 && d <= 120) short = d;
+  }
+  vvLast = Math.round(r.bottom) + "/" + window.innerHeight
+         + (window.screen ? "/" + Math.round(Math.max(window.screen.width, window.screen.height)) : "");
+  return gap + short;
+}
+function pinBottomChrome(){
+  const shortfall = bottomShortfall();
+  if (shortfall === null) return;
+  if (Math.abs(shortfall) < 1) return;               // already flush
   // The measurement is taken WITH the current correction applied, so it is a
-  // residual: add it. One step converges; the clamp stops a bad frame running
-  // away, and re-measuring next tick corrects any overshoot.
+  // residual. Adding it converges and then HOLDS: once the bar is pushed down
+  // by `short`, term (1) reads -short and term (2) reads +short, summing to
+  // zero. When iOS later expands the viewport, term (2) drops to zero and term
+  // (1) pulls the correction back off. Self-correcting in both directions.
   const next = Math.max(0, Math.min(160, vvDrop + shortfall));
   if (next === vvDrop) return;
   vvDrop = next;
