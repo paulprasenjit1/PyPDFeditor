@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.94";
+const APP_BUILD = "11.95";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -9470,6 +9470,30 @@ function diagSample(tag){
          || Math.abs(Math.round(f.dispH) - Math.round(vr.height)) > 2)
           row += "  OFF-FIT(want " + Math.round(f.dispW) + "x" + Math.round(f.dispH) + ")";
       }
+      // v11.95: the element's rect is not what the eye sees. `object-fit:contain`
+      // paints the stream INSIDE that box, so a video element of the right size
+      // showing a stream of a different aspect paints smaller than itself — and
+      // every frame of the last trace "matched the fit" while the preview was
+      // still reported as opening small. Record what is painted, and what our
+      // own code asked for, so the three can be compared.
+      //
+      // A correct contain fit is short on ONE axis (the letterbox). Short on
+      // BOTH is the thing being described as a small window floating in black,
+      // and is labelled as such.
+      if (v && vr && view){
+        const bw = view.clientWidth|0, bh = view.clientHeight|0;
+        const sw = v.videoWidth|0, sh = v.videoHeight|0;
+        let pw = Math.round(vr.width), ph = Math.round(vr.height);
+        if (sw > 0 && sh > 0 && vr.width > 0 && vr.height > 0){
+          const p = containFit(sw, sh, vr.width, vr.height);
+          pw = Math.round(p.dispW); ph = Math.round(p.dispH);
+        }
+        row += " paint=" + pw + "x" + ph
+            +  " sty=" + ((v.style && v.style.width) ? v.style.width + "x" + v.style.height : "-")
+            +  " boot=" + (($("camBoot") && !$("camBoot").hidden) ? 1 : 0);
+        if (bw > 0 && bh > 0 && pw < bw*0.92 && ph < bh*0.92)
+          row += "  SMALL(paints " + pw + "x" + ph + " in " + bw + "x" + bh + ")";
+      }
     }
     // v11.94: collapse identical consecutive frames. The first device trace was
     // 700 rows of which 690 were byte-identical — a still layout sampled every
@@ -9520,15 +9544,21 @@ function diagVerdict(){
     const web = (!scr || short <= 2)
       ? "web view full screen"
       : "web view SHORT by " + short + "px — the band below the bar is outside the page; re-add to Home Screen";
-    let opens = 0, off = 0, frames = 0;
+    let opens = 0, off = 0, offN = 0, small = 0, smallN = 0;
     for (const r of diagRows){
       if (r.tag === "scanner-open") opens++;
-      if (/OFF-FIT/.test(r.body)){ off++; frames += r.n; }
+      if (/OFF-FIT/.test(r.body)){ off++; offN += r.n; }
+      if (/SMALL\(/.test(r.body)){ small++; smallN += r.n; }
     }
-    const cam = opens
-      ? (off ? opens + " scanner open(s), " + frames + " frame(s) OFF-FIT — search OFF-FIT"
-             : opens + " scanner open(s), every frame matched the fit")
-      : "no scanner open recorded";
+    let cam;
+    if (!opens) cam = "no scanner open recorded";
+    else if (!off && !small) cam = opens + " scanner open(s), every frame filled the box";
+    else {
+      cam = opens + " scanner open(s)";
+      if (off) cam += ", " + offN + " frame(s) OFF-FIT";
+      if (small) cam += ", " + smallN + " frame(s) painted SMALL";
+      cam += " — search " + (small ? "SMALL" : "OFF-FIT");
+    }
     return web + " · " + cam;
   } catch(e){ return "?"; }
 }
@@ -9621,6 +9651,12 @@ function pinBottomChrome(){
   const shortfall = bottomShortfall();
   if (shortfall === null) return;
   vvDrop = shortfall;          // reported in About and in the trace, not applied
+  // v11.95: the one thing this measurement IS applied to. A web view that fills
+  // the screen owns the home-indicator strip, so the bottom inset is real and
+  // the toolbar honours it in full; a short one does not, and keeps the
+  // subtract-30 correction. Toggled rather than set, so an install that changes
+  // (re-adding to the Home Screen does exactly that) converges without a reload.
+  try { document.documentElement.classList.toggle("fullvp", shortfall <= 2); } catch(e){}
 }
 (function watchBottomChrome(){
   const recheck = ()=> nextFrame(pinBottomChrome);

@@ -4,6 +4,71 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.95] — 2026-08-02 — The band is gone; the toolbar reclaims its inset
+
+Re-adding the app to the Home Screen fixed the black band, and the trace proves
+it rather than describing it:
+
+```
+win=440x956  scr=440x956  vv=440x956@0  barBot=956  barTop=903  drop=0
+```
+
+`innerHeight` now equals `screen.height`, `drop=0`, and the toolbar's own bottom
+edge is at 956 — the true bottom of the display. The cause was the one proposed
+in v11.91: iOS snapshots a web app's appearance metadata when it is added to the
+Home Screen, and that install predated the correct `viewport-fit=cover`.
+
+### The consequence, fixed in the same release
+`--botpad` was `max(2px, env(safe-area-inset-bottom) - 30px)`. That subtraction
+existed only because the **short** web view still reported a 34px bottom inset
+for a strip it did not own — honouring it left 34px of dead space above a black
+band. Now that the web view owns the whole screen the inset is real, and only
+4px of it was being honoured: the buttons sat on top of the home indicator.
+
+`html.fullvp` gives back the full inset, and the class is set from the
+measurement that diagnosed the band in the first place — `screen.height` versus
+`innerHeight`, already running on the existing ladder of checks:
+
+```js
+document.documentElement.classList.toggle("fullvp", shortfall <= 2);
+```
+
+Toggled, not set once, so an install that changes — which is exactly what
+re-adding to the Home Screen does — converges without a reload, and a short web
+view keeps the old correction. Every floating control (`.zoomctl`, `.undofab`,
+`.mkmenu`, the page pill) and the viewer's own bottom padding are already
+expressed in `var(--botpad)`, so they all move together.
+
+### The scanner: the last trace was measuring the wrong rectangle
+Two clean opens, every frame matching the fit — and the preview still reported
+as opening small every time. Both can be true, because `object-fit:contain`
+paints the stream **inside** the element. An element of exactly the right size
+showing a stream of a different aspect paints smaller than itself, and the
+recorder was measuring the element.
+
+Each scanner frame now also records:
+
+| field | what |
+|---|---|
+| `paint=` | the image as painted inside the element — what the eye sees |
+| `sty=` | the inline size `fitPreviewBox` asked for, so intent and result can disagree visibly |
+| `boot=` | whether "Starting camera…" is still showing underneath |
+
+And the label that matters: a correct contain fit is short on **one** axis (the
+letterbox). Short on **both** is a small window floating in black, which is the
+reported symptom, so it is labelled **`SMALL(paints 200x150 in 390x600)`** and
+counted in the verdict.
+
+Device-untested for the scanner: this release adds no fix for it, only the
+measurement that can tell the two explanations apart.
+
+### Tests
+69 in the scenario suite (was 65). D8b–D8e cover the painted size, that a
+one-axis letterbox is *not* flagged, that a both-axes shortfall is, and that the
+verdict reports it.
+
+---
+
 ## [v11.94] — 2026-08-02 — The trace now records change, and reads itself
 
 The second device trace came back 700 rows long, of which **690 were
