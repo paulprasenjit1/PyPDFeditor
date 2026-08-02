@@ -715,6 +715,13 @@ input[type=file] { display:none; }
 .scanfilters .bothbtn.on { background:var(--accent2); border-color:var(--accent2); color:#fff; }
 .scanfilters .bothbtn[hidden] { display:none; }
 
+/* v11.90: the diagnostics dump. Monospace, small, scrollable — it is meant to
+   be copied and read elsewhere, not admired here. */
+.diagdump { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px;
+            line-height:1.35; white-space:pre; overflow:auto; max-height:38vh;
+            margin:8px 0; padding:10px; border-radius:10px;
+            background:#0e1013; border:0.5px solid var(--line); color:#c9cfd8;
+            -webkit-user-select:text; user-select:text; }
 /* ---------------- More menu: grouped icon grid ---------------- */
 /* Replaces the old flat list of full-width rows with a scannable grid grouped
    under quiet section labels (Pages · Content · Export). Tiles reuse the same

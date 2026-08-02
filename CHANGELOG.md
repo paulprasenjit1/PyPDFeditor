@@ -4,6 +4,56 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.90] — 2026-07-29 — A recorder, so the next fix is not a fifth guess
+
+Two device-only bugs — the black band below the toolbar, and the camera preview
+opening small — have each survived four attempted fixes. Every one of those was
+built on **inference from a screenshot**, because both bugs are transient and
+self-correcting: any reading taken afterwards shows healthy numbers.
+
+This release measures nothing new about the bugs and fixes neither. It records
+the layout **while they are happening**.
+
+### What it captures
+Every animation frame, for six seconds after launch, after a resume, and after
+the scanner opens:
+
+| field | why |
+|---|---|
+| `win` / `scr` / `vv` | innerWidth×Height, screen, visualViewport — the three references the bottom-bar fix has been choosing between |
+| `barBot` / `barTop` / `drop` | the toolbar's own rect and the correction currently applied |
+| `panel` / `view` | the scanner panel and viewfinder boxes |
+| `vid` | the stream's intrinsic size |
+| **`drawn`** | **the video's rendered `getBoundingClientRect`** |
+
+`drawn` is the one that matters most. Four releases have reasoned about what
+the fit *intended*; nothing has ever recorded what actually ended up on screen.
+The arithmetic from the screenshot never reconciled — 690×920 in a 920×1420 box
+is not a contain fit, a CSS `object-fit:contain` result, or a transposition of
+either — which means the model was wrong, not the constants. This settles it
+with a number instead of a deduction.
+
+The exact frame the preview is revealed is tagged (`revealed:stable` or
+`revealed:timeout`), so the trace shows whether the wrong size was on screen
+before or after the reveal.
+
+### Reading it
+**More → Diagnostics.** A plain monospace dump with a Copy button, deliberately
+not a summary — a summary would be my interpretation, and misinterpreting these
+numbers is what has cost four releases. There is also *Record again (6s)* for
+reproducing on demand.
+
+### Constraints
+- It only reads. Nothing here changes layout.
+- `diagSample` cannot throw into the app it is measuring (`SC211`).
+- Capped at 700 rows and 6-second windows, and overlapping starts cannot spawn
+  two loops (`SC218`, `SC219`).
+
+scan 233 → 243. Seventeen suites green, corpus green.
+
+**How to use it:** reproduce either bug, then open More → Diagnostics and Copy.
+The trace is what the next fix will be built on.
+
 ## [v11.89] — 2026-07-29 — Bottom bar: the ladder could miss the settle
 
 You asked whether v11.87/88 broke the v11.86 bottom-bar fix. **They did not.**

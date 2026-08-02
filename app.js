@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.89";
+const APP_BUILD = "11.90";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -4273,8 +4273,10 @@ $("moreBtn").onclick = ()=>{
     </div>
     <div class="mgrid mgrid2 mt12">
       <button class="mtile" id="mAbout">${ic("info")}<span>About</span></button>
+      <button class="mtile" id="mDiag">${ic("info")}<span>Diagnostics</span></button>
       <button class="mtile" id="mClose">${ic("close")}<span>Cancel</span></button>
     </div>`;
+  $("mDiag").onclick  = ()=>{ openDiagnostics(); };
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(false); };
   $("mScanAdd").onclick = ()=>{ closeSheet(); if (workingBytes) startScan(true); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
@@ -5788,6 +5790,7 @@ async function startScan(append){
   updateScanCount();
   $("scanCrop").classList.remove("show");
   $("scanCam").classList.add("show");
+  diagRecord("scanner-open");   // v11.90: record across the whole open sequence
   await afterLayout();     // v11.88: lay the panel out before the camera arrives
   // v10.95: one-time expectation-setting on installed iOS web apps — WebKit
   // does not persist getUserMedia grants for standalone PWAs (bugs 215884 /
@@ -6063,6 +6066,7 @@ function revealPreviewWhenSettled(v){
     // it showed through the letterbox beside it. Hide it explicitly.
     const boot = $("camBoot"); if (boot) boot.hidden = true;
     sizeQuadCanvas();
+    diagSample("revealed:" + (stable ? "stable" : "timeout"));
   };
   nextFrame(settle);
 }
@@ -9053,6 +9057,121 @@ function updateModalInert(){
     const el = $(id); if (el) mo.observe(el, { attributes:true, attributeFilter:["class"] });
   }
 })();
+// v11.90: read the trace back. Deliberately a plain monospace dump with a Copy
+// button rather than a pretty summary — a summary would be my interpretation,
+// and interpreting these numbers wrongly is exactly what has cost four
+// releases. The raw rows go to whoever is diagnosing.
+function openDiagnostics(){
+  const txt = diagText();
+  $("sheet").innerHTML = h`
+    <h3>Diagnostics</h3>
+    <p class="hint">A frame-by-frame record of the layout during app launch and
+    while the scanner opens. Reproduce the problem first, then come here — the
+    last few seconds are kept. Copy this and send it on.</p>
+    <pre class="diagdump" id="diagDump">${txt}</pre>
+    <div class="row"><button class="full" id="diagCopy">Copy</button></div>
+    <div class="row"><button class="full" id="diagAgain">Record again (6s)</button></div>
+    <div class="row"><button class="ghost full" id="diagClose">Close</button></div>`;
+  $("diagCopy").onclick = async ()=>{
+    try {
+      await navigator.clipboard.writeText(diagText());
+      setStatus("Trace copied.","ok");
+    } catch(e){
+      // clipboard can be refused; selecting the text is the fallback
+      try {
+        const r = document.createRange(); r.selectNodeContents($("diagDump"));
+        const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        setStatus("Could not copy automatically — the trace is selected, use Copy.","warn");
+      } catch(e2){ setStatus("Could not copy the trace.","err"); }
+    }
+  };
+  $("diagAgain").onclick = ()=>{ diagRows = []; diagRecord("manual"); closeSheet();
+    setStatus("Recording for 6 seconds — reproduce the problem now.","ok"); };
+  $("diagClose").onclick = closeSheet;
+  openSheet();
+}
+// ---------------- layout recorder (v11.90) ---------------------------------
+// Two device-only bugs have survived four fixes each: a black band below the
+// bottom toolbar, and the camera preview opening small and then jumping to
+// size. Every one of those fixes was built on inference from a screenshot,
+// because BOTH bugs are transient and self-correcting — any reading taken after
+// the fact shows healthy numbers.
+//
+// So this records the numbers WHILE the bugs are visible, rather than measuring
+// once and hoping the moment was right. It only reads; nothing here changes
+// layout. Recording windows are short and bounded, and stop on their own.
+const DIAG_MAX  = 700;          // rows kept, oldest dropped
+const DIAG_MS   = 6000;         // how long a window records for
+let diagRows = [];
+let diagWindow = 0;             // timestamp the current window ends
+let diagTimer  = 0;
+let diagT0     = 0;
+
+function diagSample(tag){
+  try {
+    const now = Date.now();
+    const t = String(now - diagT0).padStart(5, " ");
+    const bar = $("toolbar");
+    const br = bar && bar.getBoundingClientRect ? bar.getBoundingClientRect() : null;
+    const sc = window.screen || {};
+    const vv = window.visualViewport;
+    let row = "t=" + t
+      + " win=" + window.innerWidth + "x" + window.innerHeight
+      + " scr=" + (sc.width|0) + "x" + (sc.height|0)
+      + (vv ? " vv=" + Math.round(vv.width) + "x" + Math.round(vv.height)
+              + "@" + Math.round(vv.offsetTop) : "")
+      + (br ? " barBot=" + Math.round(br.bottom) + " barTop=" + Math.round(br.top) : "")
+      + " drop=" + vvDrop;
+    // scanner fields only while the scanner is up — the second bug lives here
+    const panel = $("scanCam");
+    if (panel && panel.classList.contains("show")){
+      const view = $("scanView"), v = $("scanVideo");
+      const vr = v && v.getBoundingClientRect ? v.getBoundingClientRect() : null;
+      const pr = panel.getBoundingClientRect ? panel.getBoundingClientRect() : null;
+      row += " | panel=" + (pr ? Math.round(pr.width)+"x"+Math.round(pr.height)+"@"+Math.round(pr.top) : "-")
+          +  " view=" + (view ? view.clientWidth+"x"+view.clientHeight : "-")
+          +  " vid=" + (v ? (v.videoWidth|0)+"x"+(v.videoHeight|0) : "-")
+          // the RENDERED rect is the ground truth: it is what is on screen,
+          // not what the fit intended
+          +  " drawn=" + (vr ? Math.round(vr.width)+"x"+Math.round(vr.height)
+                             + "@" + Math.round(vr.left) + "," + Math.round(vr.top) : "-")
+          +  " ready=" + ((v && v.classList.contains("ready")) ? 1 : 0);
+    }
+    if (tag) row += "  <" + tag + ">";
+    diagRows.push(row);
+    if (diagRows.length > DIAG_MAX) diagRows.splice(0, diagRows.length - DIAG_MAX);
+  } catch(e){ /* a diagnostic must never break the app it is diagnosing */ }
+}
+
+// Start (or extend) a recording window. Samples every animation frame, which is
+// the resolution these bugs happen at — they resolve within a few frames.
+function diagRecord(tag){
+  const now = Date.now();
+  if (!diagRows.length) diagT0 = now;
+  diagSample(tag);
+  diagWindow = now + DIAG_MS;
+  if (diagTimer) return;                       // a window is already running
+  const step = ()=>{
+    diagSample("");
+    if (Date.now() < diagWindow){ diagTimer = nextFrame(step); return; }
+    diagTimer = 0;
+  };
+  diagTimer = nextFrame(step);
+}
+function diagText(){
+  const head = [
+    "PyPDF layout trace — build " + APP_BUILD,
+    "mode: " + ((window.navigator && window.navigator.standalone === true)
+      || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
+      ? "standalone" : "browser tab"),
+    "dpr: " + (window.devicePixelRatio || "?")
+      + "   safe-area-bottom: " + (getComputedStyle(document.documentElement)
+          .getPropertyValue("--botpad") || "?").trim(),
+    "rows: " + diagRows.length + " (newest last)",
+    ""
+  ];
+  return head.concat(diagRows).join("\n");
+}
 // ---------------- bottom chrome, pinned to the real bottom (v11.83) --------
 // Reported with two screenshots taken minutes apart: sometimes a band of black
 // sits BELOW the toolbar, sometimes it does not. The header is in the same
@@ -9142,6 +9261,11 @@ function pinBottomChrome(){
     if (!document.hidden) [0,150,400,900].forEach(t=> setTimeout(pinBottomChrome, t));
   });
   [0,150,400,900,1800].forEach(t=> setTimeout(pinBottomChrome, t));
+  // v11.90: record the launch window — this is when the bottom gap appears
+  diagRecord("launch");
+  document.addEventListener("visibilitychange", ()=>{
+    if (!document.hidden) diagRecord("resume");
+  });
   // v11.89: a fixed ladder can only catch a settle it happens to land on. If
   // the viewport reaches its final size later than the last rung, nothing
   // re-measures and the gap stays for the rest of the session. Poll gently for
