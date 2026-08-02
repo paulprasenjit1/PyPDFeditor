@@ -4,6 +4,193 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.93] — 2026-08-02 — Pages: take a range, move a block, select the lot
+
+Selection existed in the Pages grid but was one tap per page, and reordering was
+one page per tap in Organise. Deleting pages 4–9 was six taps; moving them up
+three places was eighteen.
+
+### Press and hold to take a range
+Tap page 4, hold page 9: everything between is selected. Two gestures instead of
+six taps. The header says how many are selected and the hint line says how.
+
+Deliberately **not** drag-to-select — a thumbnail is a poor drag target on a
+phone and the sheet itself pans. The hold is 420ms, long enough not to fire on a
+scroll flick, and the click that follows a hold is swallowed so the page it
+landed on is not immediately toggled back off.
+
+### Move a whole selection
+**← Earlier** and **Later →** move every selected page one step. Two rules make
+repeated taps behave rather than scatter the document:
+
+- a page at the edge stays put;
+- a page blocked by an already-moved sibling stays put.
+
+So a selection driven into the top closes up and then stops. The traversal order
+is what makes this work: moving earlier walks the selection left-to-right,
+moving later walks it right-to-left. Walk it the wrong way and `012345` with
+pages 3–4 selected becomes `012453` — the block torn apart — instead of
+`012534`. That case is now test **O3a**, and it was confirmed to fail against a
+deliberately reversed traversal before being accepted.
+
+The moved pages stay selected, so the next tap continues the move.
+
+### Select all / Select none
+One button, and the label says which it will do.
+
+### Applied, not queued
+A move commits immediately, like Rotate already did, rather than being staged
+until Done. The thumbnails have to show the new order for the next tap to mean
+anything. Undo covers it.
+
+### Tests
+57 in the scenario suite (was 39). O1–O6 are the arithmetic — blocks, edges,
+non-contiguous selections, and ten repeated taps converging; O7–O17 drive the
+real sheet in jsdom, including that the click after a hold is swallowed and that
+a moved page is still selected afterwards.
+
+**Also fixed a flaky test.** `N4b` slept a flat 150ms after building a scan and
+then asked whether the document had text — on a loaded machine it lost that race
+about one run in four and read the previous document's cached answer. It now
+waits for a *different* signal (the open file actually changing) before asking
+the question. Seven consecutive clean runs since.
+
+---
+
+## [v11.92] — 2026-08-02 — Compress tells you what each level would produce
+
+Compress offered three levels and no way to tell what any of them would do. You
+committed, looked, and undid. Each button now carries the answer:
+
+```
+High quality — pictures at 200 dpi
+about 2.8 MB  ·  6% smaller
+
+Balanced — pictures at 150 dpi
+about 590 KB  ·  80% smaller
+
+Smallest — pictures at 110 dpi
+about 240 KB  ·  92% smaller
+```
+
+### How the number is arrived at
+Not by compressing three times — that would cost more than the compression
+itself. The largest handful of images are **genuinely encoded** at each level,
+and the rest of the document is scaled from the bytes-per-pixel those samples
+measured. The expensive step, decoding the pixmap, happens **once per image and
+is shared by all three levels**, so three answers cost barely more than one.
+
+Because a few big images carry nearly all of a PDF's weight, the sampled part
+is usually most of the answer and the extrapolation is the tail.
+
+Every skip rule in `recompressImages` is mirrored, so an image the real pass
+leaves alone is predicted as unchanged: under `IMG_MIN_BYTES`, already a JPEG at
+a sensible dpi, or a saving below the 10% floor. What is *not* mirrored — the
+lossless structural pass, font subsetting, CCITT on bilevel images — can only
+make the real result **smaller** than predicted, which is the safe direction.
+
+### Measured accuracy
+| document | level | estimated | actual | error |
+|---|---|---|---|---|
+| one 1200×1600 photo | high | 2856 KB | 2856 KB | 0% |
+| | balanced | 604 KB | 605 KB | 0% |
+| | smallest | 247 KB | 247 KB | 0% |
+| fourteen images (extrapolated) | balanced | 2710 KB | 2653 KB | +2% |
+
+The fourteen-image case is the one that tests the extrapolation, since only
+eight images are sampled.
+
+### One thing the first attempt got wrong
+Undecoded images were treated as *unplaced*, which sends them down the
+`IMG_UNMEASURED_MAX` path and predicts **no reduction at all**: 7.2 MB against
+an actual 2.6 MB, 178% out. The placement map is keyed by
+pixels:components:depth and the object dictionary does not reliably give the
+last two, so `placementByDims` now matches on pixel size alone and takes the
+largest match. 178% → 2%. Conservative is not the same as useful.
+
+### Behaviour
+- The sheet **opens immediately**; the numbers arrive a moment later. A sheet
+  that cannot be used until an estimate finishes would be worse than one with
+  no estimate.
+- Closing the sheet, or pressing a level, abandons the work at the next image.
+- Documents over 60 MB or 60 pages are declined outright, and the lines stay
+  blank rather than the sheet freezing.
+- Read-only throughout: it runs directly on `MDOC` without a copy because it
+  never writes. A test asserts there is no `.put(` anywhere in it.
+- A text-only document now reads **"about the same size"** — which is itself
+  useful, since it says Compress has nothing to work with here.
+
+### Not estimated yet
+**Scanned pages (MRC)** and **Reach a size…** carry no number. MRC's cost is
+not a size — it is that small text is redrawn as a stencil, and no byte count
+conveys that. That is C2's job: render the smallest text both ways and show the
+pair.
+
+### Tests
+124 in the compress suite (was 90). CP70–CP99 cover the arithmetic, the
+comparison against real compression at all three levels, the extrapolated tail,
+cancellation, the size ceiling, and that the estimator never mutates.
+
+---
+
+## [v11.91] — 2026-08-02 — The black band is outside the page, and no CSS can reach it
+
+The recorder shipped in v11.90 was run on the device. One line of the trace ends
+four releases of theorising:
+
+```
+win=440x894   scr=440x956   vv=440x894@0   barBot=956   barTop=841   drop=62
+```
+
+`innerHeight` is **894** on a **956** screen. The web view is 62px shorter than
+the display, and 62px is exactly the top safe-area inset of a 16 Pro Max. The
+black band is not a gap the toolbar failed to fill — it is **the part of the
+screen the document does not occupy at all**.
+
+That also explains why three separate corrections failed in the same way. With
+`drop=62` the bar's box sat at viewport-y **956**, while the web view ends at
+**894**: 62px of the bar was outside the renderable area and was clipped, never
+painted. Every value of the correction has this property. Anything below
+`innerHeight` does not exist to paint into.
+
+### What changed
+- `--vvdrop` is **gone** — removed from `:root` and from every rule that read it.
+- `.toolbar` is back to plain `position:fixed; bottom:0` with `var(--botpad)`.
+- The measurement that diagnosed this **stays**. `bottomShortfall()` still runs;
+  its result is reported in About and in the trace, and applied to nothing.
+- About gains a **Web view** row reading either `full screen` or
+  `SHORT by 62px — re-add to Home Screen`, so the condition is visible without
+  opening a trace.
+
+### The likely cause, and the test for it
+`viewport-fit=cover` is present in `index.html`, and with it in effect
+`innerHeight` should equal the screen height. iOS snapshots a web app's
+appearance metadata when it is added to the Home Screen; an instance installed
+before that meta was correct keeps the old, inset-avoiding viewport for the life
+of the installation, no matter how many times the service worker updates.
+
+**To test:** delete the PyPDF icon from the Home Screen, open the site in
+Safari, Add to Home Screen again, then More → About. If Web view reads
+`full screen`, the band is gone and the cause is confirmed.
+
+### Scanner preview
+The same trace covered a scanner open, and it was **correct**:
+
+```
+view=440x610   vid=3024x4032   drawn=440x587@0,112
+```
+
+`containFit(3024, 4032, 440, 610)` gives 440×587 with offY 11.5, and
+`.scanview` top 112 − 11.5 = 100.5 — an exact match. This open did not
+reproduce the bug, so nothing was changed for it. A trace captured during a
+**broken** open is still needed.
+
+### Tests
+232 in the scanner suite. SC180–SC185b were rewritten: they no longer pin a
+correction, they pin its absence and record the trace numbers that justify it.
+
+---
+
 ## [v11.90] — 2026-07-29 — A recorder, so the next fix is not a fifth guess
 
 Two device-only bugs — the black band below the toolbar, and the camera preview

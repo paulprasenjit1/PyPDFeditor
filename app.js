@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.90";
+const APP_BUILD = "11.93";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -4326,7 +4326,9 @@ function openAbout(){
     <div class="about">
       <div class="abrow"><span>Version</span><b>${APP_VERSION}</b></div>
       <div class="abrow"><span>Build</span><b>${BUILD_DATETIME}</b></div>
-      <div class="abrow"><span>Bottom bar</span><b>${(vvLast || "-")+" drop "+vvDrop+"px"}</b></div>
+      <div class="abrow"><span>Bottom bar</span><b>${(vvLast || "-")}</b></div>
+      <div class="abrow"><span>Web view</span><b>${(window.innerHeight >= (window.screen ? Math.max(window.screen.width,window.screen.height) : 0) - 2
+          ? "full screen" : "SHORT by " + (Math.max(window.screen.width,window.screen.height) - window.innerHeight) + "px — re-add to Home Screen")}</b></div>
       <div class="abrow"><span>Display mode</span><b>${((window.navigator && window.navigator.standalone===true)
           || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
           ? "standalone" : "browser tab")}</b></div>
@@ -4726,6 +4728,49 @@ async function doExtract(pages){
   showSpin(false);
 }
 
+// ---- v11.93: moving a selection (pure) ------------------------------------
+// Reordering was one page at a time: ↑ or ↓ on a single row in Organise. Moving
+// pages 4-9 up by three meant eighteen taps. This moves a whole selection one
+// step and returns both the new order AND where the selection ended up, since
+// the caller has to keep the same pages selected afterwards.
+//
+// The rules are the ones that make repeated taps behave: a page at the edge
+// stays put, and a page blocked by an already-moved sibling stays put too —
+// so a selection that reaches the top simply stops, and a non-contiguous
+// selection closes up against the edge instead of scattering.
+//
+// Order of traversal is what makes that work: moving earlier, the leftmost
+// selected page goes first, so the one behind it sees the vacated slot.
+function moveSelection(order, sel, dir){
+  const n = order.length;
+  const out = order.slice();
+  const placed = new Set();
+  const positions = [...sel].filter(p=> p>=0 && p<n).sort((a,b)=> dir < 0 ? a-b : b-a);
+  for (const p of positions){
+    const q = p + dir;
+    if (q < 0 || q >= n || placed.has(q)){ placed.add(p); continue; }
+    const t = out[p]; out[p] = out[q]; out[q] = t;
+    placed.add(q);
+  }
+  return { order: out, sel: placed };
+}
+
+// Does this selection have anywhere left to go? Both buttons grey out at the
+// end rather than looking live and doing nothing.
+function canMoveSelection(order, sel, dir){
+  if (!sel || !sel.size) return false;
+  const r = moveSelection(order, sel, dir);
+  return r.order.some((v,i)=> v !== order[i]);
+}
+
+// The pages between two taps, inclusive. Selecting 4-9 was six taps; this is
+// two — tap 4, hold 9.
+function rangeBetween(a, b){
+  const lo = Math.min(a,b), hi = Math.max(a,b), out = [];
+  for (let i=lo; i<=hi; i++) out.push(i);
+  return out;
+}
+
 // ---------------- all pages: Preview-style thumbnail grid (v11.10) ----------------
 // A near-full-height sheet with every page as a thumbnail. Tap a page to jump
 // to it; Select mode allows rotate / copy-to-new-PDF / delete on a selection.
@@ -4735,38 +4780,91 @@ function openPagesGrid(keepSel){
   const n = MDOC.countPages();
   let selecting = !!(keepSel && keepSel.size);
   const sel = new Set(keepSel || []);
+  // v11.93: the last page tapped on its own. Holding another page fills the
+  // range between the two, which is the difference between six taps and two
+  // when you want pages 4-9.
+  let anchor = (keepSel && keepSel.size) ? Math.max(...keepSel) : null;
+  let held = false;                       // a long-press fired: swallow its click
   function draw(){
     const cells = Array.from({length:n},(_,i)=> h`<button class="pgcell ${sel.has(i)?'sel':''}" data-pg="${i}"
         aria-label="Page ${i+1}${sel.has(i)?', selected':''}">
         <img data-pthumb="${i}" alt="">
         <span class="pgnum">${i+1}</span>
       </button>`).join("");
+    const ord = Array.from({length:n},(_,i)=>i);
     const acts = selecting ? h`<div class="pgacts">
-        <button class="ghost" id="pgRot" ${sel.size?"":"disabled"}>⟳ Rotate</button>
-        <button class="ghost" id="pgDup" ${sel.size?"":"disabled"}>Duplicate</button>
-        <button class="ghost" id="pgBlank" ${sel.size===1?"":"disabled"}>+ Blank</button>
-        <button class="ghost" id="pgExt" ${sel.size?"":"disabled"}>Copy</button>
-        <button class="ghost danger" id="pgDel" ${sel.size?"":"disabled"}>Delete</button>
+        <div class="pgrow">
+          <button class="ghost" id="pgRot" ${sel.size?"":"disabled"}>⟳ Rotate</button>
+          <button class="ghost" id="pgDup" ${sel.size?"":"disabled"}>Duplicate</button>
+          <button class="ghost" id="pgBlank" ${sel.size===1?"":"disabled"}>+ Blank</button>
+          <button class="ghost" id="pgExt" ${sel.size?"":"disabled"}>Copy</button>
+          <button class="ghost danger" id="pgDel" ${sel.size?"":"disabled"}>Delete</button>
+        </div>
+        <div class="pgrow">
+          <button class="ghost" id="pgUp" ${canMoveSelection(ord, sel, -1)?"":"disabled"}>← Earlier</button>
+          <button class="ghost" id="pgDown" ${canMoveSelection(ord, sel, 1)?"":"disabled"}>Later →</button>
+          <button class="ghost" id="pgAll">${sel.size === n ? "Select none" : "Select all"}</button>
+        </div>
       </div>` : "";
     $("sheet").innerHTML = h`
       <div class="pghead">
         <button class="ghost mini" id="pgDone">Done</button>
-        <h3 class="pgttl">All pages</h3>
+        <h3 class="pgttl">${selecting ? (sel.size ? sel.size+" selected" : "Select pages") : "All pages"}</h3>
         <button class="ghost mini" id="pgSel">${selecting ? "Cancel" : "Select"}</button>
       </div>
+      ${raw(selecting ? '<p class="pghint">Tap to select · hold a second page to take the whole range</p>' : "")}
       <div class="pggrid">${raw(cells)}</div>${raw(acts)}`;
     $("sheet").classList.add("fullpage");
     $("pagesBtn").classList.add("on");     // v11.14: bar shows Pages is open
     $("pgDone").onclick = closeSheet;
-    $("pgSel").onclick = ()=>{ selecting = !selecting; sel.clear(); draw(); };
-    $("sheet").querySelectorAll("[data-pg]").forEach(b=>b.onclick = ()=>{
+    $("pgSel").onclick = ()=>{ selecting = !selecting; sel.clear(); anchor = null; draw(); };
+    $("sheet").querySelectorAll("[data-pg]").forEach(b=>{
       const i = +b.dataset.pg;
-      if (!selecting){ closeSheet(); scrollToPage(i); return; }
-      sel.has(i) ? sel.delete(i) : sel.add(i);
-      draw();
+      b.onclick = ()=>{
+        if (held){ held = false; return; }        // the hold already acted
+        if (!selecting){ closeSheet(); scrollToPage(i); return; }
+        sel.has(i) ? sel.delete(i) : sel.add(i);
+        anchor = sel.has(i) ? i : null;
+        draw();
+      };
+      // Press and hold to extend from the last single tap. Deliberately not a
+      // drag: a thumbnail is a poor drag target on a phone, and the sheet
+      // itself pans. 420ms is long enough not to fire on a scroll flick.
+      let timer = null;
+      const cancel = ()=>{ if (timer){ clearTimeout(timer); timer = null; } };
+      b.onpointerdown = ()=>{
+        if (!selecting) return;
+        cancel();
+        timer = setTimeout(()=>{
+          timer = null; held = true;
+          const from = (anchor === null) ? i : anchor;
+          for (const p of rangeBetween(from, i)) sel.add(p);
+          anchor = i;
+          draw();
+        }, 420);
+      };
+      b.onpointerup = cancel; b.onpointercancel = cancel; b.onpointerleave = cancel;
+      b.onpointermove = cancel;
     });
     if (selecting){
       const ident = ()=>Array.from({length:MDOC.countPages()},(_,i)=>i);
+      $("pgAll").onclick = ()=>{
+        if (sel.size === n) sel.clear();
+        else for (let i=0;i<n;i++) sel.add(i);
+        anchor = null;
+        draw();
+      };
+      // Moving is applied straight away, like Rotate, rather than queued: the
+      // thumbnails have to show the new order for the next tap to make sense.
+      const move = async (dir)=>{
+        const r = moveSelection(ident(), sel, dir);
+        if (!r.order.some((v,i)=> v !== i)) return;
+        closeSheet();
+        await applyOrganise(r.order, {});
+        openPagesGrid(r.sel);
+      };
+      $("pgUp").onclick   = ()=> move(-1);
+      $("pgDown").onclick = ()=> move(1);
       $("pgRot").onclick = async ()=>{
         const rot = {}; for (const i of sel) rot[i] = 90;
         closeSheet();
@@ -7861,9 +7959,9 @@ $("compBtn").onclick = ()=>{
   $("sheet").innerHTML = h`
     <h3>Compress</h3>
     <p class="hint">Pictures inside the document are reduced to a sensible resolution for the size they are printed at. Text, fonts and drawings are never touched, so the document stays selectable and searchable.</p>
-    <div class="row"><button class="full" id="cpHigh">High quality — pictures at 200 dpi</button></div>
-    <div class="row"><button class="full" id="cpMed">Balanced — pictures at 150 dpi</button></div>
-    <div class="row"><button class="full" id="cpLow">Smallest — pictures at 110 dpi</button></div>
+    <div class="row"><button class="full stack" id="cpHigh">High quality — pictures at 200 dpi<span class="est" id="estHigh">estimating…</span></button></div>
+    <div class="row"><button class="full stack" id="cpMed">Balanced — pictures at 150 dpi<span class="est" id="estMed">estimating…</span></button></div>
+    <div class="row"><button class="full stack" id="cpLow">Smallest — pictures at 110 dpi<span class="est" id="estLow">estimating…</span></button></div>
     <div class="row"><button class="full" id="cpTarget">Reach a size… — e.g. under 2 MB for an upload</button></div>
     <div class="row"><button class="full" id="cpMrc">Scanned pages — much smaller, text redrawn</button></div>
     <div class="row"><button class="ghost full" id="cpCancel">Cancel</button></div>`;
@@ -7874,7 +7972,39 @@ $("compBtn").onclick = ()=>{
   $("cpMrc").onclick  = ()=>{ closeSheet(); runMrcCompress(); };
   $("cpCancel").onclick = closeSheet;
   openSheet();
+  showCompressEstimate();
 };
+
+// v11.92: fill the three level buttons in with what they would produce.
+// Deliberately NOT blocking: the sheet opens immediately and the numbers
+// arrive a moment later, because a sheet that cannot be used until an estimate
+// finishes is worse than one with no estimate at all. Closing the sheet (or
+// pressing a level before the numbers land) abandons the work at the next
+// image — `isLive` is checked inside the loop.
+let estToken = 0;
+async function showCompressEstimate(){
+  const token = ++estToken;
+  const live = ()=> token === estToken && $("estHigh");
+  const put = (id, text)=>{ const el = $(id); if (el) el.textContent = text; };
+  const before = workingBytes ? workingBytes.length : 0;
+  try {
+    const r = await estimateCompressLevels(MDOC, before,
+      ()=> new Promise(res=>setTimeout(res,0)), live);
+    if (!live()) return;
+    if (r.high === null){
+      // Too large to estimate cheaply. Say so rather than showing nothing:
+      // a button that silently never fills in reads as a bug.
+      for (const id of ["estHigh","estMed","estLow"]) put(id, "");
+      return;
+    }
+    put("estHigh", fmtEstimate(before, r.high));
+    put("estMed",  fmtEstimate(before, r.medium));
+    put("estLow",  fmtEstimate(before, r.low));
+  } catch(e){
+    if (!live()) return;
+    for (const id of ["estHigh","estMed","estLow"]) put(id, "");
+  }
+}
 
 // ---- v11.36: image geometry (pure) ---------------------------------------
 // What pixel size should this image be reduced to, given the size it is drawn
@@ -7898,6 +8028,79 @@ function imageTargetSize(pxW, pxH, drawWpt, drawHpt, targetDpi){
   if (!(eff > targetDpi * 1.10)) return null;
   const s = targetDpi / eff;
   return { w: Math.max(1, Math.round(pxW*s)), h: Math.max(1, Math.round(pxH*s)) };
+}
+
+// ---- v11.92: predicting a level's result, without performing it ----------
+// Compress offers three levels and, until now, no way to tell what any of them
+// would produce. You committed, looked, and undid. The estimate below turns
+// that guess-and-undo loop into a decision.
+//
+// It is a PREDICTION, not a dry run: actually compressing three times to show
+// three numbers would cost more than the compression itself. Instead a handful
+// of the largest images are genuinely encoded — the expensive step, decoding
+// the pixmap, is done once and shared by all three levels — and the rest of
+// the document is scaled from the bytes-per-pixel those samples measured.
+// Because a few big images carry nearly all of a PDF's weight, the sampled
+// part is usually most of the answer and the extrapolated part is the tail.
+//
+// Rules mirrored from recompressImages, so an image the real pass would skip
+// is predicted as unchanged rather than as a saving:
+//   • under IMG_MIN_BYTES        — left alone
+//   • already at a sensible dpi and already a JPEG — left alone
+//   • predicted saving under IMG_MIN_GAIN — left alone
+// Anything not mirrored can only make the real result SMALLER than predicted
+// (the lossless structural pass, font subsetting, CCITT on bilevel images),
+// which is the safe direction to be wrong in.
+const EST_MAX_SAMPLES = 8;          // images actually encoded
+const EST_MAX_PIXELS  = 40e6;       // source pixels decoded, hard ceiling
+const EST_MAX_PAGES   = 60;         // above this the walk itself is the cost
+const EST_MAX_BYTES   = 60*1024*1024;
+
+// Placement lookup by pixel size only. measureImagePlacements keys on
+// pixels:components:depth because it is handed a decoded image; here we have
+// only a dictionary. Where two images share a pixel size the LARGEST placement
+// wins, which matches the map's own rule and is the conservative direction —
+// a larger placement means a higher dpi target, so less reduction.
+function placementByDims(placements, pxW, pxH){
+  if (!placements || !(pxW > 0) || !(pxH > 0)) return null;
+  const prefix = pxW+":"+pxH+":";
+  let best = null;
+  for (const [k, v] of placements){
+    if (k.indexOf(prefix) !== 0) continue;
+    if (!best || v.wpt*v.hpt > best.wpt*best.hpt) best = v;
+  }
+  return best;
+}
+
+function predictImageBytes(rawLen, pxW, pxH, drawWpt, drawHpt, dpi, bpp, isJpeg){
+  if (!(rawLen >= IMG_MIN_BYTES)) return rawLen;
+  const t = imageTargetSize(pxW, pxH, drawWpt, drawHpt, dpi);
+  if (!t && isJpeg) return rawLen;
+  const tw = t ? t.w : pxW, th = t ? t.h : pxH;
+  if (!(bpp > 0)) return rawLen;
+  const pred = Math.round(bpp * tw * th);
+  if (pred > rawLen * (1 - IMG_MIN_GAIN)) return rawLen;
+  return pred;
+}
+
+// before  — the document's current size
+// items   — one entry per image: { rawLen, after }
+// Everything that is not an image stream is carried across untouched, which is
+// exactly what the real pass does to it.
+function predictTotal(before, items){
+  let delta = 0;
+  for (const it of items) delta += Math.max(0, it.rawLen - it.after);
+  return Math.max(0, before - delta);
+}
+
+// Two significant figures, because the estimate does not have three. 2.43 MB
+// reads as a measurement; "about 2.4 MB" reads as what it is.
+function fmtEstimate(before, after){
+  if (!(after > 0) || after >= before * 0.97) return "about the same size";
+  const pct = Math.round(100*(1 - after/before));
+  return "about " + (after >= 1048576 ? (after/1048576).toFixed(1)+" MB"
+                                      : Math.round(after/1024)+" KB")
+       + "  ·  " + pct + "% smaller";
 }
 
 // Area-average (box filter) downsample of raw pixmap bytes. Deliberately NOT
@@ -8329,6 +8532,129 @@ async function recompressImages(pdf, level, onProgress){
     }
   }
   return rep;
+}
+
+// v11.92: one read-only pass that answers all three levels at once.
+// Nothing here mutates the document: it reads image streams, decodes a few of
+// them, and encodes those few into throwaway buffers. Safe to run on MDOC.
+async function estimateCompressLevels(pdf, before, onTick, isLive){
+  const levels = ["high","medium","low"];
+  const out = { high:null, medium:null, low:null, sampled:0, images:0 };
+  if (!pdf || !(before > 0)) return out;
+  if (before > EST_MAX_BYTES) return out;
+  let pages = 0;
+  try { pages = pdf.countPages(); } catch(e){ return out; }
+  if (!(pages > 0) || pages > EST_MAX_PAGES) return out;
+
+  const placements = measureImagePlacements(pdf);
+  const imgs = collectImageXObjects(pdf);
+  const items = [];
+  for (const ref of imgs.values()){
+    try {
+      const imask = ref.get("ImageMask");
+      if (imask && imask.isBoolean && imask.isBoolean() && imask.asBoolean()) continue;
+      const filt = ref.get("Filter");
+      const filtName = (filt && filt.isName && filt.isName()) ? filt.asName() : "";
+      if (filtName === "JPXDecode") continue;
+      const rawLen = ref.readRawStream().asUint8Array().length;
+      if (rawLen < IMG_MIN_BYTES) continue;
+      items.push({ ref, rawLen, isJpeg: filtName === "DCTDecode" });
+    } catch(e){}
+  }
+  out.images = items.length;
+  if (!items.length){
+    for (const lv of levels) out[lv] = before;
+    return out;
+  }
+  items.sort((a,b)=> b.rawLen - a.rawLen);
+
+  // Sample the largest images. The pixmap — by far the expensive part — is
+  // decoded ONCE and encoded at each level's dpi and quality, so three answers
+  // cost barely more than one.
+  const bpp = { high:0, medium:0, low:0 };
+  const bppN = { high:0, medium:0, low:0 };
+  let pixels = 0;
+  for (let i=0; i<items.length && i<EST_MAX_SAMPLES && pixels < EST_MAX_PIXELS; i++){
+    if (isLive && !isLive()) return out;
+    const it = items[i];
+    let im = null, pm = null;
+    try {
+      im = pdf.loadImage(it.ref);
+      const pxW = im.getWidth(), pxH = im.getHeight();
+      it.pxW = pxW; it.pxH = pxH;
+      const key = pxW+":"+pxH+":"+im.getNumberOfComponents()+":"+im.getBitsPerComponent();
+      const place = placements.get(key);
+      it.wpt = place ? place.wpt : 0; it.hpt = place ? place.hpt : 0;
+      pm = im.toPixmap();
+      if (pm.getAlpha()) continue;
+      const sw = pm.getWidth(), sh = pm.getHeight(), stride = pm.getStride();
+      const n = pm.getNumberOfComponents();
+      if (!csNameFor(n)) continue;
+      pixels += sw*sh;
+      const src = pm.getPixels();
+      it.sampled = {};
+      for (const lv of levels){
+        const cfg = IMG_LEVELS[lv];
+        const t = imageTargetSize(pxW, pxH, it.wpt, it.hpt, cfg.dpi);
+        if (!t && it.isJpeg){ it.sampled[lv] = it.rawLen; continue; }
+        const tw = t ? t.w : sw, th = t ? t.h : sh;
+        const down = (tw === sw && th === sh && stride === sw*n)
+          ? src : boxDownsample(src, sw, sh, stride, n, tw, th);
+        let outPm = null, bytes = it.rawLen;
+        try {
+          outPm = new mupdf.Pixmap(
+            n === 1 ? mupdf.ColorSpace.DeviceGray : n === 4 ? mupdf.ColorSpace.DeviceCMYK : mupdf.ColorSpace.DeviceRGB,
+            [0,0,tw,th], false);
+          const dp = outPm.getPixels(), ds = outPm.getStride();
+          for (let y=0; y<th; y++) dp.set(down.subarray(y*tw*n, (y+1)*tw*n), y*ds);
+          const jpg = new Uint8Array(outPm.asJPEG(cfg.q));
+          bpp[lv] += jpg.length/(tw*th); bppN[lv]++;
+          bytes = (jpg.length > it.rawLen*(1-IMG_MIN_GAIN)) ? it.rawLen : jpg.length;
+        } catch(e){}
+        finally { try{ if(outPm) outPm.destroy(); }catch(e){} }
+        it.sampled[lv] = bytes;
+      }
+      out.sampled++;
+    } catch(e){}
+    finally {
+      try{ if(pm) pm.destroy(); }catch(e){}
+      try{ if(im) im.destroy(); }catch(e){}
+    }
+    if (onTick) await onTick();
+  }
+  for (const lv of levels) bpp[lv] = bppN[lv] ? bpp[lv]/bppN[lv] : 0;
+
+  // The tail: images that were never decoded. Their pixel size is read from the
+  // object dictionary, which is free, and their placement is looked up by those
+  // dimensions — the placement map is keyed by pixels:components:depth and the
+  // dictionary does not reliably give the last two (an ICCBased colour space
+  // hides the component count), so the lookup matches on pixel size alone.
+  //
+  // Without this the tail was assumed unplaced, which sends it down the
+  // IMG_UNMEASURED_MAX path and predicts NO reduction at all — an estimate of
+  // 7.2 MB against an actual 2.6 MB on a fourteen-image document. Conservative
+  // is not the same as useful.
+  for (const it of items){
+    if (it.sampled) continue;
+    try {
+      const w = it.ref.get("Width"), h = it.ref.get("Height");
+      it.pxW = (w && w.isNumber && w.isNumber()) ? w.asNumber() : 0;
+      it.pxH = (h && h.isNumber && h.isNumber()) ? h.asNumber() : 0;
+      const pl = placementByDims(placements, it.pxW, it.pxH);
+      it.wpt = pl ? pl.wpt : 0; it.hpt = pl ? pl.hpt : 0;
+    } catch(e){ it.pxW = 0; it.pxH = 0; it.wpt = 0; it.hpt = 0; }
+  }
+
+  for (const lv of levels){
+    const cfg = IMG_LEVELS[lv];
+    const rows = items.map(it => ({
+      rawLen: it.rawLen,
+      after: it.sampled ? it.sampled[lv]
+           : predictImageBytes(it.rawLen, it.pxW, it.pxH, it.wpt, it.hpt, cfg.dpi, bpp[lv], it.isJpeg)
+    }));
+    out[lv] = predictTotal(before, rows);
+  }
+  return out;
 }
 
 // Roughly how much real, extractable text the document has, sampled across the
@@ -9231,19 +9557,19 @@ function bottomShortfall(){
          + (window.screen ? "/" + Math.round(Math.max(window.screen.width, window.screen.height)) : "");
   return gap + short;
 }
+// v11.91: measures, but no longer CORRECTS. The on-device trace showed why a
+// correction cannot work: innerHeight 894 against a 956 screen means the web
+// view is 62px short and the black band is outside the document. A negative
+// `bottom` put the bar's box at viewport-y 956, past the end of the web view,
+// where it was clipped rather than painted. Anything below innerHeight is not
+// rendered — so no value of --vvdrop could ever have filled that band.
+//
+// The reading is kept because it is what diagnosed this, and because it tells
+// the user which state their install is in.
 function pinBottomChrome(){
   const shortfall = bottomShortfall();
   if (shortfall === null) return;
-  if (Math.abs(shortfall) < 1) return;               // already flush
-  // The measurement is taken WITH the current correction applied, so it is a
-  // residual. Adding it converges and then HOLDS: once the bar is pushed down
-  // by `short`, term (1) reads -short and term (2) reads +short, summing to
-  // zero. When iOS later expands the viewport, term (2) drops to zero and term
-  // (1) pulls the correction back off. Self-correcting in both directions.
-  const next = Math.max(0, Math.min(160, vvDrop + shortfall));
-  if (next === vvDrop) return;
-  vvDrop = next;
-  document.documentElement.style.setProperty("--vvdrop", next + "px");
+  vvDrop = shortfall;          // reported in About and in the trace, not applied
 }
 (function watchBottomChrome(){
   const recheck = ()=> nextFrame(pinBottomChrome);

@@ -60,7 +60,7 @@ Risk: low. Value: medium — it is where this feature has gone wrong before.
 
 ## Tier 2 — organise
 
-### O1. Multi-select in Organize
+### O1. Multi-select in Organize  — DONE in v11.93 (range select, block move, select all)
 Every operation is one page at a time. Deleting six scanned blanks, or
 extracting pages 4–9, means six trips. A selection mode with a count and the
 existing actions applied to the set is the obvious upgrade.
@@ -76,7 +76,7 @@ should stay.
 
 ## Tier 3 — compress
 
-### C1. Predict the size before choosing
+### C1. Predict the size before choosing  — DONE in v11.92
 The Compress sheet offers five routes (High, Balanced, Smallest, Reach a size,
 Scanned pages/MRC) with no indication of what each would produce. You commit,
 look, and undo if unhappy.

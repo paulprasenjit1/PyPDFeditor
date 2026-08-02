@@ -16,13 +16,10 @@
         --ok:#30d158; --warn:#ffd60a; --err:#ff453a;
         --scrolltrack:#000000; --scrollthumb:#48484a; --shadow:rgba(0,0,0,.7);
         --pill-bg:rgba(44,44,46,.92); --pill-fg:#f5f5f7;
-        /* v11.83: the bottom inset, named once instead of repeated six times.
-           --vvdrop is measured in app.js and is 0px whenever the layout
-           viewport already reaches the bottom of the screen — which is the
-           normal case, so this changes nothing until it needs to. */
+        /* The bottom inset, named once instead of repeated six times. */
         --botpad:max(2px, calc(env(safe-area-inset-bottom) - 30px));
         --botpad2:max(2px, calc(env(safe-area-inset-bottom) - 28px));   /* short screens */
-        --vvdrop:0px; }
+}
 * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 /* v11.17: explicit dark scheme on text controls so iOS always shows the DARK
    keyboard for them, even if the device is in Light Mode. */
@@ -80,17 +77,16 @@ header .meta .meta-info { white-space:nowrap; flex:0 0 auto; }
 /* v11.14: near-opaque bar material — the translucent --chrome read as washed-out
    grey the moment white pages scrolled beneath the fixed bar. Buttons centre
    vertically (align-items:center) and the ribbon is squeezed further. */
-/* v11.85: the correction is a NEGATIVE BOTTOM, not just padding. v11.83 added
-   --vvdrop as padding only — and padding on a `bottom:0` element grows it
-   UPWARD, so the bar got taller and its bottom edge never moved. The gap stayed
-   exactly where it was. Moving the bar down by --vvdrop and padding by the same
-   amount puts its bottom edge on the real screen bottom while leaving the
-   buttons where they were, and its top edge at 48px+botpad either way — which
-   is why the floating controls below are NOT shifted. */
+/* v11.91: the --vvdrop correction is REMOVED. An on-device trace settled it:
+   innerHeight 894, screen 956 — the web view is 62px shorter than the screen
+   and the black band is OUTSIDE the page. Pushing the bar to bottom:-62 put its
+   box at viewport-y 956 while the web view ends at 894, so 62px of it was
+   simply clipped and never painted. No CSS can fill that band, because it is
+   not part of the document. Three releases tried; the geometry forbids it. */
 .toolbar { order:4; display:flex; flex-wrap:nowrap; gap:2px;
-           padding:3px 6px calc(var(--botpad) + var(--vvdrop));
+           padding:3px 6px var(--botpad);
            background:rgba(16,16,18,.96);
-           position:fixed; bottom:calc(0px - var(--vvdrop)); left:0; right:0; z-index:30;
+           position:fixed; bottom:0; left:0; right:0; z-index:30;
            -webkit-backdrop-filter:blur(16px) saturate(1.6); backdrop-filter:blur(16px) saturate(1.6);
            border-top:0.5px solid var(--line); align-items:center; overflow:hidden;
            transition:transform .32s cubic-bezier(.32,.72,0,1); }
@@ -245,7 +241,7 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
    controls (zoom, undo, markup popover) track the toolbar height. */
 @media (min-width:428px){
   .viewer { padding-bottom:calc(50px + var(--botpad2)); }
-  .toolbar { gap:6px; padding:4px 10px calc(var(--botpad2) + var(--vvdrop)); }
+  .toolbar { gap:6px; padding:4px 10px var(--botpad2); }
   .toolbar .tbtn span { font-size:11.5px; }
   .toolbar .tbtn svg.ic { width:25px; height:25px; }
   .zoomctl, .undofab,
@@ -513,9 +509,13 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .pgcell .pgnum { font-size:11px; color:var(--muted); }
 .pgcell.sel .pgnum { color:var(--accent); font-weight:600; }
 .pgacts { position:sticky; bottom:calc(-20px - env(safe-area-inset-bottom)); z-index:2;
-        display:flex; gap:8px; margin:4px -4px -8px; padding:10px 4px calc(10px + env(safe-area-inset-bottom));
+        display:flex; flex-direction:column; gap:6px; margin:4px -4px -8px;
+        padding:10px 4px calc(10px + env(safe-area-inset-bottom));
         background:var(--panel); }
-.pgacts button { flex:1; }
+/* v11.93: two rows — what to do with the selection, then how to change it. */
+.pgacts .pgrow { display:flex; gap:8px; }
+.pgacts button { flex:1; min-width:0; }
+.pghint { margin:-4px 0 8px; text-align:center; font-size:11px; color:var(--muted); }
 .pgacts .danger { color:var(--err); }
 /* v11.26: destructive actions in any sheet read red (e.g. Remove from Recents) */
 .sheet .danger { color:var(--err); }
@@ -531,6 +531,13 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 .sheet .row { display:flex; gap:8px; align-items:center; margin:10px 0; flex-wrap:wrap; }
 .sheet label.ck { display:flex; gap:8px; align-items:center; font-size:14px; }
 .sheet .full { width:100%; }
+/* v11.92: the predicted size, on its own line inside a Compress button. The
+   button is a flex column so the estimate can appear and disappear without the
+   row jumping — it occupies its line either way (min-height), so the sheet
+   does not reflow when the numbers arrive a moment after it opens. */
+.sheet .full.stack { display:flex; flex-direction:column; gap:2px; align-items:flex-start;
+         text-align:left; }
+.sheet .est { font-size:12px; color:var(--muted); min-height:14px; line-height:14px; }
 .sheet textarea { width:100%; min-height:84px; background:var(--bg); color:var(--txt);
          border:0.5px solid var(--line); border-radius:8px; padding:10px; font-size:16px; resize:vertical; }
 /* font-size MUST stay >= 16px on every text-entry field: iOS Safari auto-zooms
