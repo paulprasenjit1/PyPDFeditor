@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.97";
+const APP_BUILD = "11.98";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -5880,9 +5880,6 @@ async function startScan(append){
   // launch — a different room, or a different phone camera state, deserves a
   // fresh look at whether the high-resolution mode is behaving.
   capFrame = null; scanFallback = false; scanRetakeAt = -1; exposureChecked = false; fitLast = "";
-  // v11.97: fitLast is cleared above, so the geometry on the element is stale
-  // until the next fit. Drop .fitted with it — they describe the same fact.
-  try { $("scanVideo").classList.remove("fitted"); } catch(e){}
   resetScanDefaults();        // v11.81: Document, Auto off, every time
   scanAppendTo = (append && workingBytes) ? { name: fileName } : null;
   idPendingCard = null; idPendingThumb = null;
@@ -6048,7 +6045,11 @@ function openScanPageSheet(i){
 // cannot be reproduced anywhere except on the phone: rather than guess a second
 // time, the numbers come off the device.
 let camDiag = null;
-const CAM_FIRST_FRAME_MS = 1200;   // never hide the preview longer than this
+// v11.98: was 1200. The rotation lag was measured at 583ms AFTER the first
+// frame, so a 1200ms ceiling could expire mid-lag and reveal the very frame
+// this is meant to hide. 2000 clears it with room to spare and is still a
+// bounded promise that the preview can never stay black.
+const CAM_FIRST_FRAME_MS = 2000;   // never hide the preview longer than this
 // v11.71: size the preview OURSELVES instead of trusting `width:100%;
 // height:100%` plus object-fit inside a flex column.
 //
@@ -6090,11 +6091,6 @@ function fitPreviewBox(){
   v.style.width  = w + "px";
   v.style.height = h + "px";
   v.style.right = "auto"; v.style.bottom = "auto";
-  // v11.97: once the element carries OUR geometry, the picture must fill it
-  // exactly — see the note on .fitted in styles.css. Until then the CSS default
-  // (object-fit:contain on a 100%/100% element) stays, which is the safe
-  // behaviour for a size we have not computed yet.
-  v.classList.add("fitted");
   sizeQuadCanvas();
   return { bw, bh, vw, vh, w, h };
 }
@@ -6153,6 +6149,46 @@ function afterLayout(){
 // awaitFirstFrame. Used by BOTH reveal paths: the first frame, and returning
 // from the Adjust screen (where the thumbnail strip has just changed the box,
 // which is precisely a moment the fit moves).
+// v11.98: what WebKit thinks the picture's shape is, which is not always what
+// videoWidth/videoHeight say.
+//
+// iOS carries the camera buffer's rotation as metadata. For the first few
+// hundred milliseconds the LAYOUT uses the unrotated buffer — landscape — while
+// videoWidth/videoHeight already report the rotated, portrait size. Two screen
+// recordings measured the consequence exactly:
+//
+//   object-fit:contain  330.00 x 440.33 centred   (a small window in black)
+//   object-fit:fill     440.00 x 440.33 centred   (stretched and cropped)
+//
+// Neither is fixable by choosing a different fit, because both are correct
+// renderings of the wrong intrinsic. What IS fixable is not showing the preview
+// until the two agree.
+//
+// The probe reads WebKit's own belief rather than inferring it: sized `auto`,
+// an absolutely positioned video lays out at its intrinsic size. It runs only
+// while the preview is still hidden, and restores the geometry immediately, so
+// nothing on screen can be disturbed by it.
+function previewIntrinsic(v){
+  if (!v || !v.getBoundingClientRect) return null;
+  const w = v.style.width, h = v.style.height;
+  let r = null;
+  try {
+    v.style.width = "auto"; v.style.height = "auto";
+    r = v.getBoundingClientRect();
+  } catch(e){ r = null; }
+  finally { v.style.width = w; v.style.height = h; }
+  if (!r || !(r.width > 0) || !(r.height > 0)) return null;
+  return { w: Math.round(r.width), h: Math.round(r.height) };
+}
+// True while WebKit's layout and the stream disagree about which way up the
+// picture is — the whole of this bug, in one predicate.
+function previewRotationLag(v){
+  const vw = v.videoWidth|0, vh = v.videoHeight|0;
+  if (!vw || !vh) return false;
+  const i = previewIntrinsic(v);
+  if (!i) return false;
+  return (i.w > i.h) !== (vw > vh);
+}
 function revealPreviewWhenSettled(v){
   let lastKey = "", same = 0;
   const started = Date.now();
@@ -6160,19 +6196,23 @@ function revealPreviewWhenSettled(v){
     fitPreviewBox();
     if (fitLast && fitLast === lastKey) same++;
     else { same = 0; lastKey = fitLast; }
-    const stable  = fitLast && same >= 3;          // ~50ms unchanged
+    // Both conditions, not either: the fit was stable AND correct through the
+    // whole of the reported bug — it was the paint that was wrong.
+    const lagging = previewRotationLag(v);
+    const stable  = fitLast && same >= 3 && !lagging;
     const timedUp = Date.now() - started > CAM_FIRST_FRAME_MS;
     if (!stable && !timedUp){ nextFrame(settle); return; }
     if (camDiag){
       camDiag.settleMs = Date.now() - started;
       camDiag.settledBy = stable ? "stable" : "timeout";
+      camDiag.rotLag = lagging;
     }
     v.classList.add("ready");
     // The label sits UNDER the preview, so while the video was drawn too small
     // it showed through the letterbox beside it. Hide it explicitly.
     const boot = $("camBoot"); if (boot) boot.hidden = true;
     sizeQuadCanvas();
-    diagSample("revealed:" + (stable ? "stable" : "timeout"));
+    diagSample("revealed:" + (stable ? "stable" : (lagging ? "timeout-still-lagging" : "timeout")));
   };
   nextFrame(settle);
 }
@@ -9506,6 +9546,17 @@ function diagSample(tag){
         row += " paint=" + pw + "x" + ph
             +  " sty=" + ((v.style && v.style.width) ? v.style.width + "x" + v.style.height : "-")
             +  " boot=" + (($("camBoot") && !$("camBoot").hidden) ? 1 : 0);
+        // v11.98: WebKit's own idea of the picture's shape. Probing it resizes
+        // the element for one measurement, so it is only ever read while the
+        // preview is hidden — after the reveal it would be a visible flash.
+        if (!v.classList.contains("ready")){
+          const it = previewIntrinsic(v);
+          if (it){
+            row += " int=" + it.w + "x" + it.h;
+            if (sw > 0 && sh > 0 && (it.w > it.h) !== (sw > sh))
+              row += "  ROT-LAG(stream " + sw + "x" + sh + ")";
+          }
+        }
         if (bw > 0 && bh > 0 && pw < bw*0.92 && ph < bh*0.92)
           row += "  SMALL(paints " + pw + "x" + ph + " in " + bw + "x" + bh + ")";
       }
@@ -9559,11 +9610,12 @@ function diagVerdict(){
     const web = (!scr || short <= 2)
       ? "web view full screen"
       : "web view SHORT by " + short + "px — the band below the bar is outside the page; re-add to Home Screen";
-    let opens = 0, off = 0, offN = 0, small = 0, smallN = 0;
+    let opens = 0, off = 0, offN = 0, small = 0, smallN = 0, lagN = 0;
     for (const r of diagRows){
       if (r.tag === "scanner-open") opens++;
       if (/OFF-FIT/.test(r.body)){ off++; offN += r.n; }
       if (/SMALL\(/.test(r.body)){ small++; smallN += r.n; }
+      if (/ROT-LAG/.test(r.body)) lagN += r.n;
     }
     let cam;
     if (!opens) cam = "no scanner open recorded";
@@ -9574,6 +9626,7 @@ function diagVerdict(){
       if (small) cam += ", " + smallN + " frame(s) painted SMALL";
       cam += " — search " + (small ? "SMALL" : "OFF-FIT");
     }
+    if (lagN) cam += " · rotation lag held the reveal for " + lagN + " frame(s), which is it working";
     return web + " · " + cam;
   } catch(e){ return "?"; }
 }

@@ -4,7 +4,70 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
-## [v11.97] — 2026-08-02 — The small preview, solved: it was never the element
+## [v11.98] — 2026-08-02 — Wait for iOS to agree which way up the camera is
+
+v11.97's `object-fit:fill` is **rejected**. A second recording of the same open,
+measured at device resolution, shows the fault simply changed shape:
+
+```
+v11.96  object-fit:contain   330.00 x 440.33 at x55.00, y216.00   ~370ms
+v11.97  object-fit:fill      440.00 x 440.33 at x 0.00, y216.00   ~583ms
+```
+
+Both are **correct renderings of the wrong intrinsic**, so no value of
+`object-fit` can fix it — and `fill` distorts and crops, which for a document
+scanner is worse than a small preview. `contain` is back, because it is the fit
+that cannot distort.
+
+### The actual fix: measure the disagreement
+iOS carries the camera buffer's rotation as metadata. For a few hundred
+milliseconds WebKit lays out against the **unrotated** landscape buffer while
+`videoWidth`/`videoHeight` already report the **rotated** portrait size. The
+preview now waits for those two to agree:
+
+```js
+function previewRotationLag(v){
+  const i = previewIntrinsic(v);             // width:auto → WebKit's own belief
+  return (i.w > i.h) !== (v.videoWidth > v.videoHeight);
+}
+const stable = fitLast && same >= 3 && !lagging;
+```
+
+`previewIntrinsic` reads the belief rather than inferring it: sized `auto`, an
+absolutely positioned video lays out at its intrinsic size. It runs only while
+the preview is hidden and restores the geometry in a `finally`, so it can never
+disturb anything on screen.
+
+No constants, no timing guess — the app now asks the question five releases were
+trying to answer by arithmetic.
+
+`CAM_FIRST_FRAME_MS` **1200 → 2000**. The lag was measured at 583ms *after* the
+first frame, so the old ceiling could expire mid-lag and reveal the very frame
+this exists to hide. It is still a bounded promise that the preview can never
+stay black.
+
+### Cost
+The preview appears roughly 600ms later on a cold camera open — black with
+"Starting camera…", then correct. That was v11.87's intent; it had the wrong
+predicate.
+
+### In the trace
+Each hidden frame now records `int=` (WebKit's laid-out intrinsic) and is
+labelled `ROT-LAG(stream 3024x4032)` when it disagrees. The verdict adds
+"rotation lag held the reveal for N frame(s), which is it working" — so the next
+trace confirms the fix by showing the bug being *caught*, not by showing nothing.
+
+### Tests
+248 in the scanner suite. SC232–SC244 pin `contain`, record `fill` as tried and
+rejected (the rule is gone, the explanation stays), reproduce both measured
+geometries from the recordings, and pin the predicate, the probe's restore, the
+ceiling and the trace label.
+
+Device-untested.
+
+---
+
+## [v11.97] — 2026-08-02 — The small preview diagnosed (the fix was wrong; see v11.98)
 
 A ten-second screen recording, measured at device resolution (1320×2868, dpr 3),
 ended a bug that had survived five attempted fixes. Every open, for ~370ms:
