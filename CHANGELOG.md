@@ -4,6 +4,63 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.94] — 2026-08-02 — The trace now records change, and reads itself
+
+The second device trace came back 700 rows long, of which **690 were
+byte-identical**. It covered eight seconds of a session and a fifty-three second
+gap, and the scanner open it was meant to catch had already been evicted. A
+still layout is one fact, not seven hundred.
+
+### Only change is recorded
+Identical consecutive frames collapse into the row they repeat, with a count and
+an end time:
+
+```
+t=15120..16505 x84 win=440x894 scr=440x956 barBot=894 barTop=841 drop=62
+```
+
+A **tagged** frame always gets its own row, so `<scanner-open>`, `<resume>` and
+`<revealed:…>` can never be swallowed by a collapse. Same 700-row buffer, now
+covering minutes of real use instead of seconds.
+
+### The trace answers its own question
+Two traces have now been read by recomputing `containFit` by hand to find out
+whether anything was actually wrong. The recorder does that arithmetic itself:
+
+- any frame whose rendered video rect is more than 2px from the contain fit of
+  its box is labelled **`OFF-FIT(want 440x587)`** inline;
+- a **verdict** line at the top of the report says whether the web view owns the
+  whole screen, how many scanner opens were recorded, and how many frames were
+  off-fit.
+
+```
+verdict: web view SHORT by 62px — the band below the bar is outside the page;
+         re-add to Home Screen · 2 scanner open(s), 14 frame(s) OFF-FIT
+```
+
+### What the v11.93 trace said
+Every one of its 700 rows was `win=440x894 scr=440x956 barBot=894 drop=62`.
+
+- **The bar is now correct.** `barBot=894` equals `innerHeight`: it sits flush
+  with the bottom of the web view. In v11.90 it read 894 against a box pushed to
+  956 — clipped. Removing `--vvdrop` did what it was meant to.
+- **The web view is still 62px short of the screen**, so the black band remains.
+  The PWA had not been removed and re-added at the time of this trace.
+- **The scanner was correct in all 154 frames it was up**: `view=440x610`,
+  `vid=3024x4032`, `drawn=440x587@0,112` — the exact contain fit — from the
+  first frame, with the reveal tagged `<revealed:stable>` 446ms after open. Only
+  one open was recorded, and the bug did not occur in it.
+
+`diagText` also no longer calls the global `getComputedStyle` unguarded — a
+report that throws when asked for it is worse than no report.
+
+### Tests
+65 in the scenario suite (was 57). D1–D8 cover the collapse, that a tagged frame
+survives it, that a change starts a new row, the OFF-FIT label, and both halves
+of the verdict.
+
+---
+
 ## [v11.93] — 2026-08-02 — Pages: take a range, move a block, select the lot
 
 Selection existed in the Pages grid but was one tap per page, and reordering was

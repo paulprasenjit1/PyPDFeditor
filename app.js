@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.93";
+const APP_BUILD = "11.94";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -9441,8 +9441,7 @@ function diagSample(tag){
     const br = bar && bar.getBoundingClientRect ? bar.getBoundingClientRect() : null;
     const sc = window.screen || {};
     const vv = window.visualViewport;
-    let row = "t=" + t
-      + " win=" + window.innerWidth + "x" + window.innerHeight
+    let row = "win=" + window.innerWidth + "x" + window.innerHeight
       + " scr=" + (sc.width|0) + "x" + (sc.height|0)
       + (vv ? " vv=" + Math.round(vv.width) + "x" + Math.round(vv.height)
               + "@" + Math.round(vv.offsetTop) : "")
@@ -9462,9 +9461,28 @@ function diagSample(tag){
           +  " drawn=" + (vr ? Math.round(vr.width)+"x"+Math.round(vr.height)
                              + "@" + Math.round(vr.left) + "," + Math.round(vr.top) : "-")
           +  " ready=" + ((v && v.classList.contains("ready")) ? 1 : 0);
+      // v11.94: label the frames that are actually WRONG. Reading 700 rows and
+      // recomputing the contain fit by hand is how the first two traces were
+      // read; the recorder can do that arithmetic itself and say so.
+      if (v && v.videoWidth > 0 && view && vr){
+        const f = containFit(v.videoWidth, v.videoHeight, view.clientWidth, view.clientHeight);
+        if (Math.abs(Math.round(f.dispW) - Math.round(vr.width)) > 2
+         || Math.abs(Math.round(f.dispH) - Math.round(vr.height)) > 2)
+          row += "  OFF-FIT(want " + Math.round(f.dispW) + "x" + Math.round(f.dispH) + ")";
+      }
     }
-    if (tag) row += "  <" + tag + ">";
-    diagRows.push(row);
+    // v11.94: collapse identical consecutive frames. The first device trace was
+    // 700 rows of which 690 were byte-identical — a still layout sampled every
+    // frame — so the buffer covered eight seconds of a session in which the
+    // interesting open had already been evicted. Only CHANGE is information
+    // here; an unchanged frame is recorded as a repeat count on the row it
+    // repeats, which is both shorter to read and keeps every distinct frame.
+    const last = diagRows.length ? diagRows[diagRows.length-1] : null;
+    if (!tag && last && last.body === row){
+      last.n++; last.tEnd = t;
+      return;
+    }
+    diagRows.push({ body: row, tag: tag || "", t, tEnd: t, n: 1 });
     if (diagRows.length > DIAG_MAX) diagRows.splice(0, diagRows.length - DIAG_MAX);
   } catch(e){ /* a diagnostic must never break the app it is diagnosing */ }
 }
@@ -9484,6 +9502,36 @@ function diagRecord(tag){
   };
   diagTimer = nextFrame(step);
 }
+// Reading a computed style is the one thing in the trace that can throw where
+// the recorder cannot — a diagnostic that crashes when asked for its report is
+// worse than no diagnostic.
+function diagSafeArea(){
+  try {
+    return (window.getComputedStyle(document.documentElement)
+      .getPropertyValue("--botpad") || "?").trim();
+  } catch(e){ return "?"; }
+}
+// The two questions a trace is opened to answer, answered at the top so nobody
+// has to recompute a contain fit by hand to find out whether anything is wrong.
+function diagVerdict(){
+  try {
+    const scr = window.screen ? Math.max(window.screen.width|0, window.screen.height|0) : 0;
+    const short = scr - window.innerHeight;
+    const web = (!scr || short <= 2)
+      ? "web view full screen"
+      : "web view SHORT by " + short + "px — the band below the bar is outside the page; re-add to Home Screen";
+    let opens = 0, off = 0, frames = 0;
+    for (const r of diagRows){
+      if (r.tag === "scanner-open") opens++;
+      if (/OFF-FIT/.test(r.body)){ off++; frames += r.n; }
+    }
+    const cam = opens
+      ? (off ? opens + " scanner open(s), " + frames + " frame(s) OFF-FIT — search OFF-FIT"
+             : opens + " scanner open(s), every frame matched the fit")
+      : "no scanner open recorded";
+    return web + " · " + cam;
+  } catch(e){ return "?"; }
+}
 function diagText(){
   const head = [
     "PyPDF layout trace — build " + APP_BUILD,
@@ -9491,12 +9539,15 @@ function diagText(){
       || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
       ? "standalone" : "browser tab"),
     "dpr: " + (window.devicePixelRatio || "?")
-      + "   safe-area-bottom: " + (getComputedStyle(document.documentElement)
-          .getPropertyValue("--botpad") || "?").trim(),
-    "rows: " + diagRows.length + " (newest last)",
+      + "   safe-area-bottom: " + diagSafeArea(),
+    "rows: " + diagRows.length + " distinct (newest last); ×N = frames held that shape",
+    "verdict: " + diagVerdict(),
     ""
   ];
-  return head.concat(diagRows).join("\n");
+  const body = diagRows.map(r =>
+    "t=" + r.t + (r.n > 1 ? ".." + r.tEnd + " x" + r.n : "")
+    + " " + r.body + (r.tag ? "  <" + r.tag + ">" : ""));
+  return head.concat(body).join("\n");
 }
 // ---------------- bottom chrome, pinned to the real bottom (v11.83) --------
 // Reported with two screenshots taken minutes apart: sometimes a band of black
