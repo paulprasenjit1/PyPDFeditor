@@ -4,6 +4,122 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v11.97] — 2026-08-02 — The small preview, solved: it was never the element
+
+A ten-second screen recording, measured at device resolution (1320×2868, dpr 3),
+ended a bug that had survived five attempted fixes. Every open, for ~370ms:
+
+```
+small stage   330.00 x 440.33  at x 55.00, y 216.00
+correct       440.00 x 586.67  at x  0.00, y 142.67
+```
+
+Exactly **3/4 scale, centred**. And the reason nothing found it: **the element
+was correct the whole time.** `fitPreviewBox` had written 440×586.67, and the
+v11.95 trace recorded exactly that, frame after frame. Every fix since v11.84
+measured the element, so every fix measured the one thing that was right.
+
+### What was actually wrong
+What WebKit *painted inside* the element. `object-fit: contain` of a
+**landscape** 4032×3024 intrinsic in a 440×586.67 box is 440×330; the picture is
+then rotated into that area, and what you see is 330×440 centred:
+
+| | predicted | measured |
+|---|---|---|
+| painted size | 330.00 × 440.00 | 330.00 × 440.33 |
+| x offset, `(440−330)/2` | 55.00 | 55.00 |
+| y offset, `(586.67−440.33)/2 + 142.67` | 215.84 | 216.00 |
+
+Agreement to a third of a pixel. iOS carries the camera buffer's rotation as
+metadata: for the first few hundred milliseconds the layout uses the
+**unrotated** aspect while `videoWidth`/`videoHeight` already report the
+**rotated** one. That is why the element's own numbers looked perfect in every
+trace, and why v11.87's "hold the reveal until the fit is stable" did not help —
+the fit *was* stable and correct; the paint was not.
+
+### The fix
+Stop depending on the intrinsic aspect at all. `fitPreviewBox` already computes
+the exact contain geometry from `videoWidth`/`videoHeight` and writes it to the
+element, so **the element's aspect is the stream's aspect** — filling it is
+precisely what `contain` would have produced had the intrinsic been right, and a
+wrong intrinsic can no longer shrink the picture.
+
+```css
+.scanview video         { object-fit:contain; }   /* unsized: cannot distort */
+.scanview video.fitted  { object-fit:fill;    }   /* sized by us: fills exactly */
+```
+
+`.fitted` is added by `fitPreviewBox` itself, at the moment it writes the
+geometry, and cleared in `startScan` alongside `fitLast` — the two describe the
+same fact, so they must never disagree. An element we have not sized keeps
+`contain` and can never stretch.
+
+### Why five releases missed it
+Every one of them reasoned about the element's box. The recorder added in v11.90
+recorded that box; v11.95 added `paint=` and still computed it from
+`videoWidth`/`videoHeight`, which were the *rotated* values — so it agreed with
+the element and reported "every frame matched the fit" while the screen showed
+otherwise. The only instrument that could see this was a camera pointed at the
+screen. **Ask for the recording sooner.**
+
+### Tests
+241 in the scanner suite. SC232–SC238 pin both `object-fit` rules, reproduce the
+330×440 arithmetic and its centring from the recorded numbers, and require
+`.fitted` to be written by the fit and cleared with `fitLast`.
+
+Device-untested: the fix is a one-line change to what fills a box whose size is
+already verified, but only the phone can confirm the 370ms is gone.
+
+---
+
+## [v11.96] — 2026-08-02 — Fit when the size is known, not when the picture is
+
+The v11.95 trace, on the reported repro (open, cancel, reopen), caught a real
+defect — though not the one being reported. First open, frame by frame:
+
+```
+30879..32067 x71  vid=0x0        drawn=440x672  sty=-              ready=0
+32084..32226 x10  vid=3024x4032  drawn=440x672  sty=-              ready=0  OFF-FIT(want 440x587)
+32242..32275 x3   vid=3024x4032  drawn=440x587  sty=440pxx587px    ready=0
+32275..34198 x87  vid=3024x4032  drawn=440x587  sty=440pxx587px    ready=1  <revealed:stable>
+```
+
+For **143ms — ten frames — the stream reported 3024×4032 and the element was
+still at the CSS default 440×672**. `sty=-` is the proof: our own code had not
+written a size yet. Nothing called `fitPreviewBox` between metadata arriving and
+the first frame callback arriving; the settle loop only starts at the latter.
+
+Fixed by fitting on `loadedmetadata` as well. The later `resize` listener stays —
+a resolution change after the first frame is a genuinely separate moment.
+
+This was invisible on screen, because v11.87's reveal already holds the preview
+back until the fit is stable. It was the app being wrong while knowing enough to
+be right, which is the kind of thing that becomes visible one refactor later.
+
+### What the trace says about the reported bug: still not reproduced
+Two opens, including the cancel-and-reopen sequence, both revealed at exactly
+440×587 in a 440×672 box — the correct contain fit — and `paint=` never fell
+short on both axes, so the new SMALL detector never fired.
+
+One hypothesis remains, and it is a consequence of the v11.95 viewport fix:
+
+| | box | image | bars top/bottom |
+|---|---|---|---|
+| before re-add | 440×610 | 440×587 | **11px** |
+| after re-add | 440×672 | 440×587 | **42px** |
+
+The 62px the web view gained went entirely into the preview box, and the camera
+is 3:4 while the box is now 0.65 — so the letterbox nearly quadrupled. The image
+sits in a visibly larger black area than it did last week.
+
+A screen recording was requested to settle it before any layout change.
+
+### Tests
+234 in the scanner suite. SC230–SC231 pin both fit triggers, with the trace
+numbers in the comment.
+
+---
+
 ## [v11.95] — 2026-08-02 — The band is gone; the toolbar reclaims its inset
 
 Re-adding the app to the Home Screen fixed the black band, and the trace proves

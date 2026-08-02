@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.95";
+const APP_BUILD = "11.97";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -5880,6 +5880,9 @@ async function startScan(append){
   // launch — a different room, or a different phone camera state, deserves a
   // fresh look at whether the high-resolution mode is behaving.
   capFrame = null; scanFallback = false; scanRetakeAt = -1; exposureChecked = false; fitLast = "";
+  // v11.97: fitLast is cleared above, so the geometry on the element is stale
+  // until the next fit. Drop .fitted with it — they describe the same fact.
+  try { $("scanVideo").classList.remove("fitted"); } catch(e){}
   resetScanDefaults();        // v11.81: Document, Auto off, every time
   scanAppendTo = (append && workingBytes) ? { name: fileName } : null;
   idPendingCard = null; idPendingThumb = null;
@@ -6087,6 +6090,11 @@ function fitPreviewBox(){
   v.style.width  = w + "px";
   v.style.height = h + "px";
   v.style.right = "auto"; v.style.bottom = "auto";
+  // v11.97: once the element carries OUR geometry, the picture must fill it
+  // exactly — see the note on .fitted in styles.css. Until then the CSS default
+  // (object-fit:contain on a 100%/100% element) stays, which is the safe
+  // behaviour for a size we have not computed yet.
+  v.classList.add("fitted");
   sizeQuadCanvas();
   return { bw, bh, vw, vh, w, h };
 }
@@ -6206,6 +6214,13 @@ function awaitFirstFrame(v){
     sizeQuadCanvas();
   };
   v.addEventListener("resize", onResize);
+  // v11.96: fit the moment the stream's SIZE is known, which is earlier than the
+  // moment its first FRAME arrives. The v11.95 trace measured 143ms — ten frames
+  // — in which videoWidth was 3024 and the element was still at the CSS default
+  // 440x672, because nothing ran fitPreviewBox between metadata and the first
+  // frame callback. Invisible today (the reveal is still held back), but it was
+  // the app being wrong and knowing enough to be right.
+  v.addEventListener("loadedmetadata", onResize);
   if (typeof v.requestVideoFrameCallback === "function"){
     try { v.requestVideoFrameCallback(()=> show("frame")); }
     catch(e){ /* fall through to the listeners below */ }

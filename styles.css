@@ -632,6 +632,30 @@ input[type=file] { display:none; }
    can never disagree. These are the pre-first-frame defaults only. */
 .scanview video { position:absolute; left:0; top:0; width:100%; height:100%;
           object-fit:contain; }
+/* v11.97: the preview opened at exactly 3/4 size for ~370ms, every time, and a
+   screen recording measured it to a third of a pixel:
+
+     small stage  330.00 x 440.33 at x55.00, y216.00
+     correct      440.00 x 586.67 at x 0.00, y142.67
+
+   The ELEMENT was right the whole time — fitPreviewBox had written 440x586.67,
+   and the trace confirmed it. What was wrong was what WebKit painted inside it:
+   contain of a 4032x3024 (LANDSCAPE) intrinsic in a 440x586.67 box is 440x330,
+   and the picture is rotated into that area, giving 330x440 centred. iOS reports
+   the camera buffer's rotation as metadata, and for the first few hundred
+   milliseconds the layout uses the UNROTATED aspect while videoWidth/Height
+   already report the rotated one — which is why four releases of measuring the
+   element found nothing wrong.
+     centred x: (440 - 330)/2      = 55.00   measured 55.00
+     centred y: (586.67 - 440.33)/2 + 142.67 = 215.84   measured 216.00
+   The fix is not to depend on the intrinsic aspect at all. fitPreviewBox already
+   computes the exact contain geometry from videoWidth/videoHeight and writes it
+   to the element, so the element's own aspect IS the stream's aspect: filling it
+   is what contain would have produced had the intrinsic been right, and a wrong
+   intrinsic can no longer shrink the picture. .fitted is added only once that
+   geometry is written, so an unsized element keeps contain and can never
+   stretch. */
+.scanview video.fitted { object-fit:fill; }
 /* v11.69: the preview is held back until there is a real frame. iOS starts the
    camera in a lower-resolution mode and switches up to the one we asked for,
    and with object-fit:contain each size change resizes the letterboxed image —
