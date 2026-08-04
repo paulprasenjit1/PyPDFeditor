@@ -4,6 +4,48 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.00] — 2026-08-02 — Clearing out what did not work
+
+A cleanup release. Two device bugs were chased today: one was solved, one was
+not, and this removes everything built for the one that was not.
+
+### Removed
+**The rotation-lag gate (v11.97/98).** `previewIntrinsic`, `previewRotationLag`,
+the extra reveal condition, and `CAM_FIRST_FRAME_MS` back from 2000 to **1200**.
+It was a correct diagnosis — two screen recordings measured the preview at
+330.00×440.33 and then 440.00×440.33, both consequences of iOS delivering the
+camera's rotation metadata a beat late — but the gate did not fix it on the
+device and cost ~600ms of extra black on every open. The preview again appears
+as soon as the fit is stable.
+
+**The layout recorder and the Diagnostics sheet (v11.90–95).** `diagSample`,
+`diagRecord`, `diagText`, `diagVerdict`, the `paint=`/`sty=`/`boot=`/`OFF-FIT`/
+`SMALL`/`ROT-LAG` labels, More → Diagnostics, and `.diagdump`. It did its job:
+the trace `win=440x894 scr=440x956` is what proved the black band was outside
+the web view, which is what led to the fix. Both bugs it was built for are now
+closed or parked, so it goes. ~200 lines of app.js, 7 of CSS, 28 tests.
+
+**`ISSUE-BRIEF.md`**, written to hand the two bugs to someone else, and **eight
+intermediate `pre-*.zip` backups** plus one stray temp file — about 3.2 MB.
+
+The older press-and-hold camera diagnostic (`camDiag`, gUM and first-frame
+timings on the Scan button) is **untouched**; it predates today.
+
+### Kept
+Everything that works: Compress size prediction (v11.92), Pages multi-select
+(v11.93), the bottom-band fix (v11.91), the full safe-area inset on a
+full-screen web view (v11.95) and the measurement it depends on, the About
+"Web view" row that says whether an install needs re-adding, and the
+`loadedmetadata` fit (v11.96).
+
+### Verified
+All eighteen suites pass: 222 scanner, 124 compress, 123 harness, 87 editor, 65
+text edit, 58 corpus, 57 scenario, and the rest. `scan-core.js`, `scan-worker.js`,
+`SCAN_Q` and every capture, MRC, compress, organise, unlock and text-edit
+function remain byte-identical to v11.90.
+
+---
+
 ## [v11.98] — 2026-08-02 — Wait for iOS to agree which way up the camera is
 
 v11.97's `object-fit:fill` is **rejected**. A second recording of the same open,

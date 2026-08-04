@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "11.98";
+const APP_BUILD = "12.00";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -4273,10 +4273,8 @@ $("moreBtn").onclick = ()=>{
     </div>
     <div class="mgrid mgrid2 mt12">
       <button class="mtile" id="mAbout">${ic("info")}<span>About</span></button>
-      <button class="mtile" id="mDiag">${ic("info")}<span>Diagnostics</span></button>
       <button class="mtile" id="mClose">${ic("close")}<span>Cancel</span></button>
     </div>`;
-  $("mDiag").onclick  = ()=>{ openDiagnostics(); };
   $("mScan").onclick  = ()=>{ closeSheet(); startScan(false); };
   $("mScanAdd").onclick = ()=>{ closeSheet(); if (workingBytes) startScan(true); };
   $("mOrg").onclick   = ()=>{ closeSheet(); openOrganise(); };
@@ -5888,7 +5886,6 @@ async function startScan(append){
   updateScanCount();
   $("scanCrop").classList.remove("show");
   $("scanCam").classList.add("show");
-  diagRecord("scanner-open");   // v11.90: record across the whole open sequence
   await afterLayout();     // v11.88: lay the panel out before the camera arrives
   // v10.95: one-time expectation-setting on installed iOS web apps — WebKit
   // does not persist getUserMedia grants for standalone PWAs (bugs 215884 /
@@ -6045,11 +6042,7 @@ function openScanPageSheet(i){
 // cannot be reproduced anywhere except on the phone: rather than guess a second
 // time, the numbers come off the device.
 let camDiag = null;
-// v11.98: was 1200. The rotation lag was measured at 583ms AFTER the first
-// frame, so a 1200ms ceiling could expire mid-lag and reveal the very frame
-// this is meant to hide. 2000 clears it with room to spare and is still a
-// bounded promise that the preview can never stay black.
-const CAM_FIRST_FRAME_MS = 2000;   // never hide the preview longer than this
+const CAM_FIRST_FRAME_MS = 1200;   // never hide the preview longer than this
 // v11.71: size the preview OURSELVES instead of trusting `width:100%;
 // height:100%` plus object-fit inside a flex column.
 //
@@ -6149,46 +6142,11 @@ function afterLayout(){
 // awaitFirstFrame. Used by BOTH reveal paths: the first frame, and returning
 // from the Adjust screen (where the thumbnail strip has just changed the box,
 // which is precisely a moment the fit moves).
-// v11.98: what WebKit thinks the picture's shape is, which is not always what
-// videoWidth/videoHeight say.
-//
-// iOS carries the camera buffer's rotation as metadata. For the first few
-// hundred milliseconds the LAYOUT uses the unrotated buffer — landscape — while
-// videoWidth/videoHeight already report the rotated, portrait size. Two screen
-// recordings measured the consequence exactly:
-//
-//   object-fit:contain  330.00 x 440.33 centred   (a small window in black)
-//   object-fit:fill     440.00 x 440.33 centred   (stretched and cropped)
-//
-// Neither is fixable by choosing a different fit, because both are correct
-// renderings of the wrong intrinsic. What IS fixable is not showing the preview
-// until the two agree.
-//
-// The probe reads WebKit's own belief rather than inferring it: sized `auto`,
-// an absolutely positioned video lays out at its intrinsic size. It runs only
-// while the preview is still hidden, and restores the geometry immediately, so
-// nothing on screen can be disturbed by it.
-function previewIntrinsic(v){
-  if (!v || !v.getBoundingClientRect) return null;
-  const w = v.style.width, h = v.style.height;
-  let r = null;
-  try {
-    v.style.width = "auto"; v.style.height = "auto";
-    r = v.getBoundingClientRect();
-  } catch(e){ r = null; }
-  finally { v.style.width = w; v.style.height = h; }
-  if (!r || !(r.width > 0) || !(r.height > 0)) return null;
-  return { w: Math.round(r.width), h: Math.round(r.height) };
-}
-// True while WebKit's layout and the stream disagree about which way up the
-// picture is — the whole of this bug, in one predicate.
-function previewRotationLag(v){
-  const vw = v.videoWidth|0, vh = v.videoHeight|0;
-  if (!vw || !vh) return false;
-  const i = previewIntrinsic(v);
-  if (!i) return false;
-  return (i.w > i.h) !== (vw > vh);
-}
+// v11.97/98 tried to hold the reveal until WebKit's laid-out intrinsic agreed
+// with videoWidth/videoHeight — iOS delivers the camera's rotation as metadata
+// a beat late, so the preview is painted at 3/4 size for ~370ms. It did not fix
+// it on the device and cost ~600ms of extra black, so it was removed. The
+// measurements are in the changelog for v11.97/98 if it is ever picked up again.
 function revealPreviewWhenSettled(v){
   let lastKey = "", same = 0;
   const started = Date.now();
@@ -6196,23 +6154,18 @@ function revealPreviewWhenSettled(v){
     fitPreviewBox();
     if (fitLast && fitLast === lastKey) same++;
     else { same = 0; lastKey = fitLast; }
-    // Both conditions, not either: the fit was stable AND correct through the
-    // whole of the reported bug — it was the paint that was wrong.
-    const lagging = previewRotationLag(v);
-    const stable  = fitLast && same >= 3 && !lagging;
+    const stable  = fitLast && same >= 3;          // ~50ms unchanged
     const timedUp = Date.now() - started > CAM_FIRST_FRAME_MS;
     if (!stable && !timedUp){ nextFrame(settle); return; }
     if (camDiag){
       camDiag.settleMs = Date.now() - started;
       camDiag.settledBy = stable ? "stable" : "timeout";
-      camDiag.rotLag = lagging;
     }
     v.classList.add("ready");
     // The label sits UNDER the preview, so while the video was drawn too small
     // it showed through the letterbox beside it. Hide it explicitly.
     const boot = $("camBoot"); if (boot) boot.hidden = true;
     sizeQuadCanvas();
-    diagSample("revealed:" + (stable ? "stable" : (lagging ? "timeout-still-lagging" : "timeout")));
   };
   nextFrame(settle);
 }
@@ -9438,215 +9391,6 @@ function updateModalInert(){
     const el = $(id); if (el) mo.observe(el, { attributes:true, attributeFilter:["class"] });
   }
 })();
-// v11.90: read the trace back. Deliberately a plain monospace dump with a Copy
-// button rather than a pretty summary — a summary would be my interpretation,
-// and interpreting these numbers wrongly is exactly what has cost four
-// releases. The raw rows go to whoever is diagnosing.
-function openDiagnostics(){
-  const txt = diagText();
-  $("sheet").innerHTML = h`
-    <h3>Diagnostics</h3>
-    <p class="hint">A frame-by-frame record of the layout during app launch and
-    while the scanner opens. Reproduce the problem first, then come here — the
-    last few seconds are kept. Copy this and send it on.</p>
-    <pre class="diagdump" id="diagDump">${txt}</pre>
-    <div class="row"><button class="full" id="diagCopy">Copy</button></div>
-    <div class="row"><button class="full" id="diagAgain">Record again (6s)</button></div>
-    <div class="row"><button class="ghost full" id="diagClose">Close</button></div>`;
-  $("diagCopy").onclick = async ()=>{
-    try {
-      await navigator.clipboard.writeText(diagText());
-      setStatus("Trace copied.","ok");
-    } catch(e){
-      // clipboard can be refused; selecting the text is the fallback
-      try {
-        const r = document.createRange(); r.selectNodeContents($("diagDump"));
-        const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
-        setStatus("Could not copy automatically — the trace is selected, use Copy.","warn");
-      } catch(e2){ setStatus("Could not copy the trace.","err"); }
-    }
-  };
-  $("diagAgain").onclick = ()=>{ diagRows = []; diagRecord("manual"); closeSheet();
-    setStatus("Recording for 6 seconds — reproduce the problem now.","ok"); };
-  $("diagClose").onclick = closeSheet;
-  openSheet();
-}
-// ---------------- layout recorder (v11.90) ---------------------------------
-// Two device-only bugs have survived four fixes each: a black band below the
-// bottom toolbar, and the camera preview opening small and then jumping to
-// size. Every one of those fixes was built on inference from a screenshot,
-// because BOTH bugs are transient and self-correcting — any reading taken after
-// the fact shows healthy numbers.
-//
-// So this records the numbers WHILE the bugs are visible, rather than measuring
-// once and hoping the moment was right. It only reads; nothing here changes
-// layout. Recording windows are short and bounded, and stop on their own.
-const DIAG_MAX  = 700;          // rows kept, oldest dropped
-const DIAG_MS   = 6000;         // how long a window records for
-let diagRows = [];
-let diagWindow = 0;             // timestamp the current window ends
-let diagTimer  = 0;
-let diagT0     = 0;
-
-function diagSample(tag){
-  try {
-    const now = Date.now();
-    const t = String(now - diagT0).padStart(5, " ");
-    const bar = $("toolbar");
-    const br = bar && bar.getBoundingClientRect ? bar.getBoundingClientRect() : null;
-    const sc = window.screen || {};
-    const vv = window.visualViewport;
-    let row = "win=" + window.innerWidth + "x" + window.innerHeight
-      + " scr=" + (sc.width|0) + "x" + (sc.height|0)
-      + (vv ? " vv=" + Math.round(vv.width) + "x" + Math.round(vv.height)
-              + "@" + Math.round(vv.offsetTop) : "")
-      + (br ? " barBot=" + Math.round(br.bottom) + " barTop=" + Math.round(br.top) : "")
-      + " drop=" + vvDrop;
-    // scanner fields only while the scanner is up — the second bug lives here
-    const panel = $("scanCam");
-    if (panel && panel.classList.contains("show")){
-      const view = $("scanView"), v = $("scanVideo");
-      const vr = v && v.getBoundingClientRect ? v.getBoundingClientRect() : null;
-      const pr = panel.getBoundingClientRect ? panel.getBoundingClientRect() : null;
-      row += " | panel=" + (pr ? Math.round(pr.width)+"x"+Math.round(pr.height)+"@"+Math.round(pr.top) : "-")
-          +  " view=" + (view ? view.clientWidth+"x"+view.clientHeight : "-")
-          +  " vid=" + (v ? (v.videoWidth|0)+"x"+(v.videoHeight|0) : "-")
-          // the RENDERED rect is the ground truth: it is what is on screen,
-          // not what the fit intended
-          +  " drawn=" + (vr ? Math.round(vr.width)+"x"+Math.round(vr.height)
-                             + "@" + Math.round(vr.left) + "," + Math.round(vr.top) : "-")
-          +  " ready=" + ((v && v.classList.contains("ready")) ? 1 : 0);
-      // v11.94: label the frames that are actually WRONG. Reading 700 rows and
-      // recomputing the contain fit by hand is how the first two traces were
-      // read; the recorder can do that arithmetic itself and say so.
-      if (v && v.videoWidth > 0 && view && vr){
-        const f = containFit(v.videoWidth, v.videoHeight, view.clientWidth, view.clientHeight);
-        if (Math.abs(Math.round(f.dispW) - Math.round(vr.width)) > 2
-         || Math.abs(Math.round(f.dispH) - Math.round(vr.height)) > 2)
-          row += "  OFF-FIT(want " + Math.round(f.dispW) + "x" + Math.round(f.dispH) + ")";
-      }
-      // v11.95: the element's rect is not what the eye sees. `object-fit:contain`
-      // paints the stream INSIDE that box, so a video element of the right size
-      // showing a stream of a different aspect paints smaller than itself — and
-      // every frame of the last trace "matched the fit" while the preview was
-      // still reported as opening small. Record what is painted, and what our
-      // own code asked for, so the three can be compared.
-      //
-      // A correct contain fit is short on ONE axis (the letterbox). Short on
-      // BOTH is the thing being described as a small window floating in black,
-      // and is labelled as such.
-      if (v && vr && view){
-        const bw = view.clientWidth|0, bh = view.clientHeight|0;
-        const sw = v.videoWidth|0, sh = v.videoHeight|0;
-        let pw = Math.round(vr.width), ph = Math.round(vr.height);
-        if (sw > 0 && sh > 0 && vr.width > 0 && vr.height > 0){
-          const p = containFit(sw, sh, vr.width, vr.height);
-          pw = Math.round(p.dispW); ph = Math.round(p.dispH);
-        }
-        row += " paint=" + pw + "x" + ph
-            +  " sty=" + ((v.style && v.style.width) ? v.style.width + "x" + v.style.height : "-")
-            +  " boot=" + (($("camBoot") && !$("camBoot").hidden) ? 1 : 0);
-        // v11.98: WebKit's own idea of the picture's shape. Probing it resizes
-        // the element for one measurement, so it is only ever read while the
-        // preview is hidden — after the reveal it would be a visible flash.
-        if (!v.classList.contains("ready")){
-          const it = previewIntrinsic(v);
-          if (it){
-            row += " int=" + it.w + "x" + it.h;
-            if (sw > 0 && sh > 0 && (it.w > it.h) !== (sw > sh))
-              row += "  ROT-LAG(stream " + sw + "x" + sh + ")";
-          }
-        }
-        if (bw > 0 && bh > 0 && pw < bw*0.92 && ph < bh*0.92)
-          row += "  SMALL(paints " + pw + "x" + ph + " in " + bw + "x" + bh + ")";
-      }
-    }
-    // v11.94: collapse identical consecutive frames. The first device trace was
-    // 700 rows of which 690 were byte-identical — a still layout sampled every
-    // frame — so the buffer covered eight seconds of a session in which the
-    // interesting open had already been evicted. Only CHANGE is information
-    // here; an unchanged frame is recorded as a repeat count on the row it
-    // repeats, which is both shorter to read and keeps every distinct frame.
-    const last = diagRows.length ? diagRows[diagRows.length-1] : null;
-    if (!tag && last && last.body === row){
-      last.n++; last.tEnd = t;
-      return;
-    }
-    diagRows.push({ body: row, tag: tag || "", t, tEnd: t, n: 1 });
-    if (diagRows.length > DIAG_MAX) diagRows.splice(0, diagRows.length - DIAG_MAX);
-  } catch(e){ /* a diagnostic must never break the app it is diagnosing */ }
-}
-
-// Start (or extend) a recording window. Samples every animation frame, which is
-// the resolution these bugs happen at — they resolve within a few frames.
-function diagRecord(tag){
-  const now = Date.now();
-  if (!diagRows.length) diagT0 = now;
-  diagSample(tag);
-  diagWindow = now + DIAG_MS;
-  if (diagTimer) return;                       // a window is already running
-  const step = ()=>{
-    diagSample("");
-    if (Date.now() < diagWindow){ diagTimer = nextFrame(step); return; }
-    diagTimer = 0;
-  };
-  diagTimer = nextFrame(step);
-}
-// Reading a computed style is the one thing in the trace that can throw where
-// the recorder cannot — a diagnostic that crashes when asked for its report is
-// worse than no diagnostic.
-function diagSafeArea(){
-  try {
-    return (window.getComputedStyle(document.documentElement)
-      .getPropertyValue("--botpad") || "?").trim();
-  } catch(e){ return "?"; }
-}
-// The two questions a trace is opened to answer, answered at the top so nobody
-// has to recompute a contain fit by hand to find out whether anything is wrong.
-function diagVerdict(){
-  try {
-    const scr = window.screen ? Math.max(window.screen.width|0, window.screen.height|0) : 0;
-    const short = scr - window.innerHeight;
-    const web = (!scr || short <= 2)
-      ? "web view full screen"
-      : "web view SHORT by " + short + "px — the band below the bar is outside the page; re-add to Home Screen";
-    let opens = 0, off = 0, offN = 0, small = 0, smallN = 0, lagN = 0;
-    for (const r of diagRows){
-      if (r.tag === "scanner-open") opens++;
-      if (/OFF-FIT/.test(r.body)){ off++; offN += r.n; }
-      if (/SMALL\(/.test(r.body)){ small++; smallN += r.n; }
-      if (/ROT-LAG/.test(r.body)) lagN += r.n;
-    }
-    let cam;
-    if (!opens) cam = "no scanner open recorded";
-    else if (!off && !small) cam = opens + " scanner open(s), every frame filled the box";
-    else {
-      cam = opens + " scanner open(s)";
-      if (off) cam += ", " + offN + " frame(s) OFF-FIT";
-      if (small) cam += ", " + smallN + " frame(s) painted SMALL";
-      cam += " — search " + (small ? "SMALL" : "OFF-FIT");
-    }
-    if (lagN) cam += " · rotation lag held the reveal for " + lagN + " frame(s), which is it working";
-    return web + " · " + cam;
-  } catch(e){ return "?"; }
-}
-function diagText(){
-  const head = [
-    "PyPDF layout trace — build " + APP_BUILD,
-    "mode: " + ((window.navigator && window.navigator.standalone === true)
-      || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
-      ? "standalone" : "browser tab"),
-    "dpr: " + (window.devicePixelRatio || "?")
-      + "   safe-area-bottom: " + diagSafeArea(),
-    "rows: " + diagRows.length + " distinct (newest last); ×N = frames held that shape",
-    "verdict: " + diagVerdict(),
-    ""
-  ];
-  const body = diagRows.map(r =>
-    "t=" + r.t + (r.n > 1 ? ".." + r.tEnd + " x" + r.n : "")
-    + " " + r.body + (r.tag ? "  <" + r.tag + ">" : ""));
-  return head.concat(body).join("\n");
-}
 // ---------------- bottom chrome, pinned to the real bottom (v11.83) --------
 // Reported with two screenshots taken minutes apart: sometimes a band of black
 // sits BELOW the toolbar, sometimes it does not. The header is in the same
@@ -9742,11 +9486,6 @@ function pinBottomChrome(){
     if (!document.hidden) [0,150,400,900].forEach(t=> setTimeout(pinBottomChrome, t));
   });
   [0,150,400,900,1800].forEach(t=> setTimeout(pinBottomChrome, t));
-  // v11.90: record the launch window — this is when the bottom gap appears
-  diagRecord("launch");
-  document.addEventListener("visibilitychange", ()=>{
-    if (!document.hidden) diagRecord("resume");
-  });
   // v11.89: a fixed ladder can only catch a settle it happens to land on. If
   // the viewport reaches its final size later than the last rung, nothing
   // re-measures and the gap stays for the rest of the session. Poll gently for
