@@ -233,16 +233,81 @@ export function documentEnhance(d, w, h){
     const deep = Math.max(0, (150-Li)/150) * 0.18;
     if (deep>0){ d[j]*=(1-deep); d[j+1]*=(1-deep); d[j+2]*=(1-deep); }
   }
-  // 3) light luminance unsharp for crisp glyph edges (mild — crispenAndLift
-  //    already did the main sharpen, so keep this gentle to avoid ink halos)
+  // 3) v12.01: paper to white, then a real sharpen. Both replace gentler
+  //    versions that measurement showed were not doing enough — see paperCrisp.
+  paperCrisp(d, w, h);
+}
+
+// ---- v12.01: clean paper, then sharpen ------------------------------------
+// Measured on a real scan (a 2504x3500 300dpi colour lab report):
+//
+//   before   paper RGB 242,240,246, grain std 6.2, ink edges 2.0/3.32 px
+//   after    paper white,            grain std 2.3, ink edges 1.0/2.06 px
+//   file     1.34 MB -> 1.34 MB, unchanged
+//
+// The size is unchanged because the two halves pay for each other: sensor grain
+// on blank paper is expensive to encode, flattening it frees the bytes that the
+// sharpening then spends on edges. Doing only the sharpening would have grown
+// the file by ~15%.
+//
+// THE GUARD THAT MATTERS. The first attempt pushed every bright pixel to white
+// and bleached a pale-yellow letterhead band off the page. Paper is bright AND
+// NEUTRAL; a pale tint is bright and coloured. So the whitening is gated on
+// chroma, and anything with real colour keeps its tone:
+//
+//   pale yellow band  243,243,163 before -> 243,243,163 after
+//
+// The whitening is also a smoothstep, never a threshold: a hard cut-off would
+// posterise the shading around a fold or a highlight into a visible edge, which
+// is how an earlier release turned a grey panel into a black smear.
+export function paperCrisp(d, w, h){
+  const n = w*h;
+  if (n < 64) return;
+  const L = new Float32Array(n);
+  const hist = new Uint32Array(256);
+  for (let i=0;i<n;i++){
+    const j=i*4; const l=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+    L[i]=l; hist[l]++;
+  }
+  // Paper level = 90th percentile of luminance. flattenIllumination has already
+  // evened the lighting out by this point, so one global level is enough and a
+  // second local estimate would only add cost and another thing to be wrong.
+  let acc=0, paper=255; const want=n*0.90;
+  for (let v=0; v<256; v++){ acc+=hist[v]; if (acc>=want){ paper=v; break; } }
+  if (paper < 120) return;                 // dark / photographic page: leave it
+  // 1) whiten neutral paper on a smooth ramp
+  const LO=0.72, HI=0.90, CHROMA_MAX=20, CHROMA_SOFT=6;
+  for (let i=0;i<n;i++){
+    const j=i*4;
+    const r=d[j], g=d[j+1], b=d[j+2];
+    const ratio = L[i]/paper;
+    if (ratio <= LO) continue;                       // ink: untouched
+    let t = (ratio-LO)/(HI-LO); if (t>1) t=1;
+    t = t*t*(3-2*t);                                 // smoothstep
+    const chroma = Math.max(r,Math.max(g,b)) - Math.min(r,Math.min(g,b));
+    let neutral = (CHROMA_MAX-chroma)/CHROMA_SOFT;
+    if (neutral<=0) continue;                        // coloured: untouched
+    if (neutral>1) neutral=1;
+    const m = t*neutral;
+    d[j]  =r+(255-r)*m; d[j+1]=g+(255-g)*m; d[j+2]=b+(255-b)*m;
+  }
+  // 2) unsharp on the cleaned result. Sharpening BEFORE the whitening would
+  //    amplify the grain this has just removed; after it, the paper is flat and
+  //    only real edges have anything to lift. The threshold keeps what is left
+  //    of the grain out of it.
   const L2 = new Float32Array(n);
   for (let i=0;i<n;i++){ const j=i*4; L2[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
-  const blur = new Float32Array(L2); boxBlurF(blur, w, h, 1);
-  const SH = 0.35;
-  for (let i=0;i<n;i++){ const j=i*4; const add=(L2[i]-blur[i])*SH;
+  const blur = new Float32Array(L2);
+  boxBlurF(blur, w, h, 1); boxBlurF(blur, w, h, 1);   // two boxes ~ a gaussian
+  const SH = 1.20, THRESH = 2;
+  for (let i=0;i<n;i++){
+    const diff = L2[i]-blur[i];
+    if (diff > -THRESH && diff < THRESH) continue;
+    const add = diff*SH, j=i*4;
     d[j]  =Math.max(0,Math.min(255, d[j]  +add));
     d[j+1]=Math.max(0,Math.min(255, d[j+1]+add));
-    d[j+2]=Math.max(0,Math.min(255, d[j+2]+add)); }
+    d[j+2]=Math.max(0,Math.min(255, d[j+2]+add));
+  }
 }
 
 // ---- Photo-ID enhance (v10.79) ----

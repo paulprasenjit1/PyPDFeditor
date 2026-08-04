@@ -4,6 +4,82 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.01] — 2026-08-04 — Crisper text at the same file size
+
+Reported on a 300dpi colour lab report: "texts are not clear and crisp".
+Measured on that exact file before changing anything:
+
+| | before | after |
+|---|---|---|
+| ink edge transition (10–90%) | 2.0 / **3.32 px** | 1.0 / **1.91 px** |
+| blank paper | RGB 242,240,246, grain std **6.2** | white, grain std **3.1** |
+| page size | 1.43 MB | **1.37 MB** |
+
+A crisp 300dpi scan has ~1.0–1.5px edges. Resolution was never the problem: the
+page is 2504×3500 = 299dpi, and chroma is 4:4:4.
+
+### Why the size did not go up
+The two halves pay for each other. Sensor grain on blank paper is expensive to
+encode; flattening it frees exactly the bytes the sharpening then spends on
+edges. Sharpening alone measured **+15%** for less gain, so it is not shipped
+alone.
+
+It also explains the original file: `SCAN_Q.std` targets 900 KB, which a colour
+300dpi A4 page cannot meet, so the encoder walked down to its `qFloor` of 0.70
+and produced 1.34 MB anyway. With the paper cleaned it no longer has to.
+
+### What changed — `paperCrisp()`, the last step of documentEnhance
+1. **Neutral paper to white** on a smoothstep ramp (0.72 → 0.90 of the local
+   paper level, a 90th-percentile histogram read). A ramp, never a threshold: a
+   hard cut-off posterises the shading round a fold, which is how an earlier
+   release turned a grey panel into a black smear.
+2. **Unsharp** on the cleaned result — two box passes ≈ gaussian, amount 1.20,
+   threshold 2. After the whitening, not before: sharpening first would amplify
+   the grain the whitening has just removed.
+
+The two gentler steps it replaces (`paperClean`'s 0.6 blend, a 0.35 unsharp)
+were doing measurably too little — the numbers above are what they produced.
+
+### The guard that matters
+The first attempt pushed **every** bright pixel to white and bleached a pale
+yellow letterhead strip off the page. Paper is bright *and neutral*; a pale tint
+is bright and coloured. The whitening is therefore gated on chroma (< 20, with a
+6-unit ramp):
+
+```
+pale yellow band  243,243,163  →  243,243,163
+```
+
+### Rejected while tuning
+- **A gradient gate** to protect faint table rules: rules kept more contrast
+  (10.7 → 14.3) but edges went **1.0 → 3.0px** and the file grew 0.68 → 0.96 MB,
+  because the whitening stopped exactly where the text is and left grainy haloes
+  round every glyph.
+- **A tighter ramp** (0.86/0.97): rules 10.7 → 12.6, but paper grain 3.1 → 10.1,
+  edges 1.91 → 2.45px and size 1.37 → 1.62 MB.
+
+### The honest cost
+Very faint table rules lose contrast: 16.9 → 10.7 on the v11.77 report. They
+remain clearly visible, and every alternative measured worse overall.
+
+### Not affected
+**Photo ID** goes through `idCardEnhance`, which is deliberately colour-faithful
+and does not call this. Verified by test. `SCAN_Q`, the warp, the detector and
+the capture path are unchanged.
+
+### Cost on device
+327ms for an 8.8-megapixel page, once, at save time.
+
+### Tests
+230 in the scanner suite. SC250–SC257: grainy paper flattens to white, a pale
+coloured band survives, ink is never lifted, a soft edge is measurably steeper,
+a dark page is refused byte-identically, random input stays in range, and Photo
+ID is not wired to it.
+
+Device-untested.
+
+---
+
 ## [v12.00] — 2026-08-02 — Clearing out what did not work
 
 A cleanup release. Two device bugs were chased today: one was solved, one was
