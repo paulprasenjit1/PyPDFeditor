@@ -4,6 +4,68 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.02] — 2026-08-04 — Brightening a page should not saturate it
+
+Reported against the camera's own photo of the same page: the lime-green
+letterhead came out far more saturated than the document really is. Measured on
+that photo, through this exact pipeline, stage by stage:
+
+| stage | green RGB | chroma |
+|---|---|---|
+| as captured (after warp) | 123, 134, 44 | **90.6** |
+| after `colourBalanceCore` | 149, 167, 25 | 142.1 |
+| after `flattenIllumination` | 200, 222, 30 | **192.2** |
+| after `documentEnhance` + `paperCrisp` | 199, 221, 29 | 192.0 |
+
+Saturation more than doubled, and the blue channel was crushed from 44 to 29.
+v12.01's sharpening contributed **nothing** to it — that was checked first.
+
+### The cause: every brightening step multiplied
+White balance, the 2–98% stretch, the midtone lift and the illumination flatten
+all multiply R, G and B. A gain of *g* scales the **distance between the
+channels** by *g* as well, so brightness and saturation rise together. On a text
+document it is invisible — paper is neutral, R=G=B, and a gain and a delta agree
+exactly — which is why four multiplications survived this long.
+
+### The fix: brighten with a delta, correct colour with a ratio
+Same targets, same caps, same clamps, applied differently.
+
+- **`applyAutoContrast`** — the curve is untouched, still v11.31's byte for
+  byte. It is now applied to *luminance*, and that delta is added to all three
+  channels.
+- **`crispenAndLift`** — the 1.06 midtone gain becomes `+ luma × 0.06`.
+- **`flattenIllumination`** — additive lift instead of a gain, capped at
+  `AMAX=90` where the old ceiling was `GMAX=2.0`.
+- **White balance** — the interesting one. Its three gains measured
+  1.293 / 1.291 / 1.333: the **cast** correction is only the *ratio* between
+  them (3% of blue), and the other 29% is a common brightening that exists only
+  because `TGT` drags the paper mean to 245. Those two jobs are now separated —
+  the ratio multiplies (that is what removes a cast), the common part is added.
+
+### Result on the reported page
+| | chroma | paper |
+|---|---|---|
+| as captured | 90.6 | 213 |
+| v12.01 | 192.0 | 254 |
+| **v12.02** | **89.3** | **255** |
+
+The colour is now the camera's, and the paper is still white.
+
+### Checked for regressions
+- a warm cast (200,190,150) is still neutralised — the ratio still does its job
+- a dark corner still lifts: 89 → 165 in the unit test, 52 → 115 on the real photo
+- ink still deepens (62 → 53), edges unchanged from v12.01
+- Photo ID is a separate path and is untouched
+
+### Tests
+236 in the scanner suite. SC260–SC265 pin each stage separately: brighten
+without saturating, then the whole chain end to end, plus the two things the fix
+could have broken — cast correction and dark-corner lift.
+
+Device-untested.
+
+---
+
 ## [v12.01] — 2026-08-04 — Crisper text at the same file size
 
 Reported on a 300dpi colour lab report: "texts are not clear and crisp".

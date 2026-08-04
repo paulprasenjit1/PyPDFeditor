@@ -92,7 +92,24 @@ export function applyAutoContrast(d,w,h){
   // known-good behaviour to compensate for something added later.
   const lut=new Uint8Array(256);
   for (let t=0;t<256;t++) lut[t]=Math.max(0,Math.min(255,Math.round((t-lo)*255/(hi-lo))));
-  for (let i=0;i<n;i++){ const j=i*4; d[j]=lut[d[j]]; d[j+1]=lut[d[j+1]]; d[j+2]=lut[d[j+2]]; }
+  // v12.02: the CURVE is untouched — it is v11.31's, byte for byte, and the note
+  // above is why. What changed is how it is APPLIED. Running the LUT on each
+  // channel separately stretches the DISTANCE between channels by the same
+  // 255/(hi-lo) factor, so saturation rises with brightness and the weakest
+  // channel is crushed. Measured on a lime-green letterhead through this exact
+  // pipeline: chroma 90.6 as captured -> 142.1 after this step alone, blue
+  // 44 -> 25. Applying the curve to LUMINANCE and moving all three channels by
+  // that same delta gives an identical result on any neutral pixel — which is
+  // all of a text document — while leaving coloured areas their own colour.
+  for (let i=0;i<n;i++){
+    const j=i*4;
+    const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+    const delta=lut[L]-L;
+    if (!delta) continue;
+    d[j]  =Math.max(0,Math.min(255, d[j]  +delta));
+    d[j+1]=Math.max(0,Math.min(255, d[j+1]+delta));
+    d[j+2]=Math.max(0,Math.min(255, d[j+2]+delta));
+  }
 }
 // Colour "clean scan" pipeline (v10.17). Two safe, GLOBAL steps — deliberately
 // NOT the v10.14 "magic scan" (that used a per-tile illumination map + unsharp
@@ -132,14 +149,37 @@ export function colourBalanceCore(d,w,h){
       const gr=Math.min(GMAX, Math.max(1, TGT/Math.max(1,mR)));
       const gg=Math.min(GMAX, Math.max(1, TGT/Math.max(1,mG)));
       const gb=Math.min(GMAX, Math.max(1, TGT/Math.max(1,mB)));
+      // v12.02: these three gains are doing two different jobs, and only one of
+      // them is white balance. On a real capture they came out 1.293 / 1.291 /
+      // 1.333: the CAST correction is the ratio between them — 3% of blue —
+      // while the other 29% is a common brightening, there only because TGT
+      // drags the paper mean up to 245. Multiplying by the whole thing also
+      // multiplies the distance between the channels, so every colour on the
+      // page gains 29% saturation as a side effect. Measured on a lime-green
+      // letterhead: chroma 90.6 -> 112.1 in this step alone.
+      //
+      // So the two are separated. The ratio is applied multiplicatively, which
+      // is what removes a cast; the common part is applied as an additive lift,
+      // which brightens identically on neutral paper (R=G=B, so a delta and a
+      // gain agree) and leaves a coloured area its own colour.
+      const gc = Math.min(gr, Math.min(gg, gb));      // the brightening part
+      const rr = gr/gc, rg = gg/gc, rb = gb/gc;       // the cast part
       if (gr>1.001 || gg>1.001 || gb>1.001){
         const lr=new Uint8Array(256), lg=new Uint8Array(256), lb=new Uint8Array(256);
         for (let t=0;t<256;t++){
-          lr[t]=Math.min(255,Math.round(t*gr));
-          lg[t]=Math.min(255,Math.round(t*gg));
-          lb[t]=Math.min(255,Math.round(t*gb));
+          lr[t]=Math.min(255,Math.round(t*rr));
+          lg[t]=Math.min(255,Math.round(t*rg));
+          lb[t]=Math.min(255,Math.round(t*rb));
         }
-        for (let i=0;i<n;i++){ const j=i*4; d[j]=lr[d[j]]; d[j+1]=lg[d[j+1]]; d[j+2]=lb[d[j+2]]; }
+        for (let i=0;i<n;i++){
+          const j=i*4;
+          const r0=lr[d[j]], g0=lg[d[j+1]], b0=lb[d[j+2]];
+          const L0=(r0*77+g0*151+b0*28)>>8;
+          const lift=L0*(gc-1);
+          d[j]  =Math.min(255, r0+lift);
+          d[j+1]=Math.min(255, g0+lift);
+          d[j+2]=Math.min(255, b0+lift);
+        }
       }
     }
   }
@@ -157,12 +197,17 @@ export function crispenAndLift(d,w,h){
   const blur=new Float32Array(lum);
   boxBlurF(blur,w,h,1);
   const SH=0.55, LIFT=1.06;            // unsharp amount; midtone brightness gain
+  // v12.02: the LIFT is applied as a luminance delta rather than a per-channel
+  // multiply, for the same reason as the white balance above — a 6% gain is
+  // also a 6% saturation gain, and it measured +6.2 chroma on a green
+  // letterhead. On neutral paper the two are identical.
   for (let i=0;i<n;i++){
     const add=(lum[i]-blur[i])*SH;     // high-pass detail (edges/letters)
+    const lift=lum[i]*(LIFT-1);
     const j=i*4;
-    d[j]  =Math.max(0,Math.min(255, d[j]  *LIFT+add));
-    d[j+1]=Math.max(0,Math.min(255, d[j+1]*LIFT+add));
-    d[j+2]=Math.max(0,Math.min(255, d[j+2]*LIFT+add));
+    d[j]  =Math.max(0,Math.min(255, d[j]  +lift+add));
+    d[j+1]=Math.max(0,Math.min(255, d[j+1]+lift+add));
+    d[j+2]=Math.max(0,Math.min(255, d[j+2]+lift+add));
   }
 }
 export function boxBlurF(a,w,h,r){
@@ -515,8 +560,19 @@ export function flattenIllumination(d, w, h){
   const sorted=Float32Array.from(paper).sort();
   let target=sorted[Math.min(cells-1, Math.floor(cells*0.85))];
   target=Math.max(170, Math.min(244, target));
-  // apply: bilinear-upscaled gain, luminance-only, gentle + clamped (brighten only)
-  const GMAX=2.0, S=0.85;
+  // apply: bilinear-upscaled LIFT, gentle + clamped (brighten only).
+  //
+  // v12.02: additive, not multiplicative. A gain of g scales the distance
+  // between the channels by g too, so brightening a colour also saturates it —
+  // measured on a lime-green letterhead, this step alone took chroma 142 -> 192
+  // and pushed blue from 30 down toward nothing. Adding the same lift to all
+  // three channels raises brightness and leaves chroma exactly where the camera
+  // saw it. On neutral paper — every pixel of a plain document — the two are
+  // indistinguishable, because R=G=B either way.
+  //
+  // AMAX is the additive counterpart of the old GMAX=2.0 ceiling: it caps how
+  // far a dark corner can be lifted, so a shadow cannot be flattened into grey.
+  const AMAX=90, S=0.85;
   for (let y=0;y<h;y++){
     const fy=Math.max(0, Math.min(GH-1.0001, y*GH/h - 0.5)), y0=Math.floor(fy), y1=Math.min(GH-1,y0+1), wy=fy-y0;
     for (let x=0;x<w;x++){
@@ -524,12 +580,12 @@ export function flattenIllumination(d, w, h){
       const p0=paper[y0*GW+x0]*(1-wx)+paper[y0*GW+x1]*wx;
       const p1=paper[y1*GW+x0]*(1-wx)+paper[y1*GW+x1]*wx;
       const bg=p0*(1-wy)+p1*wy;
-      let gain=target/Math.max(1,bg);
-      gain=1+(Math.max(1,Math.min(GMAX,gain))-1)*S;   // only brighten, capped, gentle
+      const lift=Math.max(0, Math.min(AMAX, target-bg))*S;   // brighten only, capped
+      if (lift<=0) continue;
       const j=(y*w+x)*4;
-      d[j]  =Math.min(255, d[j]  *gain);
-      d[j+1]=Math.min(255, d[j+1]*gain);
-      d[j+2]=Math.min(255, d[j+2]*gain);
+      d[j]  =Math.min(255, d[j]  +lift);
+      d[j+1]=Math.min(255, d[j+1]+lift);
+      d[j+2]=Math.min(255, d[j+2]+lift);
     }
   }
 }
