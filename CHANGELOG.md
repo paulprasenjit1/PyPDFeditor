@@ -4,6 +4,69 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.06] — 2026-08-05 — A picture of a document is a scan, whoever OCRed it
+
+Reported: a patient name replaced on a photographed prescription came out in a
+face, weight and size that matched nothing else on the sheet.
+
+The file says why. The page is one 1800×1937 image with an **invisible** text
+layer over it:
+
+```
+3 Tr 1 0 0 1 125.97615 712.9732 Tm (28/Female)Tj      <- render mode 3
+```
+
+Everything that makes an edit match a scan — matching the face and weight to the
+printed ink, fitting the size and baseline to it — was gated on `docIsOcr()`,
+which recognises **PyPDF's own OCR marker and nothing else**. This layer was
+made by another tool, so none of it ran: the replacement was styled from a layer
+that is drawn invisibly and describes no appearance at all. Its "Helvetica
+10.8pt black" is not what the page looks like; it is what the OCR engine wrote
+down.
+
+### The condition was wrong, not the code behind it
+The honest test is not *who made the text layer* but *is the visible page a
+picture*. `pageIsImageBacked()` runs the page through a device that notes image
+placements and asks whether one covers ≥60% of it. Measured across the files to
+hand:
+
+```
+SCAN  100% covered   Photos 5 Aug 2026 21.34.pdf
+SCAN  100% covered   Scan 5 Aug 2026 10.22.pdf
+TEXT    2% covered   sample test.pdf
+TEXT    3% covered   merged.pdf
+```
+
+`editingOnScan()` is `docIsOcr() || pageIsImageBacked()`, and every place that
+meant "this page is a picture" now uses it — the face match, the ink size fit,
+the patch geometry (on a picture the redaction blanks the image, so the patch
+must cover exactly) and the fill colour.
+
+### Colour is read off the ink too
+The same reasoning applies to colour, which the invisible layer also gets wrong:
+it is black whatever the page looks like. `inkColourRGB()` averages the darkest
+sixth of the pixels in the span's box — that is the ink. Measured on the
+reported file:
+
+| span | ink measured |
+|---|---|
+| `28/Female` | 23,21,28 |
+| `9681401719` | 14,12,19 |
+| our replacement | 0,0,0 |
+
+Near-black here, so the visible gain on this page is small — but a navy heading
+or a red stamped field would have come back black, and now does not. It declines
+rather than guesses when the box holds no real ink, and never overrides a colour
+the caller asked for.
+
+### Tests
+111 in the editor suite. ED90–ED96 pin the image-backed test and its threshold,
+that all five call sites share one condition, and that the ink colour declines
+on an empty box and never overrides an explicit colour. ED64 and MX9 were
+rewritten for the new gate rather than deleted.
+
+---
+
 ## [v12.05] — 2026-08-05 — The edit sheet asks only what it cannot work out
 
 Colour and Typeface are gone from Edit text. Both were offered with **Same**

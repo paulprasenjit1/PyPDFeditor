@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "12.05";
+const APP_BUILD = "12.06";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -2329,8 +2329,12 @@ function editFillColourRGB(bg, isScan){
   if (!bg.uniform && !isScan) return [1,1,1];             // untrustworthy sample
   return [r/255, g/255, b/255];
 }
-function editFillColour(bg){
-  const c = editFillColourRGB(bg, (()=>{ try { return docIsOcr(); } catch(e){ return false; } })());
+// v12.06: `isScan` here means the same thing as everywhere else now — the page
+// you see is a picture, so the sampled background IS the page and can be
+// trusted, and the patch has to cover the ink exactly because the redaction
+// blanked the image rather than removing glyphs.
+function editFillColour(bg, pageIndex){
+  const c = editFillColourRGB(bg, (()=>{ try { return editingOnScan(pageIndex); } catch(e){ return false; } })());
   return rgb(c[0], c[1], c[2]);
 }
 
@@ -2751,14 +2755,14 @@ async function applyBlockEdit(pageIndex, block, newText, opts){
     const doc = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
     const pg  = doc.getPage(pageIndex);
     const H   = pg.getHeight();
-    const fillCol = editFillColour(bg);
+    const fillCol = editFillColour(bg, pageIndex);
     // v11.59: on a born-digital page the redaction has already removed the
     // glyphs as vectors, so the repaint only has to cover where they WERE.
     // Painting the full band was rubbing out the table rule that runs a hair
     // above the text — "editing Admenta 5 removes the top border". Pulling the
     // patch in by 0.6pt leaves hairline rules alone. On a scan the redaction
     // blanks the image itself, so there the patch must still cover it exactly.
-    const fillIn = (()=>{ try { return docIsOcr() ? 0 : 0.6; } catch(e){ return 0.6; } })();
+    const fillIn = (()=>{ try { return editingOnScan(pageIndex) ? 0 : 0.6; } catch(e){ return 0.6; } })();
     const shrink = r => {
       const w = r[2]-r[0], h = r[3]-r[1];
       const ix = Math.min(fillIn, Math.max(0, w/2 - 0.2));
@@ -2851,7 +2855,12 @@ async function applyTextEdit(pageIndex, sp, newText, opts){
     // user has not chosen a typeface themselves, and only when the match is
     // clear — matchScanFace returns null rather than guess.
     let scanFace = null, scanFit = null;
-    if (docIsOcr()){
+    if (editingOnScan(pageIndex)){
+      // The invisible layer's colour describes nothing. Read the ink instead.
+      if (!opts.colour){
+        const ink = inkColourRGB(pageIndex, sp);
+        if (ink) opts = Object.assign({}, opts, { colour: ink });
+      }
       const eng = { PDFDocument, mupdf };
       if (!opts.font || opts.font === "keep"){
         try {
@@ -2897,14 +2906,14 @@ async function applyTextEdit(pageIndex, sp, newText, opts){
     // v11.30: fill EXACTLY the band that was erased, not the whole span box —
     // painting the full box would cover the descenders of the line above and
     // the ascenders of the line below, which the tighter redaction now spares.
-    const fillCol = editFillColour(bg);
+    const fillCol = editFillColour(bg, pageIndex);
     // v11.59: on a born-digital page the redaction has already removed the
     // glyphs as vectors, so the repaint only has to cover where they WERE.
     // Painting the full band was rubbing out the table rule that runs a hair
     // above the text — "editing Admenta 5 removes the top border". Pulling the
     // patch in by 0.6pt leaves hairline rules alone. On a scan the redaction
     // blanks the image itself, so there the patch must still cover it exactly.
-    const fillIn = (()=>{ try { return docIsOcr() ? 0 : 0.6; } catch(e){ return 0.6; } })();
+    const fillIn = (()=>{ try { return editingOnScan(pageIndex) ? 0 : 0.6; } catch(e){ return 0.6; } })();
     const shrink = r => {
       const w = r[2]-r[0], h = r[3]-r[1];
       const ix = Math.min(fillIn, Math.max(0, w/2 - 0.2));
@@ -3556,6 +3565,56 @@ function clipInkMask(pageIndex, rectPt, targetInkPx){
 // The ink of one span, straight off the page, ready for matchScanFace.
 function spanInkMask(pageIndex, sp){
   return clipInkMask(pageIndex, [sp.x0-1, sp.y0-1, sp.x1+1, sp.y1+1], 44);
+}
+// v12.06: what colour is the printed word, measured off the page.
+//
+// On an image-backed page the span's own `color` is the invisible text layer's,
+// which is black whatever the ink looks like — so a navy heading or a red
+// stamped field came back black. The darkest sixth of the pixels in the span's
+// box IS the ink; averaging them gives the colour to retype in.
+//
+// Deliberately conservative: it needs enough ink to be sure, it refuses a
+// sample that is nearly white (an empty box, or a redaction that already ran),
+// and anything it is unsure about falls through to the previous behaviour.
+function inkColourRGB(pageIndex, sp){
+  let page = null, pm = null, dev = null;
+  try {
+    const rect = [sp.x0-1, sp.y0-1, sp.x1+1, sp.y1+1];
+    const hPt = Math.max(0.5, rect[3]-rect[1]);
+    const s = Math.max(2, Math.min(12, 44/hPt));
+    const bbox = [Math.floor(rect[0]*s), Math.floor(rect[1]*s),
+                  Math.ceil(rect[2]*s),  Math.ceil(rect[3]*s)];
+    if (bbox[2]-bbox[0] < 4 || bbox[3]-bbox[1] < 4) return null;
+    page = MDOC.loadPage(pageIndex);
+    pm = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, bbox, false);
+    pm.clear(255);
+    dev = new mupdf.DrawDevice(mupdf.Matrix.scale(s,s), pm);
+    page.run(dev, mupdf.Matrix.identity);
+    dev.close(); dev = null;
+    const W=pm.getWidth(), H=pm.getHeight(), St=pm.getStride(), n=pm.getNumberOfComponents();
+    const px = pm.getPixels();
+    const N = W*H;
+    if (N < 32) return null;
+    const lum = new Uint8Array(N), idx = new Int32Array(N);
+    for (let y=0, k=0; y<H; y++) for (let x=0; x<W; x++, k++){
+      const i = y*St + x*n;
+      lum[k] = (px[i]*77 + px[i+1]*151 + px[i+2]*28) >> 8;
+      idx[k] = i;
+    }
+    const order = Array.from({length:N}, (_,i)=>i).sort((a,b)=> lum[a]-lum[b]);
+    const take = Math.max(8, Math.round(N*0.15));
+    let r=0,g=0,b=0;
+    for (let k=0;k<take;k++){ const i=idx[order[k]]; r+=px[i]; g+=px[i+1]; b+=px[i+2]; }
+    r/=take; g/=take; b/=take;
+    // A box with no real ink in it: the darkest sixth is still paper.
+    if ((r*77 + g*151 + b*28)/256 > 170) return null;
+    return [r/255, g/255, b/255];
+  } catch(e){ return null; }
+  finally {
+    try{ if(dev){ dev.close(); dev.destroy(); } }catch(e){}
+    try{ if(pm) pm.destroy(); }catch(e){}
+    try{ if(page) page.destroy(); }catch(e){}
+  }
 }
 // Where the printed word's ink actually sits, in page points.
 //
@@ -8712,6 +8771,51 @@ function docIsOcr(){
     docOcrEpoch = epoch;
   }
   return docOcrVal;
+}
+// v12.06: is what you SEE on this page a picture?
+//
+// The scan-aware paths — matching the face from the printed ink, fitting the
+// size and baseline to it — were gated on docIsOcr(), which only recognises
+// PyPDF's own OCR marker. A page photographed elsewhere and text-layered by
+// something else (iOS Live Text, Acrobat, any scanner app) failed that test,
+// so an edit on it was styled from the INVISIBLE text layer instead of from
+// the ink. Reported on exactly that: a name replaced on such a page came out
+// in a face, weight and size that matched nothing on the sheet, because the
+// layer it copied is drawn in render mode 3 and describes no appearance at all.
+//
+// The honest condition is not "who made the text layer" but "is the visible
+// page an image". One image covering most of the page says yes.
+let imgPageEpoch = -1, imgPageMap = null;
+function pageIsImageBacked(pageIndex){
+  if (imgPageEpoch !== epoch){ imgPageMap = new Map(); imgPageEpoch = epoch; }
+  if (imgPageMap.has(pageIndex)) return imgPageMap.get(pageIndex);
+  let out = false, page = null, dev = null;
+  try {
+    page = MDOC.loadPage(pageIndex);
+    const b = page.getBounds();
+    const area = Math.max(1, (b[2]-b[0]) * (b[3]-b[1]));
+    let covered = 0;
+    const note = (im, ctm)=>{
+      // the CTM maps the unit square onto the placed rectangle, so its column
+      // lengths are the drawn width and height in points
+      const w = Math.hypot(ctm[0], ctm[1]), h = Math.hypot(ctm[2], ctm[3]);
+      if (w > 0 && h > 0) covered = Math.max(covered, w*h);
+    };
+    dev = new mupdf.Device({ fillImage:(im,ctm)=>note(im,ctm),
+                             fillImageMask:(im,ctm)=>note(im,ctm) });
+    page.run(dev, mupdf.Matrix.identity);
+    out = covered >= area * 0.60;
+  } catch(e){ out = false; }
+  finally {
+    try{ if(dev){ dev.close(); dev.destroy(); } }catch(e){}
+    try{ if(page) page.destroy(); }catch(e){}
+  }
+  imgPageMap.set(pageIndex, out);
+  return out;
+}
+// An edit lands on a picture of a document — whoever made the text layer.
+function editingOnScan(pageIndex){
+  try { return docIsOcr() || pageIsImageBacked(pageIndex); } catch(e){ return false; }
 }
 let docTextEpoch = -1, docTextVal = true;
 function docHasText(){
