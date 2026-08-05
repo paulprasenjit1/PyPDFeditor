@@ -4,6 +4,38 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.05] — 2026-08-05 — The edit sheet asks only what it cannot work out
+
+Colour and Typeface are gone from Edit text. Both were offered with **Same**
+preselected, and Same is not a compromise there: it is the colour and the face
+the app **reads off the span being replaced**, so the edit matches the page by
+construction. Two rows of choices to arrive back at what the document already
+said — nine buttons of noise between tapping a line and replacing it.
+
+The sheet is now: the text, **Size** (A− / A+), **Weight** (Same / Bold),
+Replace.
+
+- **Colour** stays automatic — `sp.color`, the span's own colour, which on a
+  real document is nearly always black, grey or blue anyway.
+- **Typeface** stays automatic — the document's own embedded font is reused
+  where it can be, and where it cannot, `pickFont` matches the face from the
+  original font's name.
+- **Size** keeps A− / A+ stepping in half points from the size the PDF reports
+  for that span. The `10.8 pt` chip is now part of the SIZE label rather than a
+  button: it is information, not a control.
+- **Weight** is the one thing the page genuinely cannot tell us when the
+  original is a picture — see v12.04.
+
+Add text and the watermark keep their own colour and typeface pickers: there is
+no original span there to read anything off, so those really are choices.
+
+### Tests
+104 in the editor suite. ED80–ED86 pin both rows gone, both values still fixed
+at "keep", the size chip demoted to a label, A−/A+ still stepping from the
+span's own size, and that the other two sheets kept their pickers.
+
+---
+
 ## [v12.04] — 2026-08-05 — Bold, as a choice rather than a guess
 
 Reported on a prescription: the printed patient name is bold, and replacing it

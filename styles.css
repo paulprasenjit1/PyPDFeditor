@@ -528,6 +528,9 @@ svg.ic { width:18px; height:18px; display:block; fill:none; stroke:currentColor;
 /* v11.93: two rows — what to do with the selection, then how to change it. */
 .pgacts .pgrow { display:flex; gap:8px; }
 .pgacts button { flex:1; min-width:0; }
+/* v12.05: the current size reads as part of the SIZE label rather than as a
+   third button — it is information, not a control. */
+.telblnow { color:var(--muted); font-weight:400; margin-left:6px; }
 /* v12.04: the Bold chip shows the weight it selects, so the choice reads at a
    glance rather than only after the replacement lands on the page. */
 .teseg .segb.tebold { font-weight:700; }

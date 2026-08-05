@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "12.04";
+const APP_BUILD = "12.05";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -2198,7 +2198,12 @@ function openTextEditorSheet(pageIndex, sp){
   // a tap does; re-wrapping a paragraph is a deliberate second choice.
   let asBlock = false;
   let size = null;            // null = keep the original
-  let colour = "keep", fontK = "keep";
+  // v12.05: colour and typeface are no longer offered. Both were already
+  // defaulting to "Same", and "Same" is not a compromise here — it is the
+  // colour and face the app READS OFF the span being replaced, so the edit
+  // matches the page by construction. Two rows of choices to arrive back at
+  // what the document already said were four taps of noise.
+  const colour = "keep", fontK = "keep";
   // v12.04: weight is its own axis. Reported against a prescription whose
   // printed name is bold: replacing it produced regular Helvetica, and there
   // was no way to ask for anything else — the bold faces existed but only
@@ -2211,25 +2216,16 @@ function openTextEditorSheet(pageIndex, sp){
       <h3>Edit text · page ${pageIndex+1}</h3>
       <p class="hint">${asBlock
         ? "The whole paragraph ("+block.lines.length+" lines) is replaced and re-wrapped to its own width."
-        : "This line is replaced, keeping its position, size and colour."} Leave it empty to delete the text.</p>
+        : "This line is replaced, keeping its position, colour and typeface from the page."} Leave it empty to delete the text.</p>
       ${raw(canBlock ? `<div class="row teseg" id="teScope">
           <button class="segb${asBlock?"":" on"}" data-v="0">This line only</button>
           <button class="segb${asBlock?" on":""}" data-v="1">Whole paragraph (${block.lines.length} lines)</button>
         </div>` : "")}
       <div class="row"><textarea id="teIn"></textarea></div>
-      <div class="row telbl">Size</div>
+      <div class="row telbl">Size <span class="telblnow" id="teSizeNow">${(size==null ? (sp.size||11) : size).toFixed(1)} pt</span></div>
       <div class="row teseg" id="teSize">
         <button class="segb" data-d="-1">A −</button>
-        <button class="segb" id="teSizeNow">${(size==null ? (sp.size||11) : size).toFixed(1)} pt</button>
         <button class="segb" data-d="1">A +</button>
-      </div>
-      <div class="row telbl">Colour</div>
-      <div class="row teseg tewrap" id="teCol">
-        ${raw(TE_COLOURS.map(c=>`<button class="segb${colour===c.k?" on":""}" data-k="${c.k}">${c.label}</button>`).join(""))}
-      </div>
-      <div class="row telbl">Typeface</div>
-      <div class="row teseg" id="teFont">
-        ${raw(TE_FONTS.map(f=>`<button class="segb${fontK===f.k?" on":""}" data-k="${f.k}">${f.label}</button>`).join(""))}
       </div>
       <div class="row telbl">Weight</div>
       <div class="row teseg" id="teWeight">
@@ -2241,19 +2237,14 @@ function openTextEditorSheet(pageIndex, sp){
     $("teIn").value = body;
     if (canBlock) $("teScope").querySelectorAll("[data-v]").forEach(b=>
       b.onclick = ()=>{ asBlock = b.dataset.v === "1"; draw(); });
+    // A- / A+ step from the size the PDF itself reports for this span, so the
+    // first tap is always relative to the document rather than to a default.
     $("teSize").querySelectorAll("[data-d]").forEach(b=>
       b.onclick = ()=>{
         const cur = size == null ? (sp.size||11) : size;
         size = Math.min(96, Math.max(4, Math.round((cur + (+b.dataset.d)*0.5)*2)/2));
-        $("teSizeNow").textContent = size.toFixed(1)+" pt";
+        const el = $("teSizeNow"); if (el) el.textContent = size.toFixed(1)+" pt";
       });
-    $("teSizeNow").onclick = ()=>{ size = null; $("teSizeNow").textContent = (sp.size||11).toFixed(1)+" pt"; };
-    $("teCol").querySelectorAll("[data-k]").forEach(b=>
-      b.onclick = ()=>{ colour = b.dataset.k;
-        $("teCol").querySelectorAll("[data-k]").forEach(o=>o.classList.toggle("on", o===b)); });
-    $("teFont").querySelectorAll("[data-k]").forEach(b=>
-      b.onclick = ()=>{ fontK = b.dataset.k;
-        $("teFont").querySelectorAll("[data-k]").forEach(o=>o.classList.toggle("on", o===b)); });
     $("teWeight").querySelectorAll("[data-b]").forEach(b=>
       b.onclick = ()=>{ bold = b.dataset.b === "1";
         $("teWeight").querySelectorAll("[data-b]").forEach(o=>o.classList.toggle("on", o===b)); });
