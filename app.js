@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "12.03";
+const APP_BUILD = "12.04";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -1931,9 +1931,9 @@ $("findClear").onclick = ()=>{
 // back as Times-Roman AND shrank (Times is wider, so it failed the fit check).
 
 // pickFont mirrors the macOS pick_font.
-function pickFont(name){
+function pickFont(name, forceBold){
   const n = (name||"").toLowerCase();
-  const bold   = /bold|black|heavy|semibold|demi/.test(n);
+  const bold   = !!forceBold || /bold|black|heavy|semibold|demi/.test(n);
   const italic = /italic|oblique/.test(n);
   const mono   = /mono|courier|consol/.test(n);
   const serif  = /times|serif|roman|georgia|minion|garamond|cambria/.test(n);
@@ -2199,6 +2199,11 @@ function openTextEditorSheet(pageIndex, sp){
   let asBlock = false;
   let size = null;            // null = keep the original
   let colour = "keep", fontK = "keep";
+  // v12.04: weight is its own axis. Reported against a prescription whose
+  // printed name is bold: replacing it produced regular Helvetica, and there
+  // was no way to ask for anything else — the bold faces existed but only
+  // matchScanFace could reach them, and only on an OCRed page.
+  let bold = false;
 
   const draw = ()=>{
     const body = asBlock ? block.lines.map(l=>l.text).join(" ") : sp.text;
@@ -2226,6 +2231,11 @@ function openTextEditorSheet(pageIndex, sp){
       <div class="row teseg" id="teFont">
         ${raw(TE_FONTS.map(f=>`<button class="segb${fontK===f.k?" on":""}" data-k="${f.k}">${f.label}</button>`).join(""))}
       </div>
+      <div class="row telbl">Weight</div>
+      <div class="row teseg" id="teWeight">
+        <button class="segb${bold?"":" on"}" data-b="0">Same</button>
+        <button class="segb${bold?" on":""} tebold" data-b="1">Bold</button>
+      </div>
       <div class="row"><button class="full" id="teOk">Replace</button></div>
       <div class="row"><button class="ghost full" id="teCancel">Cancel</button></div>`;
     $("teIn").value = body;
@@ -2244,9 +2254,12 @@ function openTextEditorSheet(pageIndex, sp){
     $("teFont").querySelectorAll("[data-k]").forEach(b=>
       b.onclick = ()=>{ fontK = b.dataset.k;
         $("teFont").querySelectorAll("[data-k]").forEach(o=>o.classList.toggle("on", o===b)); });
+    $("teWeight").querySelectorAll("[data-b]").forEach(b=>
+      b.onclick = ()=>{ bold = b.dataset.b === "1";
+        $("teWeight").querySelectorAll("[data-b]").forEach(o=>o.classList.toggle("on", o===b)); });
     $("teOk").onclick = async ()=>{
       const t = $("teIn").value;
-      const opts = { size, colour: (TE_COLOURS.find(c=>c.k===colour)||{}).rgb, font: fontK };
+      const opts = { size, colour: (TE_COLOURS.find(c=>c.k===colour)||{}).rgb, font: fontK, bold };
       closeSheet();
       if (asBlock && canBlock) await applyBlockEdit(pageIndex, block, t, opts);
       else await applyTextEdit(pageIndex, sp, t, opts);
@@ -2644,15 +2657,21 @@ function fitFontSizeWidth(width1pt, size, avail){
 }
 
 // v11.37: an explicit typeface choice overrides the name-matching in pickFont.
-function pickFontKeyed(name, key){
-  if (key === "sans")  return StandardFonts.Helvetica;
-  if (key === "serif") return StandardFonts.TimesRoman;
-  if (key === "mono")  return StandardFonts.Courier;
-  // v11.54: the bold variants exist only as results of the scanned-face match,
-  // so they are resolved here rather than offered in the typeface picker.
-  if (key === "sansb")  return StandardFonts.HelveticaBold;
-  if (key === "serifb") return StandardFonts.TimesRomanBold;
-  return pickFont(name);
+// v12.04: `bold` is a separate axis, because weight and face are separate
+// choices — a name field set in bold Helvetica on a form is the common case,
+// and before this the only way to reach a bold face was for matchScanFace to
+// guess one on an OCRed page.
+function pickFontKeyed(name, key, bold){
+  const F = StandardFonts;
+  if (key === "sans")  return bold ? F.HelveticaBold  : F.Helvetica;
+  if (key === "serif") return bold ? F.TimesRomanBold : F.TimesRoman;
+  if (key === "mono")  return bold ? F.CourierBold    : F.Courier;
+  // v11.54: these two exist only as results of the scanned-face match, so they
+  // are resolved here rather than offered in the typeface picker.
+  if (key === "sansb")  return F.HelveticaBold;
+  if (key === "serifb") return F.TimesRomanBold;
+  // "Same": keep the face the name implies, but honour an explicit bold.
+  return pickFont(name, bold);
 }
 // ---- v11.37: edit a whole paragraph, re-wrapping it -----------------------
 // The single-line path (applyTextEdit, below) is unchanged and still handles a
@@ -2688,7 +2707,11 @@ async function applyBlockEdit(pageIndex, block, newText, opts){
   try {
     const first = block.lines[0];
     const bg    = sampleSpanBg(pageIndex, first);
-    const fres  = (opts.font && opts.font !== "keep") ? null : capturePdfFont(pageIndex, first.font);
+    // v12.04: bold is also a reason not to reuse the embedded font — an
+    // embedded REGULAR subset has no bold glyphs, so honouring the request means
+    // substituting a base-14 bold face.
+    const fres  = (opts.bold || (opts.font && opts.font !== "keep"))
+      ? null : capturePdfFont(pageIndex, first.font);
     const align = blockAlignFor(pageIndex, first);
     const bands = block.lines.map(l=> redactBandFor(pageIndex, l));
 
@@ -2702,7 +2725,7 @@ async function applyBlockEdit(pageIndex, block, newText, opts){
         const probe = await PDFDocument.load(workingBytes, { ignoreEncryption:true });
         const ppg   = probe.getPage(pageIndex);
         const pEnc  = fres && pdfFontStillOnPage(ppg, fres.key);
-        const pB14  = pEnc ? null : await probe.embedFont(pickFontKeyed(first.font, opts.font));
+        const pB14  = pEnc ? null : await probe.embedFont(pickFontKeyed(first.font, opts.font, opts.bold));
         const pMeasure = (s, size)=>{
           if (pEnc){ const e = encodeWithPdfFont(fres, s); return e ? e.width*size : Infinity; }
           try { return pB14.widthOfTextAtSize(sanitizeForFont(s), size); } catch(e){ return Infinity; }
@@ -2768,7 +2791,7 @@ async function applyBlockEdit(pageIndex, block, newText, opts){
       // in one font and drawing in another is the v11.29 bug all over again.
       let b14 = null;
       const encOK = fres && pdfFontStillOnPage(pg, fres.key);
-      if (!encOK) b14 = await doc.embedFont(pickFontKeyed(first.font, opts.font));
+      if (!encOK) b14 = await doc.embedFont(pickFontKeyed(first.font, opts.font, opts.bold));
       const measureAt = (s, size)=>{
         if (encOK){ const e = encodeWithPdfFont(fres, s); return e ? e.width*size : Infinity; }
         try { return b14.widthOfTextAtSize(sanitizeForFont(s), size); } catch(e){ return Infinity; }
@@ -2827,7 +2850,10 @@ async function applyTextEdit(pageIndex, sp, newText, opts){
     // redaction the cache is stale, so both have to be read now)
     // v11.37: an explicit typeface choice means the document's own embedded
     // font is deliberately NOT reused — that is the whole point of the choice.
-    let fres = (opts.font && opts.font !== "keep") ? null : capturePdfFont(pageIndex, sp.font);
+    // v12.04: see applyBlockEdit — a bold request cannot be served from an
+    // embedded regular subset, so it takes the substitution path.
+    let fres = (opts.bold || (opts.font && opts.font !== "keep"))
+      ? null : capturePdfFont(pageIndex, sp.font);
     // v11.54: on an OCRed SCAN the span's "font" is the invisible Helvetica we
     // laid down in v11.48, which tells us nothing about the printed word. Look
     // at the ink instead and retype in the closest face we have. Only when the
@@ -2935,7 +2961,7 @@ async function applyTextEdit(pageIndex, sp, newText, opts){
                         y, drawSize, colour, tc);
       } else {
         // TIER 2: base-14 substitution, as before
-        const font = await doc.embedFont(pickFontKeyed(sp.font, opts.font));
+        const font = await doc.embedFont(pickFontKeyed(sp.font, opts.font, opts.bold));
         const safe = sanitizeForFont(text);
         substituted = safe !== text;     // some glyphs fell outside the base font
         const drawSize = fitFontSize(font, safe, baseSize, avail);   // shrink only if it would collide
@@ -4088,7 +4114,7 @@ async function addNewText(pageIndex, xPt, yTopPt, text, opts){
     const H = pg.getHeight();
     const size = opts && opts.size ? opts.size : 12;
     const colour = (opts && opts.colour) || [0,0,0];
-    const font = await doc.embedFont(pickFontKeyed("", (opts && opts.font) || "sans"));
+    const font = await doc.embedFont(pickFontKeyed("", (opts && opts.font) || "sans", opts && opts.bold));
     const lead = size * 1.25;
     let substituted = false;
     t.forEach((line, i)=>{

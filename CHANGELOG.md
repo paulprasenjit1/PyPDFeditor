@@ -4,6 +4,54 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.04] — 2026-08-05 — Bold, as a choice rather than a guess
+
+Reported on a prescription: the printed patient name is bold, and replacing it
+through Edit text produced regular Helvetica that did not match the page.
+
+Reading the file explained it exactly. The page is a photo with a text layer,
+and the app's own patch is in there:
+
+```
+1 1 1 rg  ...  f          <- the white rectangle over the old name
+BT 0 0 0 rg
+/Helvetica-9742682568 10.81 Tf
+<44656261736D697461205061756C> Tj    <- "Debasmita Paul", regular
+```
+
+Every font in that document is plain Helvetica, so "Same" faithfully reproduced
+regular — there was no bold face to inherit. The bold faces have existed since
+v11.54, but only `matchScanFace` could reach them, and only on an OCRed page.
+
+### What changed
+A **Weight** row in the edit sheet — `Same` / `Bold` — sitting under Typeface,
+because weight and face are separate choices. It combines with everything:
+
+| | regular | bold |
+|---|---|---|
+| Sans | Helvetica | Helvetica-Bold |
+| Serif | Times-Roman | Times-Bold |
+| Mono | Courier | Courier-Bold |
+| Same | face implied by the original name | ...its bold cut |
+
+`pickFont` takes a `forceBold` argument and `pickFontKeyed` a `bold` one, so
+"Same + Bold" keeps the face the original name implies and only changes weight.
+
+Asking for bold also **stops the document's own embedded font being reused** —
+an embedded regular subset has no bold glyphs, so the request has to take the
+base-14 substitution path, exactly as an explicit typeface choice already did.
+Both the single-line and paragraph editors, plus Add text and the watermark,
+pass the flag through.
+
+### Tests
+97 in the editor suite. ED32a–ED32f resolve every face × weight combination,
+including that an already-bold font name is still honoured on its own and that
+nothing moves when bold is off; ED32g–ED32j pin the embedded-font rule for both
+edit paths, and that the sheet passes the weight through and has a row to set it.
+ED26 and ED67 were rewritten for the new signature rather than deleted.
+
+---
+
 ## [v12.03] — 2026-08-05 — The ink side, and sharpening only where the text is
 
 v12.01 cleaned the paper. This does the same to the ink.
