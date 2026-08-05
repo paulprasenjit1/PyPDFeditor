@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "12.02";
+const APP_BUILD = "12.03";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -5753,8 +5753,21 @@ let scanRetakeAt = -1;
 // 900KB leaves the encoder at its starting quality instead of stepping down.
 // v11.76's page was 714KB against a 700KB budget and had NOT been stepped down
 // (q0.80 re-encodes to 697KB), so the budget was already at its useful edge.
-const SCAN_Q = { std:{ jpeg:0.80, maxDim:3500, budget:900000, qFloor:0.70 },
+// v12.03: the budget is now PER MEGAPIXEL, not a flat number. A flat 900 KB
+// meant the quality a page got depended on how close the phone happened to be:
+// a 6.8 MP capture at 116 KB/MP kept q0.80, while an 8.3 MP capture of the SAME
+// page got 108 KB/MP, hit the ceiling and stepped down to q0.69. Framing
+// distance should not decide encoder quality. 120 KB/MP is what the two pages
+// measured here actually used (1016 KB / 8.35 MP = 122, 784 KB / 6.77 MP = 116),
+// so nothing grows; if the ink flatten frees bytes as the paper flatten did,
+// quality stays at 0.80 and the files get smaller instead.
+const SCAN_Q = { std:{ jpeg:0.80, maxDim:3500, budgetPerMP:120000, qFloor:0.70 },
                  small:{ jpeg:0.62, maxDim:1400 } };
+function scanBudget(cfg, w, h){
+  if (!cfg || !cfg.budgetPerMP) return 0;            // no budget → single encode
+  const mp = (w*h)/1e6;
+  return Math.round(cfg.budgetPerMP * Math.max(1, mp));
+}
 // Encode a canvas to JPEG, stepping quality down only if the blob exceeds the
 // byte budget (document scans are mostly white and compress well, so a sparse
 // page keeps the top quality; a dense page eases down to fit). No budget → a
@@ -7521,7 +7534,7 @@ function scanPageDpi(w, h){
 async function pushScanPage(c, w, h){
   const QQ0 = SCAN_Q[scanQuality] || SCAN_Q.std;
   const QQ = QQ0;                     // v11.80: no HQ branch left to choose
-  const blob = await encodeScanJpeg(c, QQ.jpeg, QQ.budget, QQ.qFloor);
+  const blob = await encodeScanJpeg(c, QQ.jpeg, scanBudget(QQ, w, h), QQ.qFloor);
   // small thumbnail (112px tall ≈ 56 css px at 2×) for the review strip
   const tc=document.createElement("canvas");
   tc.height=112; tc.width=Math.max(8,Math.round(w*112/h));

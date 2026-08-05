@@ -4,6 +4,75 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.03] — 2026-08-05 — The ink side, and sharpening only where the text is
+
+v12.01 cleaned the paper. This does the same to the ink.
+
+Measured on a finished page, a text band is **8.7% solid ink, 4.2% transition
+grey, 87% paper**. That grey skirt around every stroke is what reads as soft —
+and it is also the most expensive thing in the file.
+
+| | daylight scan (294 dpi) | night scan (266 dpi) |
+|---|---|---|
+| body-text edge | 0.317 mm → **0.211 mm** | 0.287 mm → **0.218 mm** |
+| transition greys | 3.8% → **1.5%** | 3.0% → **1.1%** |
+| flat grey fills | std 9.2 → 9.2 | unchanged |
+
+### What changed
+1. **Ink flatten** — neutral pixels below 55% of the local paper level are pulled
+   toward solid black on a smoothstep ramp, the mirror of what v12.01 does to
+   paper. A stroke becomes ink plus a thin edge instead of ink plus a wide grey
+   skirt, and solid black compresses almost free, which is what pays for (2).
+2. **The unsharp is weighted by neutrality** (chroma < 24, 8-unit ramp) and
+   raised 1.20 → 1.50 with the threshold 2 → 3. A letterhead, a photo or a
+   watermark gains nothing from being edgier and would spend real bytes on it;
+   text is neutral by definition, so the sharpening goes where it is wanted.
+
+Both guards from the paper side carry over: **chroma**, so a blue signature or a
+red stamp is untouched, and a **smoothstep** rather than a threshold, so nothing
+posterises. A mid-grey table fill sits above the ramp and is left exactly alone —
+verified, 150 → 150.
+
+### The byte budget is now per megapixel
+`budget: 900000` → `budgetPerMP: 120000`. A flat number meant the quality a page
+got depended on how close the phone happened to be: the same report at 6.8 MP
+got 116 KB/MP and kept q0.80, while at 8.3 MP it got 108 KB/MP, hit the ceiling
+and stepped down to **q0.69**. Framing distance should not decide encoder
+quality. 120 KB/MP is what those two real captures actually used, so nothing
+grows; if the ink flatten frees bytes the way the paper flatten did, quality
+holds at 0.80 and the files get smaller.
+
+`jpeg:0.80`, `maxDim:3500` and `qFloor:0.70` are unchanged and pinned by test.
+
+### Also in this release: a correction
+A focus/tilt warning was planned, on the strength of a sharpness grid showing
+the bottom third of every page 8× softer than the middle. **That was wrong.**
+The metric was Laplacian variance per cell, and the bottom third of the test
+page is nearly blank — 3–10% ink against 11–20% at the top — so it was measuring
+how much was there, not how sharp it was. Restricted to small body-text strokes:
+
+| | daylight | night |
+|---|---|---|
+| upper | 0.392 mm | 0.470 mm |
+| middle | 0.315 mm | 0.319 mm |
+| lower | 0.329 mm | 0.226 mm |
+
+No gradient. The softness is uniform, the blur is symmetric (horizontal edge
+energy 8.29 vs vertical 8.39, so not shake), and a warning built on that metric
+would have fired on blank regions and banner text on every page. The feature was
+dropped before a line of it was written, which is the cheapest place to drop it.
+
+### Tests
+246 in the scanner suite, 124 in compress. SC266–SC270 pin the ink pull, the
+mid-grey fill it must not touch, coloured ink, and that sharpening favours
+neutral areas. SC271–SC274 pin the per-megapixel budget and that the capture
+constants did not move with it. CP64b–CP64e were rewritten for the new budget
+shape rather than deleted.
+
+Device-untested.
+
+---
+
 ## [v12.02] — 2026-08-04 — Brightening a page should not saturate it
 
 Reported against the camera's own photo of the same page: the lime-green
