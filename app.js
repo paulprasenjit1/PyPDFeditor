@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "12.06";
+const APP_BUILD = "12.07";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -3602,12 +3602,27 @@ function inkColourRGB(pageIndex, sp){
       idx[k] = i;
     }
     const order = Array.from({length:N}, (_,i)=>i).sort((a,b)=> lum[a]-lum[b]);
-    const take = Math.max(8, Math.round(N*0.15));
+    // v12.07: threshold against the PAPER first, then average only the ink.
+    //
+    // v12.06 averaged the darkest sixth of the BOX, which is right only when
+    // the box is mostly ink. Re-edit the same field and it is not: the previous
+    // edit left a white patch, so the darkest sixth is antialiased fringe and
+    // the answer comes back grey. Reproduced exactly — a box holding a white
+    // patch, 3% ink and fringe measured 139,139,140 that way, against 11,11,15
+    // for the ink itself. That is the grey that was reported.
+    const paper = lum[order[Math.min(N-1, Math.floor(N*0.90))]];
+    const inkMax = Math.min(200, paper*0.55);
+    let ink = 0;
+    for (let k=0;k<N;k++){ if (lum[order[k]] >= inkMax) break; ink++; }
+    // Too little ink to be reading a colour off: an emptied box, a field that
+    // was already replaced, or a box that is mostly paper. Decline, and the
+    // span's own colour stands.
+    if (ink < N*0.04) return null;
+    const take = Math.max(6, Math.round(ink*0.40));
     let r=0,g=0,b=0;
     for (let k=0;k<take;k++){ const i=idx[order[k]]; r+=px[i]; g+=px[i+1]; b+=px[i+2]; }
     r/=take; g/=take; b/=take;
-    // A box with no real ink in it: the darkest sixth is still paper.
-    if ((r*77 + g*151 + b*28)/256 > 170) return null;
+    if ((r*77 + g*151 + b*28)/256 > paper*0.60) return null;
     return [r/255, g/255, b/255];
   } catch(e){ return null; }
   finally {

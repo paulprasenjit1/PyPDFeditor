@@ -4,6 +4,58 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.07] — 2026-08-05 — Read the ink, not the darkest sixth of the box
+
+v12.06's colour reading was wrong in a way a screenshot showed immediately: the
+replaced name came out **grey** beside black neighbours.
+
+It averaged the darkest sixth of the span's **box**. That is right only when the
+box is mostly ink — and on a re-edit it is not. The previous edit leaves a white
+patch behind, so the darkest sixth is antialiased fringe. Reproduced on a box
+holding a white patch, 3% ink and fringe:
+
+| | measured |
+|---|---|
+| darkest sixth of the box (v12.06) | **139,139,140** |
+| darkest 40% of the ink (v12.07) | **11,11,15** |
+
+### What it does now
+Threshold against the page's own paper level first, then average only what is
+below it:
+
+```js
+const paper  = lum[order[N*0.90]];          // the page, not a constant
+const inkMax = Math.min(200, paper*0.55);   // what counts as ink here
+if (ink < N*0.04) return null;              // too little to read a colour off
+const take = Math.max(6, Math.round(ink*0.40));   // the core, not the fringe
+```
+
+Both guards decline rather than guess, and the span's own colour stands. The old
+flat ceiling of 170 is gone — it passed grey at 139 happily, which is the bug.
+
+Measured against the four cases that matter:
+
+| box | result |
+|---|---|
+| white patch, fringe only | declined |
+| white patch + 3% ink + fringe | 13,13,17 |
+| ordinary black print | 23,21,28 |
+| navy heading | 26,35,120 |
+| blank | declined |
+
+### Tests
+117 in the editor suite. ED97–ED101 run the shipped sampler over each of those
+boxes; ED95/ED95b pin both guards. The synthetic fringe case is the one that
+would have caught this before it shipped.
+
+### Also
+`N4b` in the scenario suite was still flaky under load — `createScanPdf` returns
+in ~11ms but the reopen and first render that follow are async and get starved
+when the whole battery runs at once. The wait went 3s → 10s; it still fails if
+the document never switches, which is what it is testing.
+
+---
+
 ## [v12.06] — 2026-08-05 — A picture of a document is a scan, whoever OCRed it
 
 Reported: a patient name replaced on a photographed prescription came out in a
