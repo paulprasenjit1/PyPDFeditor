@@ -113,10 +113,23 @@ export function applyAutoContrast(d,w,h){
   // So the stretch keeps its full strength on neutral pixels — text, rules,
   // paper, and every measurement that has been tuned on them — and a coloured
   // pixel is spared most of the DARKENING only. Brightening is untouched: the
-  // white point still goes where it went. Measured on the same page, black text
-  // stayed at 57 and paper at 251 for every value of COLOUR_KEEP, while navy
-  // moved 8,9,60 -> 47,55,109 at 0.40.
-  const COLOUR_KEEP = 0.40;      // share of the darkening a fully coloured pixel takes
+  // white point still goes where it went.
+  //
+  // v12.09: 0.40 -> 0.25, after simulating all three reported documents against
+  // their iPhone Preview counterparts. Coloured ink as a share of Preview's
+  // brightness, and the neutral black text beside it:
+  //
+  //                     prescription   med bill   doctor's bill   black text
+  //   keep 0.40             67%          75%          70%         7.1 / 5.2 / 13.9
+  //   keep 0.25             78%          84%          82%         7.2 / 5.3 / 13.9
+  //   keep 0.00             96%          99%         103%         7.4 / 5.3 / 13.9
+  //
+  // Black text does not move at any setting — this axis touches coloured pixels
+  // only, so nothing from v12.01/12.03 is at stake. 0.00 matches Preview almost
+  // exactly, and was declined deliberately: at zero a coloured pixel takes no
+  // contrast recovery at all, so a pale stamp on a dim capture would stay as
+  // washed out as the camera saw it. 0.25 keeps some of that safety net.
+  const COLOUR_KEEP = 0.25;      // share of the darkening a fully coloured pixel takes
   const CH_LO = 18, CH_HI = 40;  // neutral below, fully spared above
   for (let i=0;i<n;i++){
     const j=i*4;

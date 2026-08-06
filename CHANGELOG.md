@@ -4,6 +4,50 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.09] — 2026-08-06 — Coloured ink at 25%, after seeing all three side by side
+
+`COLOUR_KEEP` 0.40 → **0.25**. One constant; nothing else in the pipeline moved.
+
+Simulated on all three reported documents against their iPhone Preview
+counterparts before changing anything — coloured ink as a share of Preview's
+brightness, with the neutral black text beside it:
+
+| | prescription | med bill | doctor's bill | black text |
+|---|---|---|---|---|
+| keep 0.40 (v12.08) | 67% | 75% | 70% | 7.1 / 5.2 / 13.9 |
+| **keep 0.25 (this)** | **78%** | **84%** | **82%** | **7.2 / 5.3 / 13.9** |
+| keep 0.00 | 96% | 99% | 103% | 7.4 / 5.3 / 13.9 |
+
+Verified on the shipped build, not just in simulation:
+
+```
+prescription   iPhone 117,115,154   v12.09  92, 89,127   78%   black text 7.2
+med bill       iPhone 128,132,169   v12.09 107,111,147   84%   black text 5.3
+doc bill       iPhone 170,132,104   v12.09 145,107, 79   82%   black text 13.9
+```
+
+**Black text does not move at any setting** — 7.2 / 5.3 / 13.9 at 0.25 against
+7.1 / 5.2 / 13.9 at 0.40. This axis touches coloured pixels only, so nothing
+from v12.01's paper flatten or v12.03's ink flatten and sharpening is at stake.
+
+### Why not 0.00, which matches Preview almost exactly
+At zero a coloured pixel takes **no** contrast recovery at all. On a well-lit
+page that is exactly right, and the numbers say so — 96/99/103%. On a dim
+capture a pale stamp or a light-red header would then stay as washed out as the
+camera saw it, because the stretch that would have rescued it no longer applies
+to it. 0.25 keeps that safety net and is visibly the same colour.
+
+The 96–103% figures also flatter themselves: the simulation's input *is*
+Preview's own image, so removing all the darkening returns roughly where it
+started. On a real capture the same setting would land a few points lower.
+
+### Tests
+255 in the scanner suite, unchanged — SC287 pins the share as a named constant
+between 0 and 1 rather than a literal, which is why the value could move without
+rewriting a test.
+
+---
+
 ## [v12.08] — 2026-08-06 — Coloured ink stops being blackened
 
 Three documents scanned twice — once with this app, once with iPhone Preview —
