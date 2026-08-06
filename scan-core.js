@@ -101,14 +101,40 @@ export function applyAutoContrast(d,w,h){
   // 44 -> 25. Applying the curve to LUMINANCE and moving all three channels by
   // that same delta gives an identical result on any neutral pixel — which is
   // all of a text document — while leaving coloured areas their own colour.
+  // v12.08: a COLOURED pixel takes only part of the downward push.
+  //
+  // Measured against an iPhone scan of the same prescription, this one step was
+  // doing all of it: a navy wordmark 82,89,145 came out 7,8,60 and a red
+  // subtitle 209,138,124 came out 126,56,47. For black print the stretch is
+  // exactly right — mapping the darkest 2% to black is what makes text crisp,
+  // and this curve is v11.31's byte for byte. A navy logo or a blue pen was
+  // never meant to be black.
+  //
+  // So the stretch keeps its full strength on neutral pixels — text, rules,
+  // paper, and every measurement that has been tuned on them — and a coloured
+  // pixel is spared most of the DARKENING only. Brightening is untouched: the
+  // white point still goes where it went. Measured on the same page, black text
+  // stayed at 57 and paper at 251 for every value of COLOUR_KEEP, while navy
+  // moved 8,9,60 -> 47,55,109 at 0.40.
+  const COLOUR_KEEP = 0.40;      // share of the darkening a fully coloured pixel takes
+  const CH_LO = 18, CH_HI = 40;  // neutral below, fully spared above
   for (let i=0;i<n;i++){
     const j=i*4;
-    const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
-    const delta=lut[L]-L;
+    const r=d[j], g=d[j+1], b=d[j+2];
+    const L=(r*77+g*151+b*28)>>8;
+    let delta=lut[L]-L;
     if (!delta) continue;
-    d[j]  =Math.max(0,Math.min(255, d[j]  +delta));
-    d[j+1]=Math.max(0,Math.min(255, d[j+1]+delta));
-    d[j+2]=Math.max(0,Math.min(255, d[j+2]+delta));
+    if (delta < 0){
+      const chroma = Math.max(r,Math.max(g,b)) - Math.min(r,Math.min(g,b));
+      let col = (chroma-CH_LO)/(CH_HI-CH_LO);
+      if (col > 0){
+        if (col > 1) col = 1;
+        delta = delta * (1 - col*(1-COLOUR_KEEP));
+      }
+    }
+    d[j]  =Math.max(0,Math.min(255, r+delta));
+    d[j+1]=Math.max(0,Math.min(255, g+delta));
+    d[j+2]=Math.max(0,Math.min(255, b+delta));
   }
 }
 // Colour "clean scan" pipeline (v10.17). Two safe, GLOBAL steps — deliberately
@@ -273,10 +299,19 @@ export function documentEnhance(d, w, h){
   //    photographic mid-tone (an ID portrait, L≈80–130) only darkens a few
   //    percent and is never crushed — the heavy darkening that ruined the old ID
   //    scans came from the per-channel auto-contrast, now fixed above, NOT here.
+  // v12.08: coloured ink is spared most of this too, for the reason given in
+  // applyAutoContrast — deepening is meant for print, and a blue pen darkened
+  // 18% on top of the stretch is how the ink stopped reading as blue.
   for (let i=0;i<n;i++){
-    const j=i*4; const Li=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
-    const deep = Math.max(0, (150-Li)/150) * 0.18;
-    if (deep>0){ d[j]*=(1-deep); d[j+1]*=(1-deep); d[j+2]*=(1-deep); }
+    const j=i*4; const r=d[j], g=d[j+1], b=d[j+2];
+    const Li=(r*77+g*151+b*28)>>8;
+    let deep = Math.max(0, (150-Li)/150) * 0.18;
+    if (deep>0){
+      const chroma = Math.max(r,Math.max(g,b)) - Math.min(r,Math.min(g,b));
+      let col = (chroma-18)/22;
+      if (col > 0) deep *= (1 - Math.min(1,col)*0.60);
+      d[j]=r*(1-deep); d[j+1]=g*(1-deep); d[j+2]=b*(1-deep);
+    }
   }
   // 3) v12.01: paper to white, then a real sharpen. Both replace gentler
   //    versions that measurement showed were not doing enough — see paperCrisp.

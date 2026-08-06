@@ -4,6 +4,73 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.08] — 2026-08-06 — Coloured ink stops being blackened
+
+Three documents scanned twice — once with this app, once with iPhone Preview —
+put a number on "you have messed up the colour":
+
+| | PyPDF ink | iPhone ink |
+|---|---|---|
+| prescription | 33,30,45 | 72,79,131 |
+| med bill | 18,16,16 | 85,77,84 |
+| doctor's bill | 21,21,41 | 98,85,75 |
+
+Paper matched at 255 on all six. Our ink was 2–4× darker, and coloured ink had
+lost half its saturation: the navy MEDIMALL wordmark measured 35,35,69 (chroma
+34) against the iPhone's 80,87,144 (chroma 64); the red subtitle 131,83,81
+against 209,137,123.
+
+### One stage was doing all of it
+Running the pipeline stage by stage over a faithful capture:
+
+```
+input                navy  82, 89,145   red 209,138,124   ink 98
++ colourBalanceCore  navy   7,  8, 60   red 126, 56, 47   ink 36   <- here
++ flattenIllumination navy  8,  8, 61   red 129, 58, 49   ink 36
++ documentEnhance    navy   7,  7, 52   red 119, 55, 47   ink 25
+```
+
+The 2–98% stretch inside `colourBalanceCore` maps the darkest 2% of the page to
+pure black and slides everything above it down. For print that is exactly right
+— it is what makes text crisp, and the curve is v11.31's byte for byte, which
+v11.73 already proved is not the thing to touch. A navy logo or a blue pen was
+simply never meant to be black.
+
+### What changed
+The stretch keeps its **full** strength on neutral pixels — text, rules, paper —
+and a coloured pixel takes only `COLOUR_KEEP = 0.40` of the **downward** push,
+ramped by chroma (full effect below 18, fully spared above 40). Brightening is
+untouched: the white point still goes exactly where it went.
+
+`documentEnhance`'s ink deepen is gated the same way, for the same reason: a
+blue pen darkened another 18% on top of the stretch is how it stopped reading as
+blue.
+
+### Result, measured on all three pairs
+| | navy / coloured ink | neutral black text |
+|---|---|---|
+| iPhone | 82,89,145 | 82 |
+| v12.07 | 7,7,52 | 5.1 |
+| **v12.08** | **47,54,107** | **7.1** |
+
+| document | coloured ink before | after | iPhone |
+|---|---|---|---|
+| med bill | 56,55,90 | **95,99,135** | 128,132,169 |
+| doctor's bill | 67,33,20 | **127,90,63** | 170,132,104 |
+
+Neutral black text moved 5.1 → 7.1 and paper stayed at 255 — the two things
+every earlier release was tuned on did not move. The result sits deliberately
+between the two: coloured ink reads as its own colour again, while text keeps
+the contrast and crispness of v12.03.
+
+### Tests
+255 in the scanner suite. SC280–SC288 pin that neutral print still takes the
+full stretch, that paper still reaches white, that navy and red are spared and
+keep their hue, that brightening is unaffected, that ink deepen leans harder on
+neutral ink, and that the share and its chroma ramp are named constants.
+
+---
+
 ## [v12.07] — 2026-08-05 — Read the ink, not the darkest sixth of the box
 
 v12.06's colour reading was wrong in a way a screenshot showed immediately: the
