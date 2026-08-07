@@ -4,6 +4,108 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.21] — 2026-08-07 — Document: iPhone Preview's colour
+
+Reported: Document scans still don't look like iPhone Preview's. This time the
+comparison was direct rather than inferred — three documents were scanned by
+**both** iPhone Preview and this app, so the two outputs could be measured
+against each other on the same paper.
+
+Preview differs in exactly two ways, and only two:
+
+| | iPhone Preview | this app (v12.20) |
+|---|---|---|
+| darkest pixel on the page | **76 – 96** | **0** |
+| saturation (p99.5) | 64 – 116 | 22 – 79 |
+| ink | 64 – 70 | 8 – 22 |
+| paper | 255 | 255 |
+
+**Preview never makes anything black.** Its floor sits near 80 and it keeps
+roughly twice our chroma. Paper we already matched.
+
+### What changed
+
+One new tail on the document path, `previewTone`: lift the black point to 64,
+restore chroma ×2 around luminance. Nothing upstream is touched — the warp,
+white balance, illumination flatten, ink deepen and paper crisp are all
+byte-for-byte what they were in v12.20. Photo-Doc and Photo ID are not on this
+path and are unaffected.
+
+Measured against Preview as the target:
+
+| | ink (Preview) | sat p99.5 (Preview) | coloured print L (Preview) |
+|---|---|---|---|
+| MEDIMALL | **64.5** (65.7) | **78** (75) | **103** (109) |
+| Receipt | **66.1** (63.8) | **103** (116) | **116** (137) |
+| GST invoice | **65.4** (69.8) | 30 (64) | **123** (143) |
+
+Ink matches almost exactly on all three. The GST page's saturation still lags
+because its colour is flattened by the chroma gates *upstream*, where a tail
+multiplier has nothing left to work with — a separate change, deliberately not
+made here.
+
+### The trade-off, taken knowingly
+
+Text is no longer pure black. It is dark grey, exactly as Preview renders it:
+natural on screen, marginally lighter in print. Paper stays at 255, so contrast
+against the page is still high.
+
+### Guard against the old over-saturation bug
+
+v12.02 was reported as "too saturated". The ×2 is therefore capped at 1.7× the
+chroma the camera actually captured — Preview's own measured ratio (75/45,
+116/79). The ceiling does **not** bind on any of the five reference photos:
+every number is identical with and without it. It exists for the pathological
+already-vivid page.
+
+Two tests moved with the intent rather than being deleted:
+- `SC263` bound "chroma out == chroma in", which is what capColour enforced.
+  Matching Preview means allowing a lift, so it now bounds the lift at the same
+  1.7×. The runaway case it was written for is still caught.
+- The corpus gate asked for "text is deepened" (ink ≤ 80% of captured). It now
+  asks that ink land in Preview's 64–70 band and stay under 40% of paper.
+
+1000 tests pass, corpus gate 20/20.
+
+## [v12.20] — 2026-08-07 — Photo-Doc: clarity, for the haze
+
+Reported: Photo-Doc has the right colour but is "out of focus and hazy". On the
+alternating scan, the Photo-Doc pages measured a Laplacian variance of
+1468–4376 against 2744–9104 for the Document pages beside them.
+
+The cause is structural: Photo-Doc keeps the capture's tone, and
+`idCardEnhance` has **no contrast stage at all** — so a slightly veiled capture
+stays veiled. v12.18's sharpening works on fine detail, which does nothing for
+veiling glare.
+
+### Two passes now, not one
+1. **Clarity** — a wide, gentle unsharp (the local-contrast control every photo
+   tool calls Clarity). This is what lifts haze. The wide blur is built from a
+   ⅛-scale grid smoothed twice rather than a large kernel: a radius-24 blur over
+   8 megapixels would cost more than the rest of the scan.
+2. **Detail** — the fine pass, raised 0.90 → 1.20, for the letters.
+
+Both keep the near-paper guard, so clean paper is never shaded and fibre is
+never carved into flecks.
+
+Measured on the four Photo-Doc pages of the reported scan:
+
+| page | edge before | after | ink before | after |
+|---|---|---|---|---|
+| 2 | 9.10 px | **5.56** | 47.3 | 30.1 |
+| 4 | 4.23 px | **3.13** | 66.9 | 34.3 |
+| 6 | 3.81 px | **2.34** | 55.3 | 22.7 |
+| 8 | 4.27 px | **2.78** | 55.0 | 38.0 |
+
+Colour is unmoved (chroma within ±0.5 on three pages, and up on the fourth).
+
+### Tests
+287 in the scanner suite, plus the corpus gate. SC311 pins the edge getting
+steeper, SC311b that local contrast rises — the haze half — and SC312 that
+photographic mid-tones are still left alone.
+
+---
+
 ## [v12.19] — 2026-08-07 — A corpus gate, so a fix has to hold on every page
 
 Asked plainly whether the changes are universal. Honest answer: the

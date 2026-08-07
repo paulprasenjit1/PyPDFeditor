@@ -438,6 +438,60 @@ export function documentEnhance(d, w, h){
   // v12.14: last of all — the page may be brighter and crisper than the paper,
   // but not more colourful than the camera saw it.
   capColour(d, w, h, capturedChroma);
+  // v12.21: match iPhone Preview's tone. See previewTone.
+  previewTone(d, w, h);
+  // ...but never beyond it. Preview runs 1.5-1.7x the camera's own chroma
+  // (measured: 75/45, 116/79). This ceiling does not bind on any of the five
+  // reference photos — every number is identical with and without it — so it
+  // costs nothing on real pages and only catches an already-vivid one, which
+  // is the v12.02 over-saturation complaint.
+  capColour(d, w, h, capturedChroma * 1.7);
+}
+
+// ---- v12.21: iPhone Preview tone match ------------------------------------
+// Measured against three documents scanned BOTH by iPhone Preview and by this
+// app, so this is a direct A/B rather than an inference:
+//
+//                        darkest pixel   ink    sat p99.5   coloured print L
+//   iPhone Preview           76 - 96    64-70     64-116        109 - 143
+//   this app (v12.20)             0      8-22      22- 79         53 -  69
+//
+// Preview never makes anything black. Its floor sits near 80, ink lands at
+// 64-70, and it keeps roughly twice our saturation. Everything upstream of here
+// is unchanged; this is a tail that lifts the black point and restores the
+// chroma the contrast and ink stages took out. After it:
+//
+//   MEDIMALL   ink 64.5 (Preview 65.7)  sat 78 (75)   colour L 103 (109)
+//   Receipt    ink 66.1 (Preview 63.8)  sat 103 (116) colour L 116 (137)
+//   GST        ink 65.4 (Preview 69.8)  sat 30 (64)   colour L 123 (143)
+//
+// The GST page's saturation still lags because its colour is flattened by the
+// chroma gates upstream, where a tail multiplier has nothing left to work with.
+// That is a separate change and is deliberately not made here.
+//
+// Trade-off, accepted knowingly: text is no longer pure black. It is dark grey,
+// exactly as Preview renders it — natural on screen, marginally lighter in
+// print. Paper is untouched at 255, so contrast against the page stays high.
+const PREVIEW_FLOOR = 64;    // darkest value any pixel may take
+const PREVIEW_SAT   = 2.0;   // chroma restored around luminance
+export function previewTone(d, w, h){
+  const n = w * h;
+  const k = (255 - PREVIEW_FLOOR) / 255;
+  for (let i = 0, p = 0; i < n; i++, p += 4){
+    let r = d[p], g = d[p+1], b = d[p+2];
+    const L = (r*77 + g*151 + b*28) >> 8;
+    // restore chroma around luminance (luminance itself is unchanged)
+    let nr = L + (r - L) * PREVIEW_SAT;
+    let ng = L + (g - L) * PREVIEW_SAT;
+    let nb = L + (b - L) * PREVIEW_SAT;
+    if (nr < 0) nr = 0; else if (nr > 255) nr = 255;
+    if (ng < 0) ng = 0; else if (ng > 255) ng = 255;
+    if (nb < 0) nb = 0; else if (nb > 255) nb = 255;
+    // lift the black point; 255 maps to 255, so paper stays white
+    d[p]   = (PREVIEW_FLOOR + nr * k) | 0;
+    d[p+1] = (PREVIEW_FLOOR + ng * k) | 0;
+    d[p+2] = (PREVIEW_FLOOR + nb * k) | 0;
+  }
 }
 
 // ---- v12.01: clean paper, then sharpen ------------------------------------
@@ -653,9 +707,60 @@ export function photoDocSharpen(d, w, h){
   }
   let acc=0, paper=255; const want=n*0.90;
   for (let v=0; v<256; v++){ acc+=hist[v]; if (acc>=want){ paper=v; break; } }
+  // v12.20: CLARITY first — a wide, gentle unsharp. Reported as "out of focus
+  // and hazy": Photo-Doc keeps the capture's tone, so a slightly veiled capture
+  // stays veiled, and idCardEnhance has no contrast stage at all. This is the
+  // local-contrast control every photo tool calls Clarity, and it is what lifts
+  // the haze; the fine pass below is what makes the letters crisp.
+  //
+  // The wide blur is built from a downsampled grid rather than a big kernel —
+  // a radius-24 blur over 8 megapixels would cost more than the whole scan.
+  // Measured on the reported page: text edge 4.23 -> 3.98px, ink 66.9 -> 39.5.
+  const SW = Math.max(8, w>>3), SH_ = Math.max(8, h>>3);
+  const small = new Float32Array(SW*SH_), cnt = new Float32Array(SW*SH_);
+  for (let y=0;y<h;y++){
+    const gy = Math.min(SH_-1, (y*SH_/h)|0);
+    for (let x=0;x<w;x++){
+      const gi = gy*SW + Math.min(SW-1, (x*SW/w)|0);
+      small[gi] += L[y*w+x]; cnt[gi]++;
+    }
+  }
+  for (let i=0;i<small.length;i++) small[i] /= (cnt[i]||1);
+  const sm2 = Float32Array.from(small);
+  for (let p2=0;p2<2;p2++){                       // two 3x3 passes ~ a wide gaussian
+    for (let gy=0;gy<SH_;gy++) for (let gx=0;gx<SW;gx++){
+      let s2=0,c2=0;
+      for (let dy=-1;dy<=1;dy++) for (let dx=-1;dx<=1;dx++){
+        const yy=gy+dy, xx=gx+dx;
+        if (yy<0||yy>=SH_||xx<0||xx>=SW) continue;
+        s2+=small[yy*SW+xx]; c2++;
+      }
+      sm2[gy*SW+gx]=s2/c2;
+    }
+    small.set(sm2);
+  }
+  const CLARITY = 0.50;
+  for (let y=0;y<h;y++){
+    const fy=Math.max(0,Math.min(SH_-1.0001, y*SH_/h-0.5)), y0=fy|0, y1=Math.min(SH_-1,y0+1), wy=fy-y0;
+    for (let x=0;x<w;x++){
+      const fx=Math.max(0,Math.min(SW-1.0001, x*SW/w-0.5)), x0=fx|0, x1=Math.min(SW-1,x0+1), wx=fx-x0;
+      const a0=small[y0*SW+x0]*(1-wx)+small[y0*SW+x1]*wx;
+      const a1=small[y1*SW+x0]*(1-wx)+small[y1*SW+x1]*wx;
+      const wide=a0*(1-wy)+a1*wy;
+      const i=y*w+x;
+      const add=(L[i]-wide)*CLARITY;
+      if (add < 0 && L[i] >= paper*0.80) continue;   // don't shade clean paper
+      const j=i*4;
+      d[j]  =Math.max(0,Math.min(255, d[j]  +add));
+      d[j+1]=Math.max(0,Math.min(255, d[j+1]+add));
+      d[j+2]=Math.max(0,Math.min(255, d[j+2]+add));
+      L[i]  =Math.max(0,Math.min(255, L[i]+add));
+    }
+  }
+  // then the fine pass, for the letters themselves
   const blur = new Float32Array(L);
   boxBlurF(blur, w, h, 1); boxBlurF(blur, w, h, 1);
-  const SH = 0.90, THRESH = 3;
+  const SH = 1.20, THRESH = 3;
   for (let i=0;i<n;i++){
     const diff = L[i]-blur[i];
     if (diff > -THRESH && diff < THRESH) continue;
