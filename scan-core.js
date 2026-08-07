@@ -572,6 +572,7 @@ export function paperCrisp(d, w, h){
   //    coloured text and artwork are left alone, and a smoothstep rather than a
   //    threshold, so nothing posterises.
   const INK_LO=0.10, INK_HI=0.55, INK_PULL=0.85;
+  const INK_CHROMA_MAX=20, INK_CHROMA_SOFT=6;   // biro is ~20; print colour is far above
   for (let i=0;i<n;i++){
     const j=i*4;
     const r=d[j], g=d[j+1], b=d[j+2];
@@ -580,7 +581,12 @@ export function paperCrisp(d, w, h){
     let t = (INK_HI-ratio)/(INK_HI-INK_LO); if (t>1) t=1;
     t = t*t*(3-2*t);
     const chroma = Math.max(r,Math.max(g,b)) - Math.min(r,Math.min(g,b));
-    let neutral = (CHROMA_MAX-chroma)/CHROMA_SOFT;
+    // v12.16: the ink pull keeps its OWN narrow guard. v12.15 widened
+    // CHROMA_MAX to as much as 60 so a shadow's cast could be whitened — and
+    // this step shares the constant, so blue biro at chroma ~20 fell inside it
+    // and was pulled to black. Widening what counts as "a cast on paper" must
+    // not widen what counts as "neutral ink".
+    let neutral = (INK_CHROMA_MAX-chroma)/INK_CHROMA_SOFT;
     if (neutral<=0) continue;
     if (neutral>1) neutral=1;
     const m = t*neutral*INK_PULL;

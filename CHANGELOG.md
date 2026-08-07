@@ -4,6 +4,30 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.16] — 2026-08-07 — The ink pull stops inheriting the paper guard
+
+Reported: blue biro came out black. v12.15 widened `CHROMA_MAX` to as much as 60
+so a shadow's colour cast could be whitened — and the **ink pull shares that
+constant**, so biro at chroma ~20 fell inside it and was pulled to solid black.
+
+Widening what counts as "a cast on paper" must not widen what counts as
+"neutral ink". The ink pull now has its own guard, `INK_CHROMA_MAX = 20`, the
+value it had before v12.15; the paper whitening keeps the page-relative one.
+
+| | pen | chroma | shaded paper |
+|---|---|---|---|
+| photo (truth) | 96,101,118 | 21.6 | — |
+| v12.14 | 87,92,111 | 24.0 | 4.8% |
+| **v12.16** | **86,90,111** | **25.3** | **3.6%** |
+
+Biro keeps its colour and the shadow fix from v12.15 stands.
+
+### Tests
+279 in the scanner suite. SC309/SC310 pin the two guards as separate constants —
+the coupling that caused this.
+
+---
+
 ## [v12.15] — 2026-08-07 — Shadow patches: local paper level, page-relative cast guard
 
 Reported: shadow spots and uneven lighting survive on every page. Measured on
