@@ -4,6 +4,49 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.14] — 2026-08-07 — Undo v12.02's additive lift; cap colour at the capture
+
+Compared against daylight photos of five documents, run through both the
+session-start build and today's:
+
+| | photo | v11.90 (session start) | v12.13 | **v12.14** |
+|---|---|---|---|---|
+| MEDIMALL colour | L 60 c 54 | L 53 c 57 | L 81 c 54 | **L 53 c 53** |
+| Kartick colour | L 65 c 67 | L 65 c 96 | L 111 c 66 | **L 83 c 75** |
+| IgE colour | L 183 c 52 | L 205 c 83 | L 216 c 52 | **L 214 c 58** |
+| total error | — | — | 1.27 | **0.80** |
+
+The pattern: **v11.90 had the brightness right and too much saturation; v12.13
+had the saturation right and was far too bright.** My own change caused the
+second half.
+
+### What I broke, in v12.02
+That release made the three tone lifts **additive** to stop the contrast work
+inflating chroma. It does stop it — but an added lift raises a *dark* colour far
+more than a gain does. A navy logo that should sit at L 53 came out at L 81.
+
+### The fix
+1. The three lifts (white balance, midtone lift, illumination flatten) are
+   **multiplicative again**, exactly as before this session. A dark colour stays
+   dark.
+2. The chroma a gain inflates is **taken back at the end**, against the level
+   the camera actually captured. `measureColour` runs first, before anything
+   touches pixels; `capColour` runs last, after `paperCrisp`. It scales chroma
+   about each pixel's own luminance — hue and brightness untouched — and it
+   **only ever takes back, never boosts**.
+
+The page may be brighter and crisper than the paper. It may not be more
+colourful than the camera saw it.
+
+### Tests
+277 in the scanner suite. SC304–SC308: inflated chroma is taken back to the
+captured level, brightness is unchanged by the cap, a duller page is left alone,
+the capture is measured before any pixel work, and all three lifts are
+multiplicative. SC261/SC262 were rewritten — they pinned the additive behaviour
+this release reverts.
+
+---
+
 ## [v12.13] — 2026-08-07 — The sharpener stops manufacturing grain
 
 Reported as "blackish grain over the entire page", on a five-page scan.

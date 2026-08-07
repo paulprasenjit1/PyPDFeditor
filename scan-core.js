@@ -211,8 +211,39 @@ export function applyAutoContrast(d,w,h){
 //      One gain per channel for the whole image, so no local dark patches.
 //   2) The long-standing gentle 2nd–98th percentile luminance stretch, to
 //      deepen text. No sharpening.
+// v12.14: the colour the CAMERA saw, remembered so the tone work cannot leave
+// the page more colourful than the paper is. Set by colourBalanceCore (the
+// first step to touch pixels) and consumed by documentEnhance (the last).
+// One page is processed at a time in both the worker and the main thread.
+let capturedChroma = 0;
+export function measureColour(d, w, h){
+  const n=w*h;
+  let sum=0, cnt=0;
+  for (let i=0;i<n;i++){
+    const j=i*4;
+    const c = Math.max(d[j],Math.max(d[j+1],d[j+2])) - Math.min(d[j],Math.min(d[j+1],d[j+2]));
+    if (c > 40){ sum+=c; cnt++; }
+  }
+  return cnt > n*0.0005 ? sum/cnt : 0;
+}
+// Scale chroma about each pixel's own luminance — hue and brightness untouched.
+export function capColour(d, w, h, ref){
+  if (!(ref > 0)) return;
+  const now = measureColour(d, w, h);
+  if (!(now > ref)) return;                 // never boosts, only takes back
+  const f = ref/now;
+  const n=w*h;
+  for (let i=0;i<n;i++){
+    const j=i*4;
+    const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+    d[j]  =Math.max(0,Math.min(255, L + (d[j]  -L)*f));
+    d[j+1]=Math.max(0,Math.min(255, L + (d[j+1]-L)*f));
+    d[j+2]=Math.max(0,Math.min(255, L + (d[j+2]-L)*f));
+  }
+}
 export function colourBalanceCore(d,w,h){
   const n=w*h;
+  capturedChroma = measureColour(d, w, h);
   const lum=new Uint8Array(n), hl=new Uint32Array(256);
   for (let i=0;i<n;i++){ const j=i*4; const L=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; lum[i]=L; hl[L]++; }
   let acc=0, thr=0;
@@ -259,14 +290,16 @@ export function colourBalanceCore(d,w,h){
           lg[t]=Math.min(255,Math.round(t*rg));
           lb[t]=Math.min(255,Math.round(t*rb));
         }
+        // v12.14: multiplicative again. v12.02 made this additive to protect
+        // chroma, and it does — but an added lift raises a DARK colour far more
+        // than a gain does, so a navy logo came out 20-45 luma too light. The
+        // gain keeps a dark colour dark; the chroma it inflates is taken back at
+        // the end of documentEnhance, against the captured level.
         for (let i=0;i<n;i++){
           const j=i*4;
-          const r0=lr[d[j]], g0=lg[d[j+1]], b0=lb[d[j+2]];
-          const L0=(r0*77+g0*151+b0*28)>>8;
-          const lift=L0*(gc-1);
-          d[j]  =Math.min(255, r0+lift);
-          d[j+1]=Math.min(255, g0+lift);
-          d[j+2]=Math.min(255, b0+lift);
+          d[j]  =Math.min(255, lr[d[j]]*gc);
+          d[j+1]=Math.min(255, lg[d[j+1]]*gc);
+          d[j+2]=Math.min(255, lb[d[j+2]]*gc);
         }
       }
     }
@@ -291,11 +324,10 @@ export function crispenAndLift(d,w,h){
   // letterhead. On neutral paper the two are identical.
   for (let i=0;i<n;i++){
     const add=(lum[i]-blur[i])*SH;     // high-pass detail (edges/letters)
-    const lift=lum[i]*(LIFT-1);
-    const j=i*4;
-    d[j]  =Math.max(0,Math.min(255, d[j]  +lift+add));
-    d[j+1]=Math.max(0,Math.min(255, d[j+1]+lift+add));
-    d[j+2]=Math.max(0,Math.min(255, d[j+2]+lift+add));
+    const j=i*4;   // v12.14: multiplicative lift, see colourBalanceCore
+    d[j]  =Math.max(0,Math.min(255, d[j]  *LIFT+add));
+    d[j+1]=Math.max(0,Math.min(255, d[j+1]*LIFT+add));
+    d[j+2]=Math.max(0,Math.min(255, d[j+2]*LIFT+add));
   }
 }
 export function boxBlurF(a,w,h,r){
@@ -403,6 +435,9 @@ export function documentEnhance(d, w, h){
   // 3) v12.01: paper to white, then a real sharpen. Both replace gentler
   //    versions that measurement showed were not doing enough — see paperCrisp.
   paperCrisp(d, w, h);
+  // v12.14: last of all — the page may be brighter and crisper than the paper,
+  // but not more colourful than the camera saw it.
+  capColour(d, w, h, capturedChroma);
 }
 
 // ---- v12.01: clean paper, then sharpen ------------------------------------
@@ -752,12 +787,12 @@ export function flattenIllumination(d, w, h){
       const p0=paper[y0*GW+x0]*(1-wx)+paper[y0*GW+x1]*wx;
       const p1=paper[y1*GW+x0]*(1-wx)+paper[y1*GW+x1]*wx;
       const bg=p0*(1-wy)+p1*wy;
-      const lift=Math.max(0, Math.min(AMAX, target-bg))*S;   // brighten only, capped
-      if (lift<=0) continue;
+      let gain=target/Math.max(1,bg);            // v12.14: multiplicative again
+      gain=1+(Math.max(1,Math.min(2.0,gain))-1)*S;
       const j=(y*w+x)*4;
-      d[j]  =Math.min(255, d[j]  +lift);
-      d[j+1]=Math.min(255, d[j+1]+lift);
-      d[j+2]=Math.min(255, d[j+2]+lift);
+      d[j]  =Math.min(255, d[j]  *gain);
+      d[j+1]=Math.min(255, d[j+1]*gain);
+      d[j+2]=Math.min(255, d[j+2]*gain);
     }
   }
 }
