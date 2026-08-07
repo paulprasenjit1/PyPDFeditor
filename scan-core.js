@@ -635,6 +635,37 @@ export function paperCrisp(d, w, h){
   }
 }
 
+// v12.18: crispness for Photo-Doc.
+//
+// idCardEnhance is deliberately gentle — it exists to keep a card's colour
+// true. On a whole page of text that reads soft, so Photo-Doc runs this after
+// it: an unsharp with the same near-paper guard the document path uses, so
+// paper fibre is never carved into flecks. No whitening, no ink deepen — the
+// tone of the page, including any photograph on it, is left exactly as it is.
+export function photoDocSharpen(d, w, h){
+  const n = w*h;
+  if (n < 64) return;
+  const L = new Float32Array(n);
+  const hist = new Uint32Array(256);
+  for (let i=0;i<n;i++){
+    const j=i*4; const l=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8;
+    L[i]=l; hist[l]++;
+  }
+  let acc=0, paper=255; const want=n*0.90;
+  for (let v=0; v<256; v++){ acc+=hist[v]; if (acc>=want){ paper=v; break; } }
+  const blur = new Float32Array(L);
+  boxBlurF(blur, w, h, 1); boxBlurF(blur, w, h, 1);
+  const SH = 0.90, THRESH = 3;
+  for (let i=0;i<n;i++){
+    const diff = L[i]-blur[i];
+    if (diff > -THRESH && diff < THRESH) continue;
+    if (diff < 0 && L[i] >= paper*0.72) continue;   // never carve specks out of paper
+    const add = diff*SH, j=i*4;
+    d[j]  =Math.max(0,Math.min(255, d[j]  +add));
+    d[j+1]=Math.max(0,Math.min(255, d[j+1]+add));
+    d[j+2]=Math.max(0,Math.min(255, d[j+2]+add));
+  }
+}
 // ---- Photo-ID enhance (v10.79) ----
 // For "Photo ID" mode the goal is the OPPOSITE of the document pipeline: keep the
 // portrait LIGHT and the colours TRUE to what the camera saw (no ink-deepen, no

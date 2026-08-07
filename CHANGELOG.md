@@ -4,6 +4,88 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.19] — 2026-08-07 — A corpus gate, so a fix has to hold on every page
+
+Asked plainly whether the changes are universal. Honest answer: the
+page-relative gates and the chroma table are; **v12.09, v12.10 and v12.15 were
+not** — each was tuned on the page that arrived that day and each broke a
+different document.
+
+A single page cannot tell you whether a change is universal. This adds the gate
+that can, and wires it into `npm test`.
+
+### `tests/regress-corpus.mjs`
+Runs the **shipped** pipeline over every camera capture in `corpus/captures/`
+and asserts the four things releases here have broken at least once:
+
+| check | threshold |
+|---|---|
+| paper reaches white | ≥ 250 |
+| text is deepened | ≤ 80% of captured, or ≤ 40 |
+| coloured print keeps its saturation | ≥ 55% of captured |
+| shading is reduced, never added | after ≤ before |
+
+Current build over four real captures:
+
+```
+doc0  paper 255 | ink 48 -> 14 | colour 80 -> 83 | shade 37.4% -> 3.3%
+doc2  paper 255 | ink 44 -> 16 | colour 53 -> 65 | shade 63.6% -> 4.0%
+doc3  paper 255 | ink 33 -> 14 | colour 53 -> 63 | shade 61.6% -> 2.9%
+doc4  paper 255 | ink 43 -> 15 | colour 67 -> 78 | shade 51.9% -> 3.7%
+16 passed, 0 failed
+```
+
+`corpus/captures/` is git-ignored like `corpus/`, and with no captures present
+the suite says so and passes, so it never blocks a machine without them.
+
+**v12.09 would have failed** the colour check; **v12.10** the colour check on
+our own scans; **v12.15** the ink check once biro fell inside the paper guard.
+That is the point: from here, a scanner change has to hold on every page in the
+set before it can ship.
+
+---
+
+## [v12.18] — 2026-08-07 — Photo-Doc, and it is sharper
+
+**Renamed** Photo → **Photo-Doc**, and it now runs a sharpening pass after
+`idCardEnhance`: unsharp at 0.90 with the same near-paper guard the document
+path uses, so paper fibre is never carved into flecks. No whitening, no ink
+deepen — the page's tone, including any photograph on it, is untouched.
+
+| | text edge | photo mid-tones |
+|---|---|---|
+| captured | 3.48 px | 74.3% |
+| Photo-Doc v12.17 | 3.00 px | 29.5% |
+| **Photo-Doc v12.18** | **2.68 px** | 28.2% |
+
+### Document mode and the faded photograph — measured, not fixed
+A page carrying a greyscale photograph loses its mid-tones in Document mode.
+Stage by stage on the reported page:
+
+```
+captured           photo mid-tones 74.3%   mean 138   >250  0.0%
++ colourBalance                    33.8%        152        3.9%
++ flattenIllum                     17.5%        172       20.8%
++ documentEnhance                   7.8%        175       61.0%
+```
+
+All three stages contribute — this is what a document scanner does, and it is
+the same behaviour that makes text crisp.
+
+A per-block "this is a photograph" detector was prototyped and **rejected**: on
+that page it flagged 28% of photograph blocks but also 15% of *blank paper*
+blocks, because the capture's shadow gradient puts blank paper in the same
+mid-tone band. Shipping it would have brought back the shadow problem in a new
+form. For a page with a photograph on it, **Photo-Doc is the mode** — which is
+now what it is for.
+
+### Tests
+286 in the scanner suite. SC311–SC314: Photo-Doc sharpens a soft edge (steepest
+step 19 → 27), leaves photographic mid-tones alone, keeps the no-grain guard,
+and only Photo-Doc gets the pass.
+
+---
+
 ## [v12.17] — 2026-08-07 — "Photo": the colour-true treatment, for a whole page
 
 The Photo ID path was measured as matching the paper — true colour, good

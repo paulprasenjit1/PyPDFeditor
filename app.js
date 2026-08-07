@@ -5,7 +5,7 @@ import * as mupdf from "./vendor/mupdf/mupdf.js";
 // NOTE: keep this on ONE line. tests/harness.mjs and tests/scenario-tests.mjs
 // evaluate app.js by stripping `^import .*$` line by line, so a wrapped import
 // statement leaves a dangling `... } from "./scan-core.js";` behind.
-import { warpCore, colourBalanceCore, detectQuad, detectQuadRobust, frameStats, sharpEnough, inkFraction, looksBlank, toGreyscale, toBlackAndWhite, flattenIllumination, documentEnhance, idCardEnhance, autoCaptureReady, quadMaxCornerShift, AUTO } from "./scan-core.js";
+import { warpCore, colourBalanceCore, detectQuad, detectQuadRobust, frameStats, sharpEnough, inkFraction, looksBlank, toGreyscale, toBlackAndWhite, flattenIllumination, documentEnhance, idCardEnhance, photoDocSharpen, autoCaptureReady, quadMaxCornerShift, AUTO } from "./scan-core.js";
 
 const $ = id => document.getElementById(id);
 // v11.18: belt-and-braces dark keyboard — set color-scheme on the root via the
@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "12.17";
+const APP_BUILD = "12.19";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -7279,7 +7279,7 @@ $("natToggle").onclick = ()=>{
   scanNatural = true;
   scanEnhance = false;                        // no whitening, no ink deepen
   refreshTypeSeg(); renderCropPreview();
-  setStatus("Photo: the page is kept as the camera saw it — true colour, no whitening.","ok");
+  setStatus("Photo-Doc: the page as the camera saw it — true colour, no whitening, sharpened for reading.","ok");
 };
 function setScanEnhance(on){
   scanEnhance = !!on;
@@ -7514,7 +7514,10 @@ function renderCropPreview(){
   const ctx=ph.getContext("2d",{willReadFrequently:true});
   ctx.drawImage(capFrame,0,0,ph.width,ph.height);
   const im=ctx.getImageData(0,0,ph.width,ph.height);
-  if (scanIdMode || scanNatural){ idCardEnhance(im.data, im.width, im.height); ctx.putImageData(im,0,0); return; }
+  if (scanIdMode || scanNatural){
+    idCardEnhance(im.data, im.width, im.height);
+    if (scanNatural) photoDocSharpen(im.data, im.width, im.height);
+    ctx.putImageData(im,0,0); return; }
   colourBalanceCore(im.data, im.width, im.height);
   if (scanEnhance){ flattenIllumination(im.data, im.width, im.height);
     documentEnhance(im.data, im.width, im.height); }   // natural Lens polish (v10.75)
@@ -7588,6 +7591,7 @@ async function commitScanPage(frame, q, opts){
       out = warpPerspective(frame, q, Q.maxDim);
       if (scanNatural){
         idCardEnhance(out.data, out.width, out.height);       // v12.17: true colour
+        photoDocSharpen(out.data, out.width, out.height);     // v12.18: clarity
       } else {
         colourBalanceCore(out.data, out.width, out.height);
         if (scanEnhance){ flattenIllumination(out.data, out.width, out.height);
