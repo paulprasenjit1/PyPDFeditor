@@ -4,6 +4,35 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.22] — 2026-08-07 — Photo-Doc removed
+
+Requested by the owner. Type is back to two values, **Document** and **Photo
+ID**, which is what it was before v12.17.
+
+Removed, in full rather than hidden behind a disabled button:
+
+| where | what |
+|---|---|
+| `index.html` | the `natToggle` button |
+| `app.js` | `scanNatural` state, its reset, the `natToggle` handler, its branch in `scanType()`, `refreshTypeSeg()`, `renderCropPreview()` and the capture fallback |
+| `scan-worker.js` | the `mode === "natural"` branch |
+| `scan-core.js` | `photoDocSharpen` (82 lines) |
+| both | the now-unused `mode` argument threaded through `processPageOffThread` |
+
+**Deliberately not touched:** `idCardEnhance` is shared with Photo ID and is
+unchanged. The whole Document path — including v12.21's `previewTone` — is
+unchanged. Photo ID's compositing onto A4, its two-side capture and its status
+text are unchanged.
+
+The removal is verified rather than assumed. `SC125b/c/d` now assert that no
+trace of Photo-Doc survives in the worker, the app or the markup — a dead
+branch left behind could still route a page down a path the UI can no longer
+select — and that Photo ID still runs its own colour-true treatment.
+
+`SC311`–`SC314` (the v12.18 clarity tests) are gone with the code they tested.
+
+995 tests pass, corpus gate 20/20.
+
 ## [v12.21] — 2026-08-07 — Document: iPhone Preview's colour
 
 Reported: Document scans still don't look like iPhone Preview's. This time the
