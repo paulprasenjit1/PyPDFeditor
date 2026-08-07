@@ -4,6 +4,117 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.12] — 2026-08-07 — Checked against every sample, not the latest one
+
+Fair criticism, and correct: v12.08 through v12.11 were each tuned on whichever
+file had just been sent, and each one broke a different document. v12.09 spared
+the handwriting along with the letterhead; v12.10 spared neither; both were
+"measured", on one file.
+
+So this release measures the whole sample set: **34 page images** recovered from
+every scan PDF in the project — the owner's own scans back to v11.73, three
+iPhone Preview scans of the same documents, and the source photos. 24 of them
+carry coloured ink.
+
+### What the sweep found
+The purely proportional gate from v12.11 (`0.60×cMax` to `0.95×cMax`) fails on
+**one** page: a near-monochrome pharmacy bill whose most saturated ink is only
+chroma 27. At 0.60× the gate collapses onto ordinary ink at 21, and its print
+would have been lightened as though it were a logo — the v12.09 failure again,
+on a document nobody had looked at.
+
+### The fix: a floor under the gate
+```js
+const CH_LO = Math.max(28, cMax*0.60);
+const CH_HI = Math.max(CH_LO + 8, cMax*0.95);
+```
+Across the sample set biro and printed black measure **15–24**, so nothing that
+is merely ink reaches 28. With the floor the gate separates ink from printed
+colour on **24 of 24** pages.
+
+| | ink spared | printed colour spared |
+|---|---|---|
+| every page in the set | **0%** | **100%** |
+
+Output on the reference page is unchanged from v12.11 — navy 48.5, pen 72.6,
+black text 5.0 — because the floor only binds on pages the earlier gate got
+wrong.
+
+### The check is now permanent
+SC293–SC297 carry the measured profile of all 20 coloured pages (cMax, ink
+chroma, print chroma) and assert against the **shipped formula, read out of
+scan-core.js**: ink spared on no page, printed colour spared on every page. Two
+of them re-run the failed gates as tests —
+
+- SC296: the v12.09 gate (18–40) spares handwriting → caught
+- SC297: the v12.10 gate (35–70) spares nothing on our own scans → caught
+
+Either release would have failed this suite before it shipped. That is the point
+of it.
+
+### Tests
+267 in the scanner suite (was 262). All eighteen suites pass.
+
+---
+
+## [v12.11] — 2026-08-07 — The gate is read off the page, not off a reference image
+
+v12.10 did not fix it, and the device output shows why. Measured on real scans
+of the same prescription:
+
+| build | navy logo (luma) | pen strokes (median) |
+|---|---|---|
+| v12.07 | 38.7 | 74.0 |
+| v12.09 | 73.8 | 90.7 ← writing faded |
+| v12.10 | **22.6** ← darker than ever | 72.6 |
+
+### The mistake, twice
+Both ramps were calibrated against an **iPhone Preview** scan, where the
+letterhead measures chroma 66 and the biro 24. Our own pipeline does not produce
+those numbers — by the time `applyAutoContrast` runs, the same letterhead is
+31–38 and the same biro 20–22:
+
+```
+image             ink chroma p95    biro    logo
+Preview                 83           24      66
+device v12.07           40           22      34
+device v12.09           55           19      38
+device v12.10           39           20      31
+```
+
+So 18–40 spared the handwriting along with the logo, and 35–70 spared neither.
+Both were measured — on the wrong image. Twice.
+
+### What travels between captures
+Not the absolute chroma, but the **relationship**: on any page, printed colour
+is the most saturated ink there is and biro sits well below it. So the ramp is
+now derived from the page's own **95th-percentile ink chroma** (`cMax`), running
+`0.60 × cMax` to `0.95 × cMax`. Applied to the four images above:
+
+| | gate | biro spared | logo spared |
+|---|---|---|---|
+| device v12.07 | 24.0 – 38.0 | **0%** | 71% |
+| device v12.10 | 23.4 – 37.0 | **0%** | 56% |
+| Preview | 49.8 – 78.8 | **0%** | 56% |
+
+It lands between the two every time, whatever the capture looked like.
+`documentEnhance`'s ink deepen computes the same measure, so the two cannot
+drift apart. A page with no coloured ink (`cMax < 20`) spares nothing at all and
+the curve is exactly as it was.
+
+### Tests
+262 in the scanner suite. The old SC288 pinned the two constants — it is
+replaced by tests that pin the *derivation*, and SC289–SC292 run a page whose
+colours sit where OUR pipeline puts them rather than where Preview does: the
+logo is spared, the biro lands exactly where a neutral grey of the same
+brightness lands (which is what "not spared" means), black print takes the curve
+in full, and a black-and-white page is untouched.
+
+Device-untested: the gate self-calibrates, so it should hold on a real capture,
+but only a scan can confirm it.
+
+---
+
 ## [v12.10] — 2026-08-07 — The colour ramp was catching the handwriting
 
 Reported on a v12.09 scan: the pipeline had been ruined. It had — the

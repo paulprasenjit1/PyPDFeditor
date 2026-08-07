@@ -130,18 +130,56 @@ export function applyAutoContrast(d,w,h){
   // contrast recovery at all, so a pale stamp on a dim capture would stay as
   // washed out as the camera saw it. 0.25 keeps some of that safety net.
   const COLOUR_KEEP = 0.25;      // share of the darkening a fully coloured pixel takes
-  // v12.10: the ramp was 18-40 and it caught the HANDWRITING. Measured chroma on
-  // a real prescription:
   //
-  //   black print   3      blue pen  24      navy logo  67      red subtitle  87
+  // v12.11: the ramp is read off THIS PAGE, not from constants.
   //
-  // At 18-40 a pen stroke was spared 27% of the darkening as though it were a
-  // logo, and the writing — which on a prescription IS the content — faded from
-  // a median of 72 to 95. Starting the ramp at 35 puts the pen back on the full
-  // curve while a logo, which is two to three times more saturated, keeps the
-  // sparing. Same input, three builds: pen median 71.8 (v12.07), 95.0 (v12.09),
-  // 69.1 here; navy logo 8,9,53 / 62,68,121 / 47,54,107.
-  const CH_LO = 35, CH_HI = 70;  // neutral and pen ink below, print colour above
+  // v12.08 fixed the thresholds at 18-40 and v12.10 moved them to 35-70, both
+  // calibrated against an iPhone Preview scan where the letterhead measures
+  // chroma 66 and the biro 24. Our own pipeline does not produce those numbers:
+  // by the time this runs, the same letterhead is 31-38 and the same biro 20-22.
+  // So 18-40 spared the handwriting along with the logo (it faded), and 35-70
+  // spared neither (the logo went darker than it had ever been). Both were
+  // measured — on the wrong image.
+  //
+  // What travels between captures is the RELATIONSHIP: on any page, printed
+  // colour is the most saturated ink there is, and biro is well below it.
+  // Measured on four images, our own and Preview's:
+  //
+  //     image            ink chroma p95   gate 60%   biro   logo
+  //     Preview                83            50        24     66
+  //     device v12.07          40            24        22     34
+  //     device v12.09          55            33        19     38
+  //     device v12.10          39            23        20     31
+  //
+  // The gate lands between the two every time. So the page's own 95th-percentile
+  // ink chroma sets the ramp, and a mid-tone logo is spared while ink is not.
+  const inkTop = Math.max(1, Math.round(hi*0.75));
+  const chHist = new Uint32Array(256);
+  let inkN = 0;
+  for (let i=0;i<n;i++){
+    const j=i*4;
+    if (((d[j]*77+d[j+1]*151+d[j+2]*28)>>8) >= inkTop) continue;
+    const c = Math.max(d[j],Math.max(d[j+1],d[j+2])) - Math.min(d[j],Math.min(d[j+1],d[j+2]));
+    chHist[c]++; inkN++;
+  }
+  let cMax = 0;
+  if (inkN > 64){
+    let acc2 = 0;
+    for (let c=255;c>=0;c--){ acc2 += chHist[c]; if (acc2 >= inkN*0.05){ cMax = c; break; } }
+  }
+  // A page with no coloured ink on it has nothing to spare: leave the curve
+  // exactly as it was rather than inventing a gate out of noise.
+  //
+  // v12.12: with a FLOOR under it. Checked across every scan in the project's
+  // sample set — 24 pages with coloured ink — the purely proportional gate broke
+  // on one of them: a near-monochrome pharmacy bill whose most saturated ink is
+  // only chroma 27, so 0.60x collapsed the gate onto ordinary ink at 21 and the
+  // print would have been spared as though it were a logo. Biro and printed
+  // black measure 15-24 across the whole set, so nothing that is merely ink ever
+  // reaches 28. With the floor, the gate separates ink from print colour on
+  // 24 of 24.
+  const CH_LO = cMax >= 20 ? Math.max(28, cMax*0.60) : Infinity;
+  const CH_HI = cMax >= 20 ? Math.max(CH_LO + 8, cMax*0.95) : Infinity;
   for (let i=0;i<n;i++){
     const j=i*4;
     const r=d[j], g=d[j+1], b=d[j+2];
@@ -289,6 +327,28 @@ export function boxBlurF(a,w,h,r){
 //   3) a light 1px luminance unsharp for crisp glyph edges.
 export function documentEnhance(d, w, h){
   const n = w*h;
+  // v12.11: this page's own ink-chroma ceiling, the same measure applyAutoContrast
+  // uses. Printed colour sits near it; biro sits well below.
+  let inkLo = Infinity, inkHi = Infinity;
+  {
+    const lh = new Uint32Array(256);
+    for (let i=0;i<n;i++){ const j=i*4; lh[(d[j]*77+d[j+1]*151+d[j+2]*28)>>8]++; }
+    let acc=0, paper=255;
+    for (let t=255;t>=0;t--){ acc+=lh[t]; if (acc>=n*0.10){ paper=t; break; } }
+    const top = Math.max(1, Math.round(paper*0.75));
+    const ch = new Uint32Array(256); let cnt=0;
+    for (let i=0;i<n;i++){
+      const j=i*4;
+      if (((d[j]*77+d[j+1]*151+d[j+2]*28)>>8) >= top) continue;
+      ch[Math.max(d[j],Math.max(d[j+1],d[j+2])) - Math.min(d[j],Math.min(d[j+1],d[j+2]))]++;
+      cnt++;
+    }
+    if (cnt > 64){
+      let a2=0, cMax=0;
+      for (let c=255;c>=0;c--){ a2+=ch[c]; if (a2>=cnt*0.05){ cMax=c; break; } }
+      if (cMax >= 20){ inkLo = Math.max(28, cMax*0.60); inkHi = Math.max(inkLo + 8, cMax*0.95); }
+    }
+  }
   const L = new Float32Array(n);
   for (let i=0;i<n;i++){ const j=i*4; L[i]=(d[j]*77+d[j+1]*151+d[j+2]*28)>>8; }
   // 4-neighbour gradient magnitude (cheap edge proxy)
@@ -331,10 +391,11 @@ export function documentEnhance(d, w, h){
     const Li=(r*77+g*151+b*28)>>8;
     let deep = Math.max(0, (150-Li)/150) * 0.18;
     if (deep>0){
-      // v12.10: the same ramp as the stretch above, for the same reason — a pen
-      // stroke is ink and should deepen like ink.
+      // v12.11: the same page-relative gate as applyAutoContrast, for the same
+      // reason — printed colour is the most saturated ink on the page and biro
+      // is well below it, whatever the capture looked like.
       const chroma = Math.max(r,Math.max(g,b)) - Math.min(r,Math.min(g,b));
-      let col = (chroma-35)/35;
+      let col = (chroma - inkLo) / Math.max(1, inkHi - inkLo);
       if (col > 0) deep *= (1 - Math.min(1,col)*0.60);
       d[j]=r*(1-deep); d[j+1]=g*(1-deep); d[j+2]=b*(1-deep);
     }
