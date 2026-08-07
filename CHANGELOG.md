@@ -4,6 +4,46 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.15] — 2026-08-07 — Shadow patches: local paper level, page-relative cast guard
+
+Reported: shadow spots and uneven lighting survive on every page. Measured on
+that scan — **13–22% of each page reads as shaded paper** (luma 170–245) while
+the page's own paper level is 255.
+
+Two causes, both mine:
+
+1. **One global paper level.** A patch whose paper sits at 200 is only ~30%
+   whitened against a global 255, so it stays a grey wash. The whitening now
+   uses a **local** level — an 88th-percentile grid (up to 24×24), smoothed,
+   floored at 60% of the global level so a genuinely dark region can never be
+   read as paper. This is what a flatbed's background removal does.
+
+2. **A fixed colour guard.** A shadow carries a cast: 65% of the shaded pixels
+   measured chroma ≥ 20, so v12.01's fixed guard refused to whiten them. Printed
+   colour is far more saturated than a cast, so the guard is now relative to the
+   page's own ink chroma ceiling — `clamp(0.45 × cCeil, 20, 60)`.
+
+Measured with the whitening alone, on the reported pages:
+
+| page | shaded paper |
+|---|---|
+| 1 | 13.7% → 8.0% |
+| 2 | 21.9% → 11.4% |
+| 4 | 12.6% → 4.9% |
+
+Printed colour is untouched throughout — mean shift **0.0/255** on the pale
+yellow letterhead band and on the MEDIMALL navy/red, the two things the fixed
+guard existed to protect. No seams: in blank paper the largest row-to-row step
+is 0.24 and column-to-column 0.41 (a visible seam would be > 3).
+
+Blown highlights are not recoverable — where the capture clipped to white there
+is nothing left to restore.
+
+### Tests
+277 in the scanner suite, all passing unchanged.
+
+---
+
 ## [v12.14] — 2026-08-07 — Undo v12.02's additive lift; cap colour at the capture
 
 Compared against daylight photos of five documents, run through both the

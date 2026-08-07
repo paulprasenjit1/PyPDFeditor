@@ -477,12 +477,79 @@ export function paperCrisp(d, w, h){
   let acc=0, paper=255; const want=n*0.90;
   for (let v=0; v<256; v++){ acc+=hist[v]; if (acc>=want){ paper=v; break; } }
   if (paper < 120) return;                 // dark / photographic page: leave it
+  // v12.15: a LOCAL paper level, the way a flatbed's background removal works.
+  // One global level cannot clear a shadow: a patch whose paper sits at 200 is
+  // only ~30% whitened against a global 255, so it stays as a grey wash. On the
+  // reported scans 13-22% of each page read as shaded paper. The grid is the
+  // 88th percentile of each cell (an inked cell is still mostly paper, so the
+  // upper percentile tracks the sheet, not the print), smoothed, and floored at
+  // 60% of the global level so a genuinely dark region can never be mistaken
+  // for paper.
+  const GW = Math.max(4, Math.min(24, w>>5)), GH = Math.max(4, Math.min(24, h>>5));
+  const cells = GW*GH;
+  const cellHist = new Uint32Array(256);
+  const grid = new Float32Array(cells);
+  for (let gy=0; gy<GH; gy++){
+    const y0 = (gy*h/GH)|0, y1 = ((gy+1)*h/GH)|0;
+    for (let gx=0; gx<GW; gx++){
+      const x0 = (gx*w/GW)|0, x1 = ((gx+1)*w/GW)|0;
+      cellHist.fill(0);
+      let cnt = 0;
+      for (let y=y0; y<y1; y++){
+        const row = y*w;
+        for (let x=x0; x<x1; x++){ cellHist[L[row+x]|0]++; cnt++; }
+      }
+      let a2 = 0, v = 255;
+      const want2 = cnt*0.88;
+      for (let t=0; t<256; t++){ a2 += cellHist[t]; if (a2 >= want2){ v = t; break; } }
+      grid[gy*GW+gx] = Math.max(v, paper*0.60);
+    }
+  }
+  // one smoothing pass, so a cell boundary cannot show as a seam
+  const sm = Float32Array.from(grid);
+  for (let gy=0; gy<GH; gy++) for (let gx=0; gx<GW; gx++){
+    let s2=0, c2=0;
+    for (let dy=-1; dy<=1; dy++) for (let dx=-1; dx<=1; dx++){
+      const yy=gy+dy, xx=gx+dx;
+      if (yy<0||yy>=GH||xx<0||xx>=GW) continue;
+      s2 += grid[yy*GW+xx]; c2++;
+    }
+    sm[gy*GW+gx] = s2/c2;
+  }
+  const paperAt = (x,y)=>{
+    const fx = Math.max(0, Math.min(GW-1.0001, x*GW/w - 0.5));
+    const fy = Math.max(0, Math.min(GH-1.0001, y*GH/h - 0.5));
+    const x0=fx|0, y0=fy|0, x1=Math.min(GW-1,x0+1), y1=Math.min(GH-1,y0+1);
+    const wx=fx-x0, wy=fy-y0;
+    const a0=sm[y0*GW+x0]*(1-wx)+sm[y0*GW+x1]*wx;
+    const a1=sm[y1*GW+x0]*(1-wx)+sm[y1*GW+x1]*wx;
+    return a0*(1-wy)+a1*wy;
+  };
   // 1) whiten neutral paper on a smooth ramp
-  const LO=0.72, HI=0.90, CHROMA_MAX=20, CHROMA_SOFT=6;
+  // v12.15: the colour guard is relative to the page too. A shadow on white
+  // paper carries a cast — on the reported scan 65% of the shaded pixels had
+  // chroma >= 20, so the fixed guard refused to whiten them and the wash stayed.
+  // Printed colour is far more saturated than a cast, so the page's own ink
+  // chroma ceiling separates them: below 45% of it is a cast, above it is print.
+  let cCeil = 0;
+  {
+    const inkTop2 = Math.max(1, Math.round(paper*0.75));
+    const ch2 = new Uint32Array(256); let cnt2 = 0;
+    for (let i=0;i<n;i++){
+      if (L[i] >= inkTop2) continue;
+      const j=i*4;
+      ch2[Math.max(d[j],Math.max(d[j+1],d[j+2])) - Math.min(d[j],Math.min(d[j+1],d[j+2]))]++;
+      cnt2++;
+    }
+    if (cnt2 > 64){ let a3=0; for (let c=255;c>=0;c--){ a3+=ch2[c]; if (a3>=cnt2*0.05){ cCeil=c; break; } } }
+  }
+  const LO=0.72, HI=0.92;
+  const CHROMA_MAX = Math.max(20, Math.min(60, cCeil*0.45));
+  const CHROMA_SOFT = Math.max(4, CHROMA_MAX*0.30);
   for (let i=0;i<n;i++){
     const j=i*4;
     const r=d[j], g=d[j+1], b=d[j+2];
-    const ratio = L[i]/paper;
+    const ratio = L[i]/Math.max(1, paperAt(i%w, (i/w)|0));
     if (ratio <= LO) continue;                       // ink: untouched
     let t = (ratio-LO)/(HI-LO); if (t>1) t=1;
     t = t*t*(3-2*t);                                 // smoothstep
