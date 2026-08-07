@@ -4,6 +4,32 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.17] — 2026-08-07 — "Photo": the colour-true treatment, for a whole page
+
+The Photo ID path was measured as matching the paper — true colour, good
+detail, reasonable size. The Document path is a *document scanner*: it whitens
+the sheet and deepens the ink, which is what makes text crisp and what makes the
+page read as high-contrast rather than natural.
+
+Both are legitimate; they are different jobs. So instead of tuning one to be the
+other for a seventh release, **Photo** is now a third page Type:
+
+| Type | treatment |
+|---|---|
+| Document | whiten, flatten illumination, deepen ink, sharpen |
+| **Photo** | **`idCardEnhance` on the full page — colour-true, no whitening, no ink deepen** |
+| Photo ID | the same, on a card composited onto a white A4 |
+
+It runs off-thread like the others, and the crop preview shows the treatment it
+will actually apply. Photo and Photo ID are mutually exclusive; Document remains
+the default and is unchanged.
+
+### Tests
+282 in the scanner suite. SC123/SC125 were rewritten for the third value;
+SC125b–SC125d pin the worker path, the preview, and the exclusivity.
+
+---
+
 ## [v12.16] — 2026-08-07 — The ink pull stops inheriting the paper guard
 
 Reported: blue biro came out black. v12.15 widened `CHROMA_MAX` to as much as 60

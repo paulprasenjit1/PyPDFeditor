@@ -20,12 +20,12 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "12.16";
+const APP_BUILD = "12.17";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
     "scanCam","scanShot","scanCancel","scanDone","scanThumbs","torchBtn",
-    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","enhToggle","idToggle","cropReset","cropRetake","cropUse",
+    "scanCrop","cropPoly","g0","g1","g2","g3","h0","h1","h2","h3","enhToggle","natToggle","idToggle","cropReset","cropRetake","cropUse",
     "autoBtn","paperBtn","idBothToggle","idSingleToggle","paperVal","camBoot",
     "whiteBtn","imgPlaceBtn","insImgInput","formBtn",
     "ge0","ge1","ge2","ge3","he0","he1","he2","he3"];
@@ -5725,6 +5725,9 @@ const scanQuality = "std";
 // with card framing, which is a surprising way to lose a page.
 let scanEnhance = true;       // "Document": flatten illumination so paper reads white
 let scanIdMode = false;       // v10.79 "Photo ID": light, colour-true card placed on a white A4 page
+// v12.17: "Photo" — the Photo ID treatment on a FULL page. Colour-true, no
+// whitening, no ink deepen; the look the owner measured as matching the paper.
+let scanNatural = false;
 try { localStorage.removeItem("scanEnhance"); localStorage.removeItem("scanIdMode"); } catch(e){}
 // v11.32 auto capture. v11.81: OFF by default and no longer persisted. It fires
 // the shutter by itself once the page looks framed and still, which is faster
@@ -5737,6 +5740,7 @@ try { localStorage.removeItem("scanAuto"); } catch(e){}
 function resetScanDefaults(){
   scanEnhance = true;         // Type = Document
   scanIdMode  = false;
+  scanNatural = false;
   scanAuto    = false;        // Auto off
   idTwoSide   = true;         // v11.82: Photo ID captures both sides
 }
@@ -5931,7 +5935,7 @@ function getScanWorker(){
   }
   return scanWorker;
 }
-function processPageOffThread(srcIm, quad, filter, maxDim, enhance){
+function processPageOffThread(srcIm, quad, filter, maxDim, enhance, mode){
   const w = getScanWorker();
   if (!w) return Promise.resolve(null);
   return new Promise((resolve)=>{
@@ -5950,7 +5954,7 @@ function processPageOffThread(srcIm, quad, filter, maxDim, enhance){
     w.addEventListener("message", onMsg);
     w.addEventListener("error", onErr, { once:true });
     // transfer the pixels (zero-copy); the canvas still holds its own copy
-    w.postMessage({ id, buf:srcIm.data.buffer, w:srcIm.width, h:srcIm.height, quad, filter, maxDim, enhance },
+    w.postMessage({ id, buf:srcIm.data.buffer, w:srcIm.width, h:srcIm.height, quad, filter, maxDim, enhance, mode },
                   [srcIm.data.buffer]);
   });
 }
@@ -7251,7 +7255,7 @@ try { localStorage.removeItem("scanQuality"); } catch(e){}
 // v11.80: Type has two values, Document and Photo ID. "Plain" is gone — it was
 // the unprocessed capture, and every document scan now gets the illumination
 // flattening and polish that used to be called Whiten. Document is the default.
-function scanType(){ return scanIdMode ? "id" : "document"; }
+function scanType(){ return scanIdMode ? "id" : (scanNatural ? "natural" : "document"); }
 function refreshTypeSeg(){
   const t = scanType();
   const set = (id, on)=>{
@@ -7260,12 +7264,22 @@ function refreshTypeSeg(){
     b.setAttribute("aria-pressed", String(on));
   };
   set("enhToggle", t === "document");
+  set("natToggle", t === "natural");
   set("idToggle",  t === "id");
 }
 try { refreshTypeSeg(); } catch(e){}
 $("enhToggle").onclick = ()=>{
   if (scanIdMode) setScanIdMode(false);      // also clears any held front side
+  scanNatural = false;
   setScanEnhance(true);
+};
+// v12.17: Photo — the colour-true treatment, on the whole page.
+$("natToggle").onclick = ()=>{
+  if (scanIdMode) setScanIdMode(false);
+  scanNatural = true;
+  scanEnhance = false;                        // no whitening, no ink deepen
+  refreshTypeSeg(); renderCropPreview();
+  setStatus("Photo: the page is kept as the camera saw it — true colour, no whitening.","ok");
 };
 function setScanEnhance(on){
   scanEnhance = !!on;
@@ -7279,6 +7293,7 @@ function setScanEnhance(on){
 $("idToggle").onclick = ()=> setScanIdMode(true);
 function setScanIdMode(on){
   scanIdMode = !!on;
+  if (scanIdMode) scanNatural = false;
   try { localStorage.setItem("scanIdMode", scanIdMode ? "1" : "0"); } catch(e){}
   if (scanIdMode){            // Whiten/document polish would fight the ID look
     scanEnhance = false;
@@ -7499,7 +7514,7 @@ function renderCropPreview(){
   const ctx=ph.getContext("2d",{willReadFrequently:true});
   ctx.drawImage(capFrame,0,0,ph.width,ph.height);
   const im=ctx.getImageData(0,0,ph.width,ph.height);
-  if (scanIdMode){ idCardEnhance(im.data, im.width, im.height); ctx.putImageData(im,0,0); return; }
+  if (scanIdMode || scanNatural){ idCardEnhance(im.data, im.width, im.height); ctx.putImageData(im,0,0); return; }
   colourBalanceCore(im.data, im.width, im.height);
   if (scanEnhance){ flattenIllumination(im.data, im.width, im.height);
     documentEnhance(im.data, im.width, im.height); }   // natural Lens polish (v10.75)
@@ -7567,12 +7582,17 @@ async function commitScanPage(frame, q, opts){
     // preferred path: warp + filter in the worker (UI stays responsive)
     const sctx = frame.getContext("2d",{willReadFrequently:true});
     out = await processPageOffThread(
-      sctx.getImageData(0,0,frame.width,frame.height), q, cropFilter, Q.maxDim, scanEnhance);
+      sctx.getImageData(0,0,frame.width,frame.height), q, cropFilter, Q.maxDim, scanEnhance,
+      scanNatural ? "natural" : "document");
     if (!out){                                 // fallback: same math, main thread
       out = warpPerspective(frame, q, Q.maxDim);
-      colourBalanceCore(out.data, out.width, out.height);
-      if (scanEnhance){ flattenIllumination(out.data, out.width, out.height);
-        documentEnhance(out.data, out.width, out.height); }   // natural Lens polish (v10.75)
+      if (scanNatural){
+        idCardEnhance(out.data, out.width, out.height);       // v12.17: true colour
+      } else {
+        colourBalanceCore(out.data, out.width, out.height);
+        if (scanEnhance){ flattenIllumination(out.data, out.width, out.height);
+          documentEnhance(out.data, out.width, out.height); } // natural Lens polish (v10.75)
+      }
     }
     // v11.67: store the page the way the user asked for. Photo ID mode keeps
     // its own colour-true treatment and is deliberately not touched here.
