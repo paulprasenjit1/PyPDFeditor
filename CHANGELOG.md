@@ -4,6 +4,51 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.10] — 2026-08-07 — The colour ramp was catching the handwriting
+
+Reported on a v12.09 scan: the pipeline had been ruined. It had — the
+handwriting faded, and on a prescription the handwriting **is** the content.
+
+Measured on the same input through three builds:
+
+| | navy logo | pen strokes (median) | black text |
+|---|---|---|---|
+| v12.07 | 8,9,53 | **71.8** | 5.0 |
+| v12.09 | 62,68,121 | **95.0** | 7.0 |
+| **v12.10** | 47,54,107 | **69.9** | 5.5 |
+
+### The mistake
+v12.08's chroma ramp ran 18 → 40. Measured chroma on a real prescription:
+
+```
+black print   3       blue pen  24       navy logo  67       red subtitle  87
+```
+
+A pen stroke at 24 sat inside that ramp and was spared 27% of the contrast
+darkening **as though it were a logo**. Blue biro is not print colour — it is
+ink, and it has to darken like ink. The letterhead is two to three times more
+saturated, so the two separate cleanly; the ramp was simply drawn in the wrong
+place.
+
+The ramp is now **35 → 70**, and `documentEnhance`'s ink deepen uses the same
+figures — otherwise the pen would still be spared there.
+
+### Result
+Pen strokes are back to v12.07 darkness (69.9 against 71.8 — a shade darker),
+black text is unmoved at 5.5, and coloured print keeps most of what v12.08/09
+recovered: navy 47,54,107 against v12.07's 8,9,53.
+
+The lesson is the one this project keeps relearning: a gate tuned on one thing
+(a letterhead) has to be measured against everything else it will catch. The
+chroma of the handwriting was never checked, and it was one measurement away.
+
+### Tests
+258 in the scanner suite. SC288b pins that the ramp starts above pen ink,
+SC288c that it still covers printed colour, and SC288d that the ink deepen uses
+the same gate — the three facts that, taken together, are this bug.
+
+---
+
 ## [v12.09] — 2026-08-06 — Coloured ink at 25%, after seeing all three side by side
 
 `COLOUR_KEEP` 0.40 → **0.25**. One constant; nothing else in the pipeline moved.

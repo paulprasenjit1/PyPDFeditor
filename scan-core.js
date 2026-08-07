@@ -130,7 +130,18 @@ export function applyAutoContrast(d,w,h){
   // contrast recovery at all, so a pale stamp on a dim capture would stay as
   // washed out as the camera saw it. 0.25 keeps some of that safety net.
   const COLOUR_KEEP = 0.25;      // share of the darkening a fully coloured pixel takes
-  const CH_LO = 18, CH_HI = 40;  // neutral below, fully spared above
+  // v12.10: the ramp was 18-40 and it caught the HANDWRITING. Measured chroma on
+  // a real prescription:
+  //
+  //   black print   3      blue pen  24      navy logo  67      red subtitle  87
+  //
+  // At 18-40 a pen stroke was spared 27% of the darkening as though it were a
+  // logo, and the writing — which on a prescription IS the content — faded from
+  // a median of 72 to 95. Starting the ramp at 35 puts the pen back on the full
+  // curve while a logo, which is two to three times more saturated, keeps the
+  // sparing. Same input, three builds: pen median 71.8 (v12.07), 95.0 (v12.09),
+  // 69.1 here; navy logo 8,9,53 / 62,68,121 / 47,54,107.
+  const CH_LO = 35, CH_HI = 70;  // neutral and pen ink below, print colour above
   for (let i=0;i<n;i++){
     const j=i*4;
     const r=d[j], g=d[j+1], b=d[j+2];
@@ -320,8 +331,10 @@ export function documentEnhance(d, w, h){
     const Li=(r*77+g*151+b*28)>>8;
     let deep = Math.max(0, (150-Li)/150) * 0.18;
     if (deep>0){
+      // v12.10: the same ramp as the stretch above, for the same reason — a pen
+      // stroke is ink and should deepen like ink.
       const chroma = Math.max(r,Math.max(g,b)) - Math.min(r,Math.min(g,b));
-      let col = (chroma-18)/22;
+      let col = (chroma-35)/35;
       if (col > 0) deep *= (1 - Math.min(1,col)*0.60);
       d[j]=r*(1-deep); d[j+1]=g*(1-deep); d[j+2]=b*(1-deep);
     }
