@@ -502,6 +502,19 @@ export function paperCrisp(d, w, h){
   for (let i=0;i<n;i++){
     const diff = L2[i]-blur[i];
     if (diff > -THRESH && diff < THRESH) continue;
+    // v12.13: never carve a dark speck out of paper.
+    //
+    // Reported as "blackish grain over the whole page". Measured on that scan:
+    // in a blank area the flecks sit a mean of 66 luma BELOW their own local
+    // blur, p10 -103, over 1.5% of the area. Paper cannot do that by itself —
+    // it is this unsharp amplifying paper fibre and crease texture, at 1.50
+    // where the pass before v12.01 used 0.35.
+    //
+    // The ink side of a real edge is well below paper, so it is untouched by
+    // this test; the paper side of an edge is only ever BRIGHTENED, which still
+    // happens. What is refused is the one thing that has no legitimate use:
+    // making an already-near-paper pixel darker.
+    if (diff < 0 && L2[i] >= paper*0.72) continue;
     const j=i*4;
     const chroma = Math.max(d[j],Math.max(d[j+1],d[j+2])) - Math.min(d[j],Math.min(d[j+1],d[j+2]));
     let neutral = (SH_CHROMA_MAX-chroma)/SH_CHROMA_SOFT;

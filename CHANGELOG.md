@@ -4,6 +4,68 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.13] — 2026-08-07 — The sharpener stops manufacturing grain
+
+Reported as "blackish grain over the entire page", on a five-page scan.
+Measured on page 1 of it, in a blank area:
+
+```
+flecks (pixels < 200)                    1.667% of the area
+their deviation from the local blur      mean -66.6, p10 -103.0
+undershoot beyond -40                    1.485% of the area
+```
+
+Paper does not do that by itself. An unsharp mask carving flat texture does —
+and since v12.03 the final pass runs at **SH 1.50**, where the pass before
+v12.01 used 0.35. On a creased or shadowed sheet, fibre that the whitening ramp
+only partly reaches gets driven into hard black flecks.
+
+It is not JPEG (block-to-block std 6.2 against within-block 11.2) and not
+colour (chroma 0 across the affected area). Both were checked first.
+
+### The guard
+```js
+if (diff < 0 && L2[i] >= paper*0.72) continue;
+```
+The ink side of a real edge is well below the paper level, so it is untouched;
+the paper side of an edge is only ever *brightened*, which still happens. What
+is refused is the one operation with no legitimate use: making an
+already-near-paper pixel darker.
+
+On a synthetic page carrying paper fibre and a shadow gradient:
+
+| | blank std | flecks | undershoot |
+|---|---|---|---|
+| v12.12 | 5.76 | 0.225% | 0.225% |
+| **v12.13** | **2.55** | **0.008%** | **0.008%** |
+
+28× fewer flecks, and the ink edge still sharpens (SC300) with its ink side
+still deepening (SC301).
+
+### Tests
+272 in the scanner suite. SC298–SC302: a speck on paper is never carved darker,
+no part of a blank page is driven dark, a real edge still sharpens, its ink side
+still deepens, and the guard is expressed against the page's own paper level.
+
+### Still open: colour accuracy
+The second half of the report — "colour is not accurate to the original" — is
+not addressed here. Measured against the camera photo of the same document:
+
+| | true photo | v12.13 |
+|---|---|---|
+| paper | 193 | 255 |
+| black print | 46 | 13 |
+| grey mid-tone | 116 | 158 |
+| green banner | 120 | 213 |
+
+Neutral mid-tones rise 42 and the green rises 93. But the photo is a dim
+room-light exposure, so "brighter than the photo" is not automatically "wrong",
+and no digital original of that document exists in the project to compare
+against. Guessing at it is what produced v12.09 and v12.10, so it waits for a
+reference rather than another theory.
+
+---
+
 ## [v12.12] — 2026-08-07 — Checked against every sample, not the latest one
 
 Fair criticism, and correct: v12.08 through v12.11 were each tuned on whichever
