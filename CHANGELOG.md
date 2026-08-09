@@ -4,6 +4,60 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.24] — 2026-08-09 — One less full-page readback, and a photo in the gate
+
+Two findings from a code audit. Neither changes a single output pixel.
+
+### The encoder no longer reads back what it was just given
+
+The document path builds the finished pixels as an `ImageData`, writes them into
+a canvas with `putImageData`, and then `encodeScanJpeg` read every one of them
+straight back out with `getImageData` — a full-resolution GPU-to-CPU round trip
+(roughly 30–50 MB at 3500px) for data already in hand, on a context that was
+never flagged `willReadFrequently`.
+
+The buffer is now passed through. The canvas read remains as the fallback, and
+Photo ID — which composites onto a fresh A4 page and genuinely has no such
+buffer — still takes it.
+
+This is only safe if the bytes are identical, so that is asserted rather than
+assumed: `SC315` runs the shipped `encodeScanJpeg` both ways over the same
+pixels and compares the JPEGs byte for byte (1044 vs 1044, equal). `SC316`
+counts the readbacks (1 for 2 encodes). `SC317` feeds it a buffer of the wrong
+size and checks it is refused and the canvas read instead.
+
+### The corpus gate now contains photographic content
+
+Every capture in `corpus/captures/` was text-only, so nothing exercised the
+pipeline's response to a photograph. v12.21 lifts the black point to 64, and a
+photograph flattened to a uniform grey would have been a real loss that no test
+could see.
+
+Added `corpus/captures/photo-rendered.png` and a new assertion — **dark areas
+are lifted, not flattened** — measuring how much variation survives inside the
+regions that were dark in the capture:
+
+| page | dark std before → after | kept |
+|---|---|---|
+| doc0 | 10.7 → 25.4 | 237% |
+| doc2 | 16.6 → 24.6 | 148% |
+| doc3 | 14.7 → 23.6 | 161% |
+| doc4 | 14.1 → 17.6 | 125% |
+| photo-rendered | 21.4 → 20.5 | **96%** |
+
+The concern turned out to be **unfounded**, which is worth recording: the floor
+is a linear remap, so it raises dark content without compressing the differences
+inside it. Detail survives at 96% on the photographic page and increases on the
+text pages. The bound is set at 70%, so a future change that does flatten
+shadows will now fail here instead of shipping.
+
+`photo-rendered.png` is a page rendered from `SEED-photo-heavy.pdf`, not a
+camera capture — it tests tone and colour response, not lighting response.
+A daylight photo of a real document containing a photograph would cover both
+and should replace it.
+
+1010 tests pass, corpus gate 30/30.
+
 ## [v12.23] — 2026-08-09 — "Downloading engine…" on a cold start that wasn't downloading
 
 Reported: the app is offline, but opening it after about a day showed

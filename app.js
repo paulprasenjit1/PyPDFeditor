@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "12.23";
+const APP_BUILD = "12.24";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -5882,10 +5882,20 @@ async function encodeUnderBudget(canvas, q0, budget, qFloor){
 // the pixels (all colour/contrast/ID enhancements) are already baked into the
 // canvas before this runs. Falls back to encodeUnderBudget() if MuPDF can't be
 // used (e.g. desktop test harness without a real canvas), so nothing breaks.
-async function encodeScanJpeg(canvas, q0, budget, qFloor){
+// v12.23: `src` is the ImageData the page was drawn FROM, when the caller still
+// has it. The document path builds the finished pixels, putImageData's them
+// into a canvas, and used to read every one of them straight back out — a
+// full-resolution GPU-to-CPU round trip (~30-50 MB at 3500px) for data already
+// in hand, on a context not flagged willReadFrequently. Passing it through
+// skips the readback entirely. The dimension check means a mismatched buffer
+// can never be encoded in place of the canvas; Photo ID composites onto a new
+// page and has no such buffer, so it falls back to the read as before.
+async function encodeScanJpeg(canvas, q0, budget, qFloor, src){
   try {
     const w=canvas.width, h=canvas.height;
-    const rgba=canvas.getContext("2d").getImageData(0,0,w,h).data;
+    const rgba = (src && src.data && src.width===w && src.height===h)
+               ? src.data
+               : canvas.getContext("2d").getImageData(0,0,w,h).data;
     const pix=new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0,0,w,h], false);  // RGB, no alpha
     const stride=pix.getStride(), dst=pix.getPixels();
     for (let y=0;y<h;y++){
@@ -7583,7 +7593,10 @@ async function commitScanPage(frame, q, opts){
     c=document.createElement("canvas"); c.width=out.width; c.height=out.height;
     c.getContext("2d").putImageData(out,0,0);
   }
-  await pushScanPage(c, out.width, out.height);
+  // v12.23: hand the finished pixels straight to the encoder when we still
+  // have them (document path). Photo ID has only page dims here, so `out.data`
+  // is undefined and the encoder reads the canvas exactly as before.
+  await pushScanPage(c, out.width, out.height, out.data ? out : null);
   capFrame=null;
   updateScanCount();
   if (returnToCamera){
@@ -7624,10 +7637,10 @@ function scanPageDpi(w, h){
   } catch(e){ return 0; }
 }
 // encode + record one finished page canvas
-async function pushScanPage(c, w, h){
+async function pushScanPage(c, w, h, src){
   const QQ0 = SCAN_Q[scanQuality] || SCAN_Q.std;
   const QQ = QQ0;                     // v11.80: no HQ branch left to choose
-  const blob = await encodeScanJpeg(c, QQ.jpeg, scanBudget(QQ, w, h), QQ.qFloor);
+  const blob = await encodeScanJpeg(c, QQ.jpeg, scanBudget(QQ, w, h), QQ.qFloor, src);
   // small thumbnail (112px tall ≈ 56 css px at 2×) for the review strip
   const tc=document.createElement("canvas");
   tc.height=112; tc.width=Math.max(8,Math.round(w*112/h));
