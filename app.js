@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "12.24";
+const APP_BUILD = "12.25";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -98,9 +98,13 @@ window.addEventListener("unhandledrejection", (e)=>{
 // Bump these together with the CACHE name in sw.js on every release.
 const APP_VERSION = APP_BUILD;          // single source of truth: always tracks APP_BUILD
 const BUILD_DATETIME = "28 Jul 2026";   // v11.71
-// One-line release note shown once after an update (keep in sync with APP_BUILD,
-// so the banner never describes an older release).
-const WHATS_NEW = "two scanner additions: a Colour / Greyscale / Black & white button (black & white makes a text page a fraction of the size, with sharper letters), and in the page review you can now retake a single page in place or move it earlier or later.";
+// One-line release note shown once after an update. WHATS_NEW_BUILD must equal
+// APP_BUILD: version-tests fails the build otherwise. Until v12.25 nothing
+// enforced it and this string had gone ~50 releases without being touched, so
+// every update banner described v11.67's features — which is a good way to make
+// updates look like nothing happened.
+const WHATS_NEW_BUILD = "12.25";
+const WHATS_NEW = "Document scans now match iPhone Preview's colour — paper white, ink deep grey rather than crushed black, and colours kept. Photo-Doc has been removed, so Type is Document or Photo ID. Updates now say so while they download, and pages encode without a wasteful full-size pixel copy.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
 const { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFNumber, PDFHexString, PDFOperator } = PDFLib;
@@ -10014,8 +10018,35 @@ window.addEventListener("pageshow", (e)=>{
 })();
 
 // service worker
+//
+// v12.25: say when a new version is being fetched. Until v12.23 the engine
+// loader printed "Downloading engine…" on EVERY cold start — wrong (it was
+// reading the cached engine), but it doubled as the only sign that anything was
+// happening. Fixing the lie removed the signal, so here is the honest version:
+// it fires on a real update, from the event that actually marks one.
+//
+// Guarded on `controller`, because on a first install there is no previous
+// version and calling that "updating" would be the same kind of lie.
 if ("serviceWorker" in navigator)
-  window.addEventListener("load", ()=> navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+  window.addEventListener("load", ()=>{
+    navigator.serviceWorker.register("./sw.js").then((reg)=>{
+      if (!reg || !reg.addEventListener) return;
+      reg.addEventListener("updatefound", ()=>{
+        const fresh = reg.installing;
+        if (!fresh || !navigator.serviceWorker.controller) return;   // first install: nothing to update FROM
+        try { setStatus("New version found — downloading it now…","warn"); } catch(e){}
+        fresh.addEventListener("statechange", ()=>{
+          // The new worker takes over at once (sw.js calls skipWaiting), but the
+          // page is still running the OLD code, so the update lands on the next
+          // launch. Say that rather than implying it is already in effect.
+          if (fresh.state === "installed")
+            try { setStatus("New version downloaded — it starts the next time you open the app.","ok"); } catch(e){}
+          else if (fresh.state === "redundant")
+            try { setStatus("The new version did not download — this one keeps working. It will try again next time.","warn"); } catch(e){}
+        });
+      });
+    }).catch(()=>{});
+  });
 
 // welcome screen: show recent files (no-op once a document is open)
 renderRecents();

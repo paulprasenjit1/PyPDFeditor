@@ -4,6 +4,50 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.25] — 2026-08-09 — Updates announce themselves again, honestly this time
+
+Reported: "after every version update it should show downloading new artefacts —
+now it's not showing anything, again you broke the feature."
+
+**Half of that is fair.** Until v12.23 the engine loader printed
+"Downloading engine…" on *every* cold start. That message was wrong — it was
+reading the cached engine, not downloading anything — and v12.23 fixed the lie.
+But it was also the only visible sign that a launch was doing work, so removing
+it removed the signal. A correct message was needed, not silence.
+
+The other half was already broken, and worse. `WHATS_NEW` — the one-line note
+shown after an update — still described **v11.67**: the Colour / Greyscale /
+Black & white button and page retake. Its own comment said "keep in sync with
+APP_BUILD"; nothing enforced that, and it went roughly 50 releases untouched.
+Every update banner has been describing a release from months ago, which is a
+good way to make updates feel like nothing happened.
+
+### Two fixes
+
+**An update now announces itself while it downloads.** From `updatefound` on
+the service-worker registration — the event that actually marks one — with the
+states named honestly:
+
+- found → "New version found — downloading it now…"
+- installed → "New version downloaded — it starts the next time you open the app."
+  (`sw.js` calls `skipWaiting`, so the new worker takes over at once, but this
+  page is still running the old code. The update lands on the next launch, so
+  that is what it says.)
+- redundant → "The new version did not download — this one keeps working."
+
+Guarded on `navigator.serviceWorker.controller`, because on a first install
+there is no previous version and calling that an "update" would be the same
+kind of lie v12.23 removed.
+
+**The what's-new note is pinned to the build.** A new `WHATS_NEW_BUILD`
+constant sits beside it and `VR8b` fails the build unless it equals
+`APP_BUILD` — so the note cannot silently rot again.
+
+Unchanged: first-ever installs still show the real engine download bar, since
+there is no cache to read and the network path reports genuine byte progress.
+
+1012 tests pass, corpus gate 30/30.
+
 ## [v12.24] — 2026-08-09 — One less full-page readback, and a photo in the gate
 
 Two findings from a code audit. Neither changes a single output pixel.
