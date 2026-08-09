@@ -59,7 +59,38 @@
     }
   }
 
+  // v12.23: a CACHE HIT MUST NEVER REPORT PROGRESS.
+  //
+  // Reported: "app is offline but shows Downloading when I open it after a day".
+  // It was not downloading — it was reading the cached wasm and mislabelling it.
+  // Two things combined:
+  //   1. the entry this file stores was built as `new Response(arrayBuffer)`,
+  //      which carries NO Content-Length (verified, not assumed);
+  //   2. so on a cached read `total` was 0, `pct` was null, and the "arrived in
+  //      one shot (cached): no bar" guard below — which only fires when pct is
+  //      known — fell through to the unknown-size text.
+  // Within a day iOS keeps the page suspended, so the boot never re-ran; after
+  // about a day it reclaims it and the cold start showed the message.
+  //
+  // Asking the cache first makes it deterministic rather than inferred from
+  // headers: cache hit means no bar, full stop. A large cached body can arrive
+  // in several chunks, so a percentage guard alone would still flash the bar.
+  function readCachedWasm(url){
+    try {
+      if (typeof caches === "undefined" || !caches.match) return Promise.resolve(null);
+      return caches.match(url).then(function(hit){
+        return hit ? hit.arrayBuffer() : null;
+      }).catch(function(){ return null; });
+    } catch(e){ return Promise.resolve(null); }
+  }
+
   function streamWasm(url){
+    return readCachedWasm(url).then(function(cached){
+      return cached || fetchWasm(url);       // only a network read shows progress
+    });
+  }
+
+  function fetchWasm(url){
     return fetch(url, { credentials: "same-origin" }).then(function(res){
       if (!res || !res.ok) throw new Error("wasm " + (res && res.status));
       var total = +(res.headers.get("Content-Length") || 0);
@@ -90,8 +121,15 @@
             // store the single download so offline + later loads work without a
             // second fetch (sw.js no longer precaches the wasm). VENDOR_CACHE name
             // must match sw.js; the fetch handler there matches by URL.
+            // v12.23: carry Content-Length. sw.js's fetch handler already
+            // cached the real network response under this same key, and this
+            // put overwrites it — so without the length the stored entry was
+            // strictly worse than the one it replaced.
             try { caches.open("pypdf-vendor-v1").then(function(c){
-              c.put(WASM_URL, new Response(buf.slice(0), { headers:{ "Content-Type":"application/wasm" } }));
+              c.put(WASM_URL, new Response(buf.slice(0), { headers:{
+                "Content-Type": "application/wasm",
+                "Content-Length": String(buf.byteLength)
+              } }));
             }).catch(function(){}); } catch(e){}
             return WebAssembly.instantiate(buf, imports);
           })

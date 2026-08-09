@@ -4,6 +4,62 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.23] — 2026-08-09 — "Downloading engine…" on a cold start that wasn't downloading
+
+Reported: the app is offline, but opening it after about a day showed
+"Downloading engine…". It was **not** downloading. It was reading the cached
+wasm and mislabelling it.
+
+Two faults combined:
+
+1. `engine-watchdog.js` stored the engine as `new Response(arrayBuffer)`, which
+   carries **no `Content-Length`**. Verified rather than assumed:
+   `new Response(buf, {headers:{...}}).headers.get("content-length")` → `null`.
+2. So on a cached read `total` was `0` and `pct` was `null`. The guard meant to
+   suppress the bar on a cache hit only fires when `pct` is *known*:
+
+   ```js
+   if (pct !== null && pct >= 100) return;   // arrived in one shot (cached)
+   ```
+
+   With `pct === null` it fell through to the unknown-size branch and printed
+   "Downloading engine… 10.4 MB (first time only)".
+
+There was also a quieter waste: `sw.js`'s fetch handler already caches the real
+network response — with a valid `Content-Length` — under this same key, and the
+watchdog's own `put` then **overwrote it** with the headerless copy. Two writers
+to one key, and the worse one won.
+
+**Why "after a day":** within a day iOS keeps the PWA's page suspended, so the
+boot never re-runs. After roughly a day it reclaims the page, and the cold start
+showed the message.
+
+### Fix
+
+Ask the cache **first**, and let a hit bypass the progress path entirely:
+
+```js
+function streamWasm(url){
+  return readCachedWasm(url).then(function(cached){
+    return cached || fetchWasm(url);       // only a network read shows progress
+  });
+}
+```
+
+This is deterministic rather than inferred from headers. A percentage guard
+alone would not have been enough — a 10 MB cached body can arrive in several
+chunks, so the bar would still flash before the first chunk reached 100%.
+
+The stored entry now also carries `Content-Length`, so it is never worse than
+the network response `sw.js` cached under the same key.
+
+Genuine first-time downloads are untouched: they come from the server with a
+real `Content-Length` and show the progress bar exactly as before. The failure
+watchdog, the early-open path and the fallback to the engine's own streaming
+load are all unchanged.
+
+`VR9b` and `VR9c` pin both halves. 997 tests pass, corpus gate 20/20.
+
 ## [v12.22] — 2026-08-07 — Photo-Doc removed
 
 Requested by the owner. Type is back to two values, **Document** and **Photo
