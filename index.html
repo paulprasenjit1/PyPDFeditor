@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-build="12.27">
+<html lang="en" data-build="12.28">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -34,7 +34,19 @@
 <meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- v12.28: "black", not "black-translucent". iOS 27 beta 4 reports a top inset
+     of 62px, our header correctly places its title at 66px — measured, in About
+     — and then draws its own chrome over a band TALLER than the inset it
+     reported, leaving the title dimmed and half hidden. A page cannot see where
+     iOS paints, so any compensation would be a guess we tuned by screenshot.
+     "black" makes iOS place the web view BELOW the status bar and paint that
+     strip itself, so nothing of ours can sit under it and the whole class of
+     problem is gone rather than corrected for. The inset then reports 0, which
+     every rule that uses it already handles: they are all max(Npx, inset) or
+     N + inset. theme-color is #000000, so the strip matches the app.
+     Trade-off, accepted knowingly: the scanner's camera view no longer extends
+     under the status bar. Reverting is this one word. -->
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="PyPDF">
 <link rel="apple-touch-icon" href="./icon-180.png">
 <link rel="icon" href="./icon-192.png">

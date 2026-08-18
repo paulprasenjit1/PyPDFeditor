@@ -4,6 +4,46 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.28] — 2026-08-09 — Opaque status bar, so nothing of ours can sit under it
+
+v12.27's readout settled it. On iOS 27 public beta 4, iPhone 16 Pro Max:
+
+```
+Top inset   inset 62px, title at 66px — clear
+Web view    SHORT by 62px — re-add to Home Screen
+```
+
+62px is the correct inset for this device, and our header puts its title below
+it. **The CSS was never wrong**, so padding it further — the obvious fix — would
+have been the wrong one. Re-adding to the Home Screen, which fixed the identical
+symptom at the bottom of the screen in v11.95, did not help either: the web view
+stays 62px short after a clean re-install.
+
+That leaves iOS drawing its own chrome over a band taller than the inset it
+reports. A page cannot see where iOS paints, so any compensation would be a
+number guessed and then tuned by screenshot — the loop that has cost the most
+this week.
+
+### The fix removes the class of problem instead
+
+`apple-mobile-web-app-status-bar-style` goes from `black-translucent` to
+`black`. iOS then places the web view **below** the status bar and paints that
+strip itself, so nothing of ours can ever be underneath it. The inset reports 0,
+and all six rules that use it already survive that — they are `max(Npx, inset)`
+or `inset + Npx`. `theme-color` is `#000000`, so the strip matches the app.
+
+**Trade-off, taken knowingly:** the scanner's camera view no longer extends
+under the status bar. Reverting is one word in `index.html`.
+
+`VR8l` pins the style; `VR8m` checks every top-inset rule still holds at zero.
+
+**A note on VR8m:** its first version accused `.status` of being unsafe. It
+wasn't — `calc(env(...) + 34px)` degrades to a correct 34px, and the regex had
+stopped at the bracket closing `env()`. The test was wrong, so the test was
+widened. Nothing in the CSS moved to make a check pass.
+
+1022 tests pass, corpus gate 30/30.
+
 ## [v12.27] — 2026-08-09 — A number for the top inset, before guessing at it
 
 Reported after updating to iOS 27 public beta 4 on the iPhone 16 Pro Max: the

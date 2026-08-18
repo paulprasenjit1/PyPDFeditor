@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 // unregister the service worker and reload (heals a stale DEVICE copy).
 // If it happens again right after healing, the SERVER itself is serving an old
 // index.html — say so explicitly, since no amount of device clearing fixes that.
-const APP_BUILD = "12.27";
+const APP_BUILD = "12.28";
 (function buildGuard(){
   const pageBuild = document.documentElement.getAttribute("data-build") || "pre-9.2";
   const need = ["openBtn","moreBtn","signBtn","unlockBtn","undoBtn","status","sheet","sheetBg","spin","bigOpen","bigScan","welcomeHint","loupe","pageWrap","pagePill","closeBtn",
@@ -118,14 +118,14 @@ const APP_VERSION = APP_BUILD;          // single source of truth: always tracks
 // v12.26: pinned by version-tests. It had said 28 Jul for every release
 // since v11.71, so About reported a build date months older than the build
 // it was describing — the same silent rot WHATS_NEW had.
-const BUILD_DATE_BUILD = "12.27";
+const BUILD_DATE_BUILD = "12.28";
 const BUILD_DATETIME = "9 Aug 2026";
 // One-line release note shown once after an update. WHATS_NEW_BUILD must equal
 // APP_BUILD: version-tests fails the build otherwise. Until v12.25 nothing
 // enforced it and this string had gone ~50 releases without being touched, so
 // every update banner described v11.67's features — which is a good way to make
 // updates look like nothing happened.
-const WHATS_NEW_BUILD = "12.27";
+const WHATS_NEW_BUILD = "12.28";
 const WHATS_NEW = "Document scans now match iPhone Preview's colour — paper white, ink deep grey rather than crushed black, and colours kept. Photo-Doc has been removed, so Type is Document or Photo ID. Updates now say so while they download, and pages encode without a wasteful full-size pixel copy.";
 // PDFName/PDFNumber/PDFHexString/PDFOperator (v11.29) are the low-level pieces
 // used to redraw edited text with the PDF's OWN embedded font — see drawWithPdfFont.
