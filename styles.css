@@ -836,3 +836,9 @@ input[type=file] { display:none; }
 .scanview .hqidle .sub{ font-size:13px; line-height:1.35; max-width:280px;
   text-align:center; color:#8b95a3; }
 .scanview .hqidle:active{ background:#0a0a0a; }
+
+/* v12.27: a zero-width probe whose HEIGHT is the top safe-area inset, so the
+   About readout can report the value iOS is actually giving this web view.
+   It exists for a beat and is removed; it is never visible. */
+.safeprobe { position:fixed; top:0; left:0; width:0;
+             height:env(safe-area-inset-top); pointer-events:none; opacity:0; }

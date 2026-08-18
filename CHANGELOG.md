@@ -4,6 +4,87 @@ All notable changes to the on-device iPhone PWA. The "version" tag matches the
 service-worker cache name (`CACHE` in `sw.js`); bumping it forces phones to fetch
 the new build.
 
+## [v12.27] — 2026-08-09 — A number for the top inset, before guessing at it
+
+Reported after updating to iOS 27 public beta 4 on the iPhone 16 Pro Max: the
+header — the PyPDF title, the file information and the ✕ — is dimmed and half
+hidden under the status bar.
+
+From the screenshot alone, the header's contents are sitting inside the
+status-bar band rather than below it, which is why they read grey instead of
+white: the system draws a scrim over that strip.
+
+**No CSS was changed, deliberately.** The header already asks for the inset:
+
+```css
+header { padding: max(3px, env(safe-area-inset-top)) 14px 3px; }
+```
+
+so there are two possible faults, with opposite fixes:
+
+1. `env(safe-area-inset-top)` is coming through **smaller** than this device's
+   real notch band. That is the same fault as the v11.95 bottom black band — a
+   web view whose saved metrics went stale — and re-adding the app to the Home
+   Screen fixes it with no code change.
+2. The inset is correct and our own layout puts the text too high, in which
+   case the CSS is wrong and padding it further would be right.
+
+Padding "just in case" would be wrong under (1) and would push the header down
+on every other device. So this release adds the measurement instead:
+
+**About → Top inset** now reports `inset NNpx, title at NNpx` and says outright
+whether the title is inside the inset. The value comes from a real element whose
+height is `env(safe-area-inset-top)`, measured and removed — not from an
+assumption. It carries no inline style, so the CSP stays `'self'`
+(`VR8h`–`VR8k`).
+
+Read that line and the fix follows from it rather than from a guess.
+
+1020 tests pass, corpus gate 30/30.
+
+## [v12.26] — 2026-08-09 — An error can no longer leave the app frozen
+
+### The stuck spinner
+
+33 functions raise the full-screen spinner without a `finally` — open, save,
+unlock, organise, extract, form fill, whiteout, signature placement and more.
+If any of them throws, the global handler shows the error banner **behind** a
+spinner that nothing ever takes down. The app is then dead until it is
+force-quit, and the one message explaining what happened is the one thing that
+cannot be reached. That is the worst possible shape for a failure.
+
+Both global handlers now call `clearBlockingUi()`.
+
+Handled there rather than by adding `finally` to all 33 call sites. An uncaught
+error or rejection means the operation is over by definition, so the spinner is
+stale whichever path raised it — and one guarded line cannot introduce the
+regression that 33 edited call sites could.
+
+`VR8d` runs the shipped `showSpin` + `clearBlockingUi` against a stub element
+and asserts the spinner actually comes down, rather than pattern-matching the
+source. `VR8e` checks the helper survives a missing `#spin` element, since
+throwing out of an error handler would trade a stuck spinner for a lost error
+message. `VR8f` pins both handlers to it.
+
+### About showed the wrong build date
+
+`BUILD_DATETIME` read "28 Jul 2026" for every release since v11.71 — the same
+silent rot `WHATS_NEW` had in v12.25. Now "9 Aug 2026" and pinned by `VR8g`,
+which fails the build unless `BUILD_DATE_BUILD` equals `APP_BUILD`.
+
+### Checked and deliberately not changed
+
+18 of 28 async handlers have no `try`. That looks alarming and isn't: the global
+`unhandledrejection` handler reports them properly, so they surface an error
+banner rather than failing silently. Reported here so the next audit does not
+spend time on it again.
+
+157 empty `catch` blocks remain. Most are legitimate `localStorage` guards.
+Triaging them needs a map of which code paths tests actually exercise, which is
+the next piece of work, not a blanket change.
+
+1016 tests pass, corpus gate 30/30.
+
 ## [v12.25] — 2026-08-09 — Updates announce themselves again, honestly this time
 
 Reported: "after every version update it should show downloading new artefacts —
